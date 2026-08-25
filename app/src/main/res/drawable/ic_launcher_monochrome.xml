@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="54"
+        android:pivotY="54">
+
+        <!-- Outer Atmospheric Orbit Accent -->
+        <path
+            android:pathData="M31,64 C29.5,58 31,50 35,43 C40,34 50,28 61,28 C73,28 82,36 84,47 C85.5,55 83,62 78,67 C74,71 67,74 59,74 C50,74 43,71 39,67"
+            android:strokeWidth="3.2"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round" />
+
+        <!-- Main Aether Geometric "A" Emblem -->
+        <path
+            android:pathData="M54,25.5 C57.5,25.5 60.5,27.5 62.2,30.8 L78.8,63.2 C80.8,67.2 77.8,72 73.2,72 C70.8,72 68.6,70.6 67.5,68.4 L62.8,59 L45.2,59 L40.5,68.4 C39.4,70.6 37.2,72 34.8,72 C30.2,72 27.2,67.2 29.2,63.2 L45.8,30.8 C47.5,27.5 50.5,25.5 54,25.5 Z M54,37.2 L48.8,49.5 L59.2,49.5 L54,37.2 Z"
+            android:fillColor="#FFFFFF"
+            android:fillType="evenOdd" />
+
+        <!-- Fluid Negative Space / Signal Wave Cross-Bridge -->
+        <path
+            android:pathData="M42,54 C46,51.5 51,50 56,50 C62,50 67,52 71,55"
+            android:strokeWidth="2.5"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round" />
+
+        <!-- Luminous Core Spark / Aperture -->
+        <path
+            android:pathData="M54,41.5m-2.2,0a2.2,2.2 0 1,1 4.4,0a2.2,2.2 0 1,1 -4.4,0"
+            android:fillColor="#FFFFFF" />
+
+    </group>
+</vector>
