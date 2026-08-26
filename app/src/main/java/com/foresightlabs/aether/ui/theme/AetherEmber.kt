@@ -57,11 +57,23 @@ object AetherEmber {
         val OutgoingBubbleText = Color(0xFFFFFFFF)
         val OutgoingBubbleMeta = Color(0xCCFFFFFF)
 
-        // Text Hierarchy
+        // --- CONTEXTUAL TEXT HIERARCHY ---
+        // 1. Stable Near-Black / Surface Typography (Foreground dark sheets, cards, lists)
         val TextPrimary = Color(0xFFFFFFFF)
         val TextSecondary = Color(0xFFA6A6AC)
         val TextTertiary = Color(0xFF72727A)
         val TextMuted = Color(0xFF55555C)
+
+        val SurfaceTextPrimary = TextPrimary
+        val SurfaceTextSecondary = TextSecondary
+        val SurfaceTextTertiary = TextTertiary
+        val SurfaceTextMuted = TextMuted
+
+        // 2. Direct Atmosphere Typography (Luminous high-contrast text directly on dynamic gradients)
+        val AtmosphereTextPrimary = Color(0xFFFFFFFF)
+        val AtmosphereTextSecondary = Color(0xF0FFFFFF)
+        val AtmosphereTextTertiary = Color(0xD9FFFFFF)
+        val AtmosphereTextMuted = Color(0xB8FFFFFF)
 
         // Accents & Badges
         val Accent = Color(0xFFFF7038)
@@ -188,7 +200,7 @@ object AetherEmber {
         )
     }
 
-    // --- SPACING CONSTITUTION (4dp base grid) ---
+    // --- SPACING CONSTITUTION (Strict 4dp base grid) ---
     object Spacing {
         val Space4: Dp = 4.dp
         val Space8: Dp = 8.dp
@@ -196,8 +208,10 @@ object AetherEmber {
         val Space16: Dp = 16.dp
         val Space20: Dp = 20.dp
         val Space24: Dp = 24.dp
+        val Space28: Dp = 28.dp
         val Space32: Dp = 32.dp
         val Space40: Dp = 40.dp
+        val Space48: Dp = 48.dp
 
         val ScreenHorizontal: Dp = 16.dp
         val ChatListHorizontal: Dp = 16.dp

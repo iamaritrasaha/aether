@@ -15,9 +15,14 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
+    val appearanceRepository = com.foresightlabs.aether.data.preferences.AppearanceRepository.getInstance(applicationContext)
     setContent {
-      val themeState = remember { AppThemeState() }
-      CompositionLocalProvider(LocalAppThemeState provides themeState) {
+      val scope = androidx.compose.runtime.rememberCoroutineScope()
+      val themeState = remember { AppThemeState(appearanceRepository, scope) }
+      CompositionLocalProvider(
+        LocalAppThemeState provides themeState,
+        com.foresightlabs.aether.ui.theme.LocalAppearanceRepository provides appearanceRepository
+      ) {
         AetherTheme(themeState = themeState) {
           AetherApp()
         }

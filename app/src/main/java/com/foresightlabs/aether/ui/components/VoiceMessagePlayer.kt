@@ -37,13 +37,12 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.foresightlabs.aether.ui.theme.AetherEmber
+import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import kotlinx.coroutines.delay
 
@@ -54,6 +53,7 @@ fun VoiceMessagePlayer(
     isOutgoing: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val colors = LocalAetherColors.current
     var isPlaying by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
     var playbackSpeed by remember { mutableStateOf("1.0x") }
@@ -76,11 +76,12 @@ fun VoiceMessagePlayer(
         }
     }
 
-    val playButtonBg = if (isOutgoing) Color.White.copy(alpha = 0.25f) else AetherEmber.Colors.BrightOrange
-    val playButtonIconTint = Color.White
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+    val playButtonBg = if (isOutgoing) contentColor.copy(alpha = 0.25f) else colors.accent
+    val playButtonIconTint = if (isOutgoing) contentColor else colors.surface
 
-    val activeWaveformColor = Color.White
-    val inactiveWaveformColor = Color.White.copy(alpha = 0.35f)
+    val activeWaveformColor = if (isOutgoing) contentColor else colors.accent
+    val inactiveWaveformColor = contentColor.copy(alpha = 0.35f)
 
     val currentSeconds = (progress * safeDuration).toInt()
     val timeLabel = String.format("%d:%02d / %d:%02d", currentSeconds / 60, currentSeconds % 60, safeDuration / 60, safeDuration % 60)
@@ -174,13 +175,13 @@ fun VoiceMessagePlayer(
                     fontFamily = ManropeFontFamily,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
-                    color = Color.White.copy(alpha = 0.85f)
+                    color = contentColor.copy(alpha = 0.84f)
                 )
 
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color.White.copy(alpha = 0.18f))
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(contentColor.copy(alpha = 0.14f))
                         .clickable {
                             playbackSpeed = when (playbackSpeed) {
                                 "1.0x" -> "1.5x"
@@ -188,14 +189,14 @@ fun VoiceMessagePlayer(
                                 else -> "1.0x"
                             }
                         }
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
                         text = playbackSpeed,
                         fontFamily = ManropeFontFamily,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = contentColor
                     )
                 }
             }

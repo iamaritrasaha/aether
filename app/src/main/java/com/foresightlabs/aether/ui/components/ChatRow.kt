@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -47,7 +48,10 @@ import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.ChatType
 import com.foresightlabs.aether.domain.model.MessageStatus
+import com.foresightlabs.aether.ui.design.AetherAccent
 import com.foresightlabs.aether.ui.theme.AetherEmber
+import com.foresightlabs.aether.ui.theme.LocalReducedMotion
+import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.VerifiedBadge
 
@@ -57,11 +61,12 @@ fun ChatRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val colors = LocalAetherColors.current
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 11.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
             .testTag("chat_row_${chat.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -86,8 +91,8 @@ fun ChatRow(
                         .offset(x = 2.dp, y = 2.dp)
                         .size(17.dp)
                         .clip(CircleShape)
-                        .background(AetherEmber.Colors.Accent)
-                        .border(1.5.dp, AetherEmber.Colors.Background, CircleShape),
+                        .background(AetherAccent.current)
+                        .border(1.5.dp, colors.background, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -121,7 +126,7 @@ fun ChatRow(
                         fontFamily = ManropeFontFamily,
                         fontSize = 15.5.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = AetherEmber.Colors.TextPrimary,
+                        color = colors.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -141,7 +146,7 @@ fun ChatRow(
                         Icon(
                             imageVector = Icons.Default.NotificationsOff,
                             contentDescription = "Muted",
-                            tint = AetherEmber.Colors.TextTertiary,
+                            tint = colors.textTertiary,
                             modifier = Modifier.size(13.dp)
                         )
                     }
@@ -157,7 +162,7 @@ fun ChatRow(
                                 Icon(
                                     imageVector = Icons.Default.DoneAll,
                                     contentDescription = "Read",
-                                    tint = AetherEmber.Colors.Accent,
+                                    tint = AetherAccent.current,
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Spacer(modifier = Modifier.width(3.dp))
@@ -166,7 +171,7 @@ fun ChatRow(
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = "Sent",
-                                    tint = AetherEmber.Colors.TextTertiary,
+                            tint = colors.textTertiary,
                                     modifier = Modifier.size(13.dp)
                                 )
                                 Spacer(modifier = Modifier.width(3.dp))
@@ -179,7 +184,7 @@ fun ChatRow(
                         text = chat.lastMessageTime,
                         fontFamily = ManropeFontFamily,
                         fontSize = 11.5.sp,
-                        color = if (chat.unreadCount > 0) AetherEmber.Colors.Accent else AetherEmber.Colors.TextTertiary,
+                        color = if (chat.unreadCount > 0) AetherAccent.current else colors.textTertiary,
                         fontWeight = if (chat.unreadCount > 0) FontWeight.SemiBold else FontWeight.Medium
                     )
                 }
@@ -212,7 +217,7 @@ fun ChatRow(
                                     text = chat.draftText,
                                     fontFamily = ManropeFontFamily,
                                     fontSize = 13.5.sp,
-                                    color = AetherEmber.Colors.TextSecondary,
+                                    color = colors.textSecondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -226,7 +231,7 @@ fun ChatRow(
                             val annotatedString = buildAnnotatedString {
                                 withStyle(
                                     SpanStyle(
-                                        color = AetherEmber.Colors.Accent,
+                                        color = AetherAccent.current,
                                         fontFamily = ManropeFontFamily,
                                         fontWeight = FontWeight.Medium
                                     )
@@ -235,7 +240,7 @@ fun ChatRow(
                                 }
                                 withStyle(
                                     SpanStyle(
-                                        color = AetherEmber.Colors.TextSecondary,
+                                        color = colors.textSecondary,
                                         fontFamily = ManropeFontFamily
                                     )
                                 ) {
@@ -254,7 +259,7 @@ fun ChatRow(
                                 text = chat.lastMessageText,
                                 fontFamily = ManropeFontFamily,
                                 fontSize = 13.5.sp,
-                                color = AetherEmber.Colors.TextSecondary,
+                                color = colors.textSecondary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -267,10 +272,12 @@ fun ChatRow(
                     Spacer(modifier = Modifier.width(8.dp))
                     Box(
                         modifier = Modifier
-                            .height(20.dp)
+                            // Grows with the text so the count is never clipped at
+                            // large font scales.
+                            .defaultMinSize(minWidth = 20.dp, minHeight = 20.dp)
                             .clip(AetherEmber.Shapes.Pill)
-                            .background(AetherEmber.Colors.Accent)
-                            .padding(horizontal = 7.dp),
+                            .background(AetherAccent.current)
+                            .padding(horizontal = 7.dp, vertical = 2.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
@@ -289,6 +296,8 @@ fun ChatRow(
 
 @Composable
 private fun TypingIndicator(typingText: String) {
+    // A continuously running animation, so it must honour reduced motion.
+    val animate = !LocalReducedMotion.current
     val infiniteTransition = rememberInfiniteTransition(label = "typing_dots")
 
     val dot1Scale by infiniteTransition.animateFloat(
@@ -330,23 +339,23 @@ private fun TypingIndicator(typingText: String) {
             Box(
                 modifier = Modifier
                     .size(4.dp)
-                    .scale(dot1Scale)
+                    .scale(if (animate) dot1Scale else 1f)
                     .clip(CircleShape)
-                    .background(AetherEmber.Colors.Accent)
+                    .background(AetherAccent.current)
             )
             Box(
                 modifier = Modifier
                     .size(4.dp)
-                    .scale(dot2Scale)
+                    .scale(if (animate) dot2Scale else 1f)
                     .clip(CircleShape)
-                    .background(AetherEmber.Colors.Accent)
+                    .background(AetherAccent.current)
             )
             Box(
                 modifier = Modifier
                     .size(4.dp)
-                    .scale(dot3Scale)
+                    .scale(if (animate) dot3Scale else 1f)
                     .clip(CircleShape)
-                    .background(AetherEmber.Colors.Accent)
+                    .background(AetherAccent.current)
             )
         }
 
@@ -356,7 +365,7 @@ private fun TypingIndicator(typingText: String) {
             fontSize = 13.5.sp,
             fontStyle = FontStyle.Italic,
             fontWeight = FontWeight.Medium,
-            color = AetherEmber.Colors.Accent
+            color = AetherAccent.current
         )
     }
 }

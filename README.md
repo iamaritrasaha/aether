@@ -1,12 +1,14 @@
 # Aether
 
-Aether is an independent third-party Telegram client for Android, built with Kotlin, Jetpack Compose, and the official Telegram Database Library (TDLib). Its dynamic atmospheric interface adapts to the time of day and, when the user permits approximate location access, local weather conditions from Open-Meteo.
+Aether is a living, people-first interface for your conversations. It is an independent third-party Telegram client for Android, built with Kotlin, Jetpack Compose, and the official Telegram Database Library (TDLib). Its atmospheric interface adapts to the time of day and, when the user permits approximate location access, to local weather conditions from Open-Meteo.
 
 Aether is currently distributed through closed testing. It is not the official Telegram application and is not affiliated with or endorsed by Telegram.
 
 ## Privacy-conscious weather adaptation
 
-Weather adaptation is optional and on demand. Aether requests approximate location only, does not request precise location, does not continuously track location, and does not store location history. If location or weather data is unavailable, the interface gracefully uses time-only atmospheric styling.
+Weather uses your approximate location only when needed. Aether does not continuously track or store your location. It requests coarse location only and never precise location, and it reads a last-known approximate fix rather than starting continuous updates.
+
+Approximate coordinates are sent to Open-Meteo to look up current conditions; Aether does not claim that location never leaves the device. If location access is denied, no fix is available, or the weather service cannot be reached, the interface says so and falls back to time-only atmospheric styling.
 
 ## Build requirements
 
@@ -24,6 +26,14 @@ Common development checks:
 ./gradlew assembleDebug
 ```
 
+Rendering Home for visual inspection (writes PNGs to `app/build/reports/aether-screenshots/`):
+
+```shell
+./gradlew :app:testDebugUnitTest --tests '*HomeScreenshotTest*'
+```
+
+Release builds package `arm64-v8a` only; see [TDLIB.md](TDLIB.md).
+
 Release signing is intentionally configured outside the repository.
 
 ## Identity and licensing
@@ -34,5 +44,7 @@ Release signing is intentionally configured outside the repository.
 - Manrope and Space Grotesk fonts: SIL Open Font License 1.1
 
 See the license texts bundled under `app/src/main/assets/licenses/` and the TDLib details in [TDLIB.md](TDLIB.md).
+
+The floating-bar backdrop blur uses Haze 1.2.2, licensed under Apache License 2.0.
 
 © 2026 Aritra Saha / Foresight Labs. All rights reserved.

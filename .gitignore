@@ -25,3 +25,15 @@ telegram-secrets.properties
 signing.properties
 *.jks
 *.keystore
+*.aab
+*.apk
+*.log
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+/logs/
+/telegram-session/
+/tdlib-data/
+/sessions/
+/aether-play-console-upload.zip

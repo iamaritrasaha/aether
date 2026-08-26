@@ -1,173 +1,220 @@
 package com.foresightlabs.aether.ui.components
 
+import android.content.Context
+import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import com.foresightlabs.aether.ui.theme.AetherEmber
-import com.foresightlabs.aether.ui.theme.AtmosphereMode
-import com.foresightlabs.aether.ui.theme.AtmosphereWeatherService
-import com.foresightlabs.aether.ui.theme.LocalAppThemeState
+import com.foresightlabs.aether.ui.theme.AetherMotion
+import com.foresightlabs.aether.ui.theme.LocalAtmosphere
+import com.foresightlabs.aether.ui.theme.aetherDuration
+import com.foresightlabs.aether.ui.design.AetherFrostState
+import com.foresightlabs.aether.ui.design.aetherFrostSource
 
 /**
- * Living atmospheric background system for Aether.
- * Renders warm and dynamic luminous gradients across Dawn, Day, Golden Hour, Evening, and Night,
- * with automatic weather modulation. Transitions are smooth and cinematic (2.5s duration).
+ * Checks if the user or device has requested reduced motion.
+ */
+fun isReducedMotionEnabled(context: Context): Boolean {
+    return try {
+        val durationScale = Settings.Global.getFloat(
+            context.contentResolver,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f
+        )
+        val transitionScale = Settings.Global.getFloat(
+            context.contentResolver,
+            Settings.Global.TRANSITION_ANIMATION_SCALE,
+            1f
+        )
+        durationScale == 0f || transitionScale == 0f
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/**
+ * Layer 1 of the Aether spatial model: the Living Atmosphere.
+ *
+ * Renders the resolved time-of-day palette, weather-modulated when a real reading is
+ * available. The atmosphere is continuous across the entire viewport.
+ *
+ * @param heroFraction how much of the container the luminous region occupies before it
+ * falls off into the near-black base. Callers derive this from real measurements
+ * (for example Home sheet's resting anchor). For full-screen atmospheric screens
+ * (Profile, Auth, Conversation, Settings, Contacts), heroFraction is 1f.
+ * @param enableAmbientMotion enables subtle organic environmental drift (e.g. on Auth).
  */
 @Composable
 fun AetherAtmosphericBackground(
     modifier: Modifier = Modifier,
-    heroOnly: Boolean = false,
+    heroFraction: Float = 1f,
+    enableAmbientMotion: Boolean = false,
+    frostState: AetherFrostState? = null,
     content: @Composable () -> Unit
 ) {
-    val themeState = LocalAppThemeState.current
+    val atmosphere = LocalAtmosphere.current
     val context = LocalContext.current
+    val reducedMotion = remember(context) { isReducedMotionEnabled(context) }
 
-    // Auto-fetch weather when in Time + Weather mode
-    LaunchedEffect(themeState.atmosphereMode) {
-        if (themeState.atmosphereMode == AtmosphereMode.TIME_AND_WEATHER) {
-            val (weather, _) = AtmosphereWeatherService.fetchCurrentWeather(context)
-            themeState.weatherCondition = weather
-        }
+    val duration = aetherDuration(AetherMotion.AtmosphereMillis)
+    val spec = tween<Color>(duration, easing = AetherMotion.AtmosphereEasing)
+
+    val colors = atmosphere.colors
+    val c0 by animateColorAsState(colors.getOrElse(0) { atmosphere.accent }, spec, label = "atmosphere_c0")
+    val c1 by animateColorAsState(colors.getOrElse(1) { atmosphere.accent }, spec, label = "atmosphere_c1")
+    val c2 by animateColorAsState(colors.getOrElse(2) { atmosphere.accent }, spec, label = "atmosphere_c2")
+    val c3 by animateColorAsState(colors.getOrElse(3) { atmosphere.shadow }, spec, label = "atmosphere_c3")
+    val c4 by animateColorAsState(colors.getOrElse(4) { atmosphere.shadow }, spec, label = "atmosphere_c4")
+    val glow by animateColorAsState(atmosphere.glow, spec, label = "atmosphere_glow")
+    val shadow by animateColorAsState(atmosphere.shadow, spec, label = "atmosphere_shadow")
+
+    // Slow ambient environmental drift when enabled and motion is allowed
+    val infiniteTransition = rememberInfiniteTransition(label = "ambient_atmosphere_drift")
+    val driftOffset by if (enableAmbientMotion && !reducedMotion) {
+        infiniteTransition.animateFloat(
+            initialValue = -0.04f,
+            targetValue = 0.04f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(16000, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "atmosphere_drift"
+        )
+    } else {
+        remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
     }
-
-    val rawColors = themeState.resolvedAtmosphereColors()
-    val rawGlow = themeState.resolvedGlowColor()
-    val rawShadow = themeState.resolvedShadowColor()
-
-    // Cinematic slow transition duration (2500ms) for soft, ambient palette shifts
-    val animDuration = 2500
-    val easingSpec = FastOutSlowInEasing
-
-    val c0 by animateColorAsState(rawColors.getOrElse(0) { Color(0xFFFF9A4A) }, tween(animDuration, easing = easingSpec), label = "c0")
-    val c1 by animateColorAsState(rawColors.getOrElse(1) { Color(0xFFFF7038) }, tween(animDuration, easing = easingSpec), label = "c1")
-    val c2 by animateColorAsState(rawColors.getOrElse(2) { Color(0xFFF04425) }, tween(animDuration, easing = easingSpec), label = "c2")
-    val c3 by animateColorAsState(rawColors.getOrElse(3) { Color(0xFFE92D27) }, tween(animDuration, easing = easingSpec), label = "c3")
-    val c4 by animateColorAsState(rawColors.getOrElse(4) { Color(0xFFC90B27) }, tween(animDuration, easing = easingSpec), label = "c4")
-
-    val glowColor by animateColorAsState(rawGlow, tween(animDuration, easing = easingSpec), label = "glow")
-    val shadowColor by animateColorAsState(rawShadow, tween(animDuration, easing = easingSpec), label = "shadow")
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AetherEmber.Colors.Background)
+            .background(atmosphere.shadow)
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (frostState != null) Modifier.aetherFrostSource(frostState) else Modifier)
+        ) {
             val width = size.width
             val height = size.height
+            if (width <= 0f || height <= 0f) return@Canvas
 
-            if (heroOnly) {
-                // Upper Hero Region (top ~45%)
-                val heroHeight = height * 0.52f
+            val luminousHeight = height * heroFraction.coerceIn(0.15f, 1f)
 
-                // Base Linear Gradient
-                drawRect(
-                    brush = Brush.linearGradient(
-                        colors = listOf(c0, c1, c2, c3, c4),
-                        start = Offset(0f, 0f),
-                        end = Offset(width * 1.1f, heroHeight)
+            // Primary atmospheric gradient
+            drawRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(c0, c1, c2, c3, c4),
+                    start = Offset(width * (0.08f + driftOffset), 0f),
+                    end = Offset(width * (1.05f - driftOffset), luminousHeight)
+                ),
+                size = size
+            )
+
+            // Ambient light source, upper-left.
+            val glowCenter = Offset(
+                width * (0.28f + driftOffset * 0.5f),
+                luminousHeight * (0.16f + driftOffset * 0.3f)
+            )
+            val glowRadius = width * 0.85f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        glow.copy(alpha = 0.52f),
+                        c1.copy(alpha = 0.22f),
+                        Color.Transparent
                     ),
-                    size = size.copy(height = heroHeight)
-                )
+                    center = glowCenter,
+                    radius = glowRadius
+                ),
+                radius = glowRadius,
+                center = glowCenter
+            )
 
-                // Atmospheric radial light hotspot top-left
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            glowColor.copy(alpha = 0.55f),
-                            c0.copy(alpha = 0.25f),
-                            Color.Transparent
-                        ),
-                        center = Offset(width * 0.25f, height * 0.12f),
-                        radius = width * 0.75f
+            // Atmospheric depth pooling toward the falloff edge.
+            val depthCenter = Offset(
+                width * (0.92f - driftOffset * 0.5f),
+                luminousHeight * (0.88f - driftOffset * 0.3f)
+            )
+            val depthRadius = width * 0.7f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        shadow.copy(alpha = 0.62f),
+                        shadow.copy(alpha = 0.24f),
+                        Color.Transparent
                     ),
-                    radius = width * 0.75f,
-                    center = Offset(width * 0.25f, height * 0.12f)
-                )
+                    center = depthCenter,
+                    radius = depthRadius
+                ),
+                radius = depthRadius,
+                center = depthCenter
+            )
 
-                // Depth accent bottom-right of hero
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            shadowColor.copy(alpha = 0.65f),
-                            shadowColor.copy(alpha = 0.25f),
-                            Color.Transparent
-                        ),
-                        center = Offset(width * 0.95f, heroHeight * 0.85f),
-                        radius = width * 0.6f
+            // Soft localized atmospheric scrim behind upper text to guarantee
+            // exceptional readability across all palettes and weather conditions
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0x38000000),
+                        Color(0x20000000),
+                        Color(0x0A000000),
+                        Color.Transparent
                     ),
-                    radius = width * 0.6f,
-                    center = Offset(width * 0.95f, heroHeight * 0.85f)
-                )
-            } else {
-                // Full Screen Atmosphere (e.g. Conversation, Auth, Appearance)
-                drawRect(
-                    brush = Brush.linearGradient(
-                        colors = listOf(c0, c1, c2, c3, c4),
-                        start = Offset(width * 0.1f, 0f),
-                        end = Offset(width, height * 1.05f)
-                    )
-                )
+                    startY = 0f,
+                    endY = luminousHeight * 0.85f
+                ),
+                size = size.copy(height = luminousHeight)
+            )
 
-                // Upper ambient light glow
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            glowColor.copy(alpha = 0.50f),
-                            c1.copy(alpha = 0.22f),
-                            Color.Transparent
-                        ),
-                        center = Offset(width * 0.35f, height * 0.15f),
-                        radius = width * 0.85f
-                    ),
-                    radius = width * 0.85f,
-                    center = Offset(width * 0.35f, height * 0.15f)
-                )
-
-                // Mid-screen warmth / atmospheric diffusion
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            c2.copy(alpha = 0.35f),
-                            c4.copy(alpha = 0.18f),
-                            Color.Transparent
-                        ),
-                        center = Offset(width * 0.8f, height * 0.55f),
-                        radius = width * 0.9f
-                    ),
-                    radius = width * 0.9f,
-                    center = Offset(width * 0.8f, height * 0.55f)
-                )
-
-                // Bottom shadow pool
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            shadowColor.copy(alpha = 0.70f),
-                            shadowColor.copy(alpha = 0.30f),
-                            Color.Transparent
-                        ),
-                        center = Offset(width * 0.5f, height * 0.95f),
-                        radius = width * 0.75f
-                    ),
-                    radius = width * 0.75f,
-                    center = Offset(width * 0.5f, height * 0.95f)
-                )
-            }
+            // The gradient always covers the viewport. heroFraction compresses the
+            // luminous transition behind Home's sheet; it never creates a dark seam.
         }
 
         content()
+    }
+}
+
+/**
+ * Canonical full-screen atmospheric screen container.
+ *
+ * Covers the entire viewport continuously with the Living Atmosphere without
+ * any vertical cutoffs, splits, or dark background seams.
+ */
+@Composable
+fun AetherAtmosphericScreen(
+    modifier: Modifier = Modifier,
+    enableAmbientMotion: Boolean = false,
+    frostState: AetherFrostState? = null,
+    content: @Composable BoxScope.() -> Unit
+) {
+    AetherAtmosphericBackground(
+        modifier = modifier.fillMaxSize(),
+        heroFraction = 1f,
+        enableAmbientMotion = enableAmbientMotion,
+        frostState = frostState
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            content = content
+        )
     }
 }

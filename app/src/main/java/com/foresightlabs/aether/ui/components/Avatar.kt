@@ -27,7 +27,9 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.foresightlabs.aether.domain.model.ChatType
+import com.foresightlabs.aether.ui.design.AetherAccent
 import com.foresightlabs.aether.ui.theme.AetherEmber
+import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.OnlineGreen
 
@@ -37,48 +39,51 @@ fun AetherAvatar(
     gradient: List<Color>,
     size: Dp = 48.dp,
     isOnline: Boolean = false,
+    hasUnseenPulse: Boolean = false,
     chatType: ChatType = ChatType.DIRECT,
     photoPath: String? = null,
     showGlowingRim: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val outerRimPadding = if (showGlowingRim) 2.5.dp else 0.dp
-    val innerSize = if (showGlowingRim) size - 5.dp else size
+    val atmosphere = LocalAtmosphere.current
+    val accent = AetherAccent.current
+    val showPulseRing = hasUnseenPulse || showGlowingRim
+    val innerSize = if (showPulseRing) size - 6.dp else size
 
     Box(
         modifier = modifier.size(size),
         contentAlignment = Alignment.Center
     ) {
-        // Optional subtle glowing warm rim
-        if (showGlowingRim) {
+        // Atmospheric Pulse ring for unseen temporary content (or glowing rim)
+        if (showPulseRing) {
+            val ringBrush = androidx.compose.runtime.remember(atmosphere.accent, atmosphere.colors) {
+                Brush.sweepGradient(
+                    listOf(
+                        atmosphere.accent,
+                        atmosphere.colors.getOrElse(1) { atmosphere.accent },
+                        atmosphere.colors.getOrElse(2) { atmosphere.accent },
+                        atmosphere.accent
+                    )
+                )
+            }
             Box(
                 modifier = Modifier
                     .size(size)
                     .clip(CircleShape)
                     .border(
-                        width = 1.5.dp,
-                        brush = Brush.sweepGradient(
-                            listOf(
-                                Color(0xFFFF9A4A),
-                                Color(0xFFFF7038),
-                                Color(0xFFF04425),
-                                Color(0xFFFF9A4A)
-                            )
-                        ),
+                        width = 2.dp,
+                        brush = ringBrush,
                         shape = CircleShape
                     )
             )
         }
 
-        val brush = if (gradient.size >= 2) {
-            Brush.linearGradient(gradient)
-        } else {
-            Brush.linearGradient(
-                listOf(
-                    AetherEmber.Colors.BrightOrange,
-                    AetherEmber.Colors.Vermilion
-                )
-            )
+        val brush = androidx.compose.runtime.remember(gradient, accent) {
+            if (gradient.size >= 2) {
+                Brush.linearGradient(gradient)
+            } else {
+                Brush.linearGradient(listOf(accent, accent))
+            }
         }
 
         Box(

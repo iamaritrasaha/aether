@@ -29,6 +29,46 @@ val SpaceGroteskFontFamily = FontFamily(
     Font(R.font.space_grotesk, weight = FontWeight.Bold)
 )
 
+/** Semantic Aether type roles. Screens choose meaning, never arbitrary measurements. */
+object AetherType {
+    val Display = TextStyle(
+        fontFamily = SpaceGroteskFontFamily, fontWeight = FontWeight.Bold,
+        fontSize = 28.sp, lineHeight = 32.sp, letterSpacing = (-0.4).sp
+    )
+    val ScreenTitle = TextStyle(
+        fontFamily = ManropeFontFamily, fontWeight = FontWeight.Bold,
+        fontSize = 17.sp, lineHeight = 22.sp, letterSpacing = (-0.1).sp
+    )
+    val HeroTitle = TextStyle(
+        fontFamily = SpaceGroteskFontFamily, fontWeight = FontWeight.Bold,
+        fontSize = 23.sp, lineHeight = 28.sp, letterSpacing = (-0.2).sp
+    )
+    val SectionTitle = TextStyle(
+        fontFamily = ManropeFontFamily, fontWeight = FontWeight.ExtraBold,
+        fontSize = 11.sp, lineHeight = 14.sp, letterSpacing = 1.2.sp
+    )
+    val Body = TextStyle(
+        fontFamily = ManropeFontFamily, fontWeight = FontWeight.Medium,
+        fontSize = 15.sp, lineHeight = 20.sp
+    )
+    val BodySecondary = TextStyle(
+        fontFamily = ManropeFontFamily, fontWeight = FontWeight.Normal,
+        fontSize = 13.5.sp, lineHeight = 18.sp
+    )
+    val Label = TextStyle(
+        fontFamily = ManropeFontFamily, fontWeight = FontWeight.SemiBold,
+        fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.1.sp
+    )
+    val Metadata = TextStyle(
+        fontFamily = ManropeFontFamily, fontWeight = FontWeight.Medium,
+        fontSize = 11.sp, lineHeight = 14.sp
+    )
+    val Caption = TextStyle(
+        fontFamily = ManropeFontFamily, fontWeight = FontWeight.Normal,
+        fontSize = 12.sp, lineHeight = 16.sp
+    )
+}
+
 val Typography = Typography(
     // Hero Headline (e.g., "Let's Stay Connected")
     displayLarge = TextStyle(

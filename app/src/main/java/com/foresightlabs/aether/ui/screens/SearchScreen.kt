@@ -43,6 +43,16 @@ import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.ui.components.AetherAtmosphericBackground
 import com.foresightlabs.aether.ui.components.AetherSearchPill
 import com.foresightlabs.aether.ui.components.ChatRow
+import com.foresightlabs.aether.ui.design.AetherAccent
+import com.foresightlabs.aether.ui.design.AetherBackButton
+import com.foresightlabs.aether.ui.design.AetherChip
+import com.foresightlabs.aether.ui.design.AetherFloatingHeader
+import com.foresightlabs.aether.ui.design.aetherFrostSource
+import com.foresightlabs.aether.ui.design.rememberAetherFrostState
+import com.foresightlabs.aether.ui.design.AetherSectionLabel
+import com.foresightlabs.aether.ui.design.AetherEmptyState
+import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
+import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 
@@ -54,62 +64,21 @@ fun SearchScreen(
     onChatClick: (Chat) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val colors = LocalAetherColors.current
     var query by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("Chats") }
     val filters = listOf("Chats")
+    val frostState = rememberAetherFrostState()
 
     AetherAtmosphericBackground(
         modifier = modifier.fillMaxSize(),
-        heroOnly = true
+        frostState = frostState,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-        ) {
-            // Search Input Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x28000000))
-                        .border(1.dp, Color(0x20FFFFFF), CircleShape)
-                        .clickable { onBack() }
-                        .testTag("search_back_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Box(modifier = Modifier.weight(1f)) {
-                    AetherSearchPill(
-                        value = query,
-                        onValueChange = {
-                            query = it
-                            onQueryChange(it)
-                        },
-                        placeholder = "Search messages, chats, contacts…",
-                        onClearClick = {
-                            query = ""
-                            onQueryChange("")
-                        }
-                    )
-                }
-            }
-
+        Box(modifier = Modifier.fillMaxSize()) {
+          Column(
+            modifier = Modifier.fillMaxSize().aetherFrostSource(frostState)
+                .padding(top = aetherFloatingHeaderContentTopPadding())
+          ) {
             // Filter Chips
             Row(
                 modifier = Modifier
@@ -120,26 +89,7 @@ fun SearchScreen(
             ) {
                 filters.forEach { filter ->
                     val isSelected = selectedFilter == filter
-                    val bg = if (isSelected) AetherEmber.Colors.Accent else AetherEmber.Colors.SurfaceElevated
-                    val textColor = if (isSelected) Color.White else AetherEmber.Colors.TextSecondary
-
-                    Box(
-                        modifier = Modifier
-                            .clip(AetherEmber.Shapes.Pill)
-                            .background(bg)
-                            .border(0.5.dp, if (isSelected) Color.Transparent else AetherEmber.Colors.Border, AetherEmber.Shapes.Pill)
-                            .clickable { selectedFilter = filter }
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = filter,
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 12.5.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = textColor
-                        )
-                    }
+                    AetherChip(label = filter, selected = isSelected, onClick = { selectedFilter = filter })
                 }
             }
 
@@ -149,40 +99,20 @@ fun SearchScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .clip(AetherEmber.Shapes.RisingSheet)
-                    .background(AetherEmber.Colors.Background)
-                    .border(1.dp, Color(0x14FFFFFF), AetherEmber.Shapes.RisingSheet)
+                    .background(colors.background)
+                    .border(1.dp, colors.border, AetherEmber.Shapes.RisingSheet)
             ) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     if (query.isBlank()) {
                         item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 48.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "Search conversations loaded in Aether",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 14.sp,
-                                    color = AetherEmber.Colors.TextTertiary
-                                )
-                            }
+                            AetherEmptyState(title = "Search conversations loaded in Aether")
                         }
                     } else {
                         if (results.isNotEmpty()) {
                             item {
-                                Text(
-                                    text = "MATCHING CONVERSATIONS",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = AetherEmber.Colors.TextTertiary,
-                                    letterSpacing = 1.2.sp,
-                                    modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 6.dp)
-                                )
+                                AetherSectionLabel("Matching conversations", modifier = Modifier.padding(top = 16.dp))
                             }
 
                             items(results, key = { it.id }) { chat ->
@@ -191,31 +121,44 @@ fun SearchScreen(
                                     onClick = { onChatClick(chat) }
                                 )
                                 HorizontalDivider(
-                                    color = AetherEmber.Colors.BorderSubtle,
+                                    color = colors.divider,
                                     thickness = 0.5.dp,
                                     modifier = Modifier.padding(start = 78.dp)
                                 )
                             }
                         } else {
                             item {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 48.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "No results for \"$query\"",
-                                        fontFamily = ManropeFontFamily,
-                                        fontSize = 14.5.sp,
-                                        color = AetherEmber.Colors.TextTertiary
-                                    )
-                                }
+                            AetherEmptyState(title = "No results for \"$query\"")
                             }
                         }
                     }
                 }
             }
+          }
+
+          AetherFloatingHeader(
+              modifier = Modifier.align(Alignment.TopCenter),
+              frostState = frostState
+          ) {
+              AetherBackButton(
+                  onClick = onBack,
+                  modifier = Modifier.testTag("search_back_button")
+              )
+              Box(modifier = Modifier.weight(1f)) {
+                  AetherSearchPill(
+                      value = query,
+                      onValueChange = {
+                          query = it
+                          onQueryChange(it)
+                      },
+                      placeholder = "Search messages, chats, contacts…",
+                      onClearClick = {
+                          query = ""
+                          onQueryChange("")
+                      }
+                  )
+              }
+          }
         }
     }
 }

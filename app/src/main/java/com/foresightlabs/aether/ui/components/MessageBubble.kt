@@ -60,8 +60,10 @@ import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageStatus
 import com.foresightlabs.aether.domain.model.MessageType
 import com.foresightlabs.aether.domain.model.Reaction
+import com.foresightlabs.aether.ui.design.AetherAccent
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
+import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -75,11 +77,14 @@ fun MessageBubble(
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
+    val colors = LocalAetherColors.current
     val offsetX = remember { Animatable(0f) }
     var reachedThreshold by remember { mutableStateOf(false) }
 
     val replyThreshold = -180f // Drag left to reply
     val isOutgoing = message.isOutgoing
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+    val metaColor = if (isOutgoing) contentColor.copy(alpha = .78f) else colors.textTertiary
 
     val bubbleShape = if (isOutgoing) {
         RoundedCornerShape(
@@ -177,11 +182,11 @@ fun MessageBubble(
                         .clip(bubbleShape)
                         .then(
                             if (isOutgoing) {
-                                Modifier.background(AetherEmber.Gradients.OutgoingBubble)
+                                Modifier.background(Brush.linearGradient(listOf(colors.bubbleOutgoing, colors.bubbleOutgoingEnd)))
                             } else {
                                 Modifier
-                                    .background(AetherEmber.Colors.IncomingBubbleBg)
-                                    .border(1.dp, AetherEmber.Colors.IncomingBubbleBorder, bubbleShape)
+                                    .background(colors.bubbleIncoming)
+                                    .border(1.dp, colors.border, bubbleShape)
                             }
                         )
                         .pointerInput(message.id) {
@@ -204,7 +209,7 @@ fun MessageBubble(
                                 fontFamily = ManropeFontFamily,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (isOutgoing) Color(0xFFFFD1B3) else AetherEmber.Colors.SoftGlow,
+                                color = if (isOutgoing) contentColor.copy(alpha = .86f) else colors.accent,
                                 modifier = Modifier.padding(bottom = 4.dp)
                             )
                         }
@@ -250,7 +255,7 @@ fun MessageBubble(
                                 Text(
                                     text = message.text,
                                     fontFamily = ManropeFontFamily,
-                                    color = Color.White,
+                                    color = contentColor,
                                     fontSize = 15.sp,
                                     lineHeight = 20.5.sp,
                                     fontWeight = FontWeight.Medium
@@ -264,7 +269,7 @@ fun MessageBubble(
                                 Text(
                                     text = message.text,
                                     fontFamily = ManropeFontFamily,
-                                    color = Color.White,
+                                    color = contentColor,
                                     fontSize = 15.sp,
                                     lineHeight = 20.5.sp,
                                     fontWeight = FontWeight.Medium
@@ -284,7 +289,7 @@ fun MessageBubble(
                                         text = "edited",
                                         fontFamily = ManropeFontFamily,
                                         fontSize = 10.5.sp,
-                                        color = if (isOutgoing) AetherEmber.Colors.OutgoingBubbleMeta else AetherEmber.Colors.IncomingBubbleMeta,
+                                        color = metaColor,
                                         modifier = Modifier.padding(end = 4.dp)
                                     )
                                 }
@@ -293,7 +298,7 @@ fun MessageBubble(
                                     fontFamily = ManropeFontFamily,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium,
-                                    color = if (isOutgoing) AetherEmber.Colors.OutgoingBubbleMeta else AetherEmber.Colors.IncomingBubbleMeta
+                                    color = metaColor
                                 )
 
                                 if (isOutgoing) {
@@ -351,6 +356,7 @@ fun MessageBubble(
                         message.reactions.forEach { reaction ->
                             ReactionBadge(
                                 reaction = reaction,
+                                isOutgoing = isOutgoing,
                                 onClick = { onReactionClick(message, reaction.emoji) }
                             )
                         }
@@ -366,13 +372,15 @@ private fun ReplySnippet(
     replyMessage: Message,
     isOutgoingParent: Boolean
 ) {
-    val barColor = if (isOutgoingParent) Color.White else AetherEmber.Colors.Amber
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoingParent) colors.bubbleOutgoingText else colors.bubbleIncomingText
+    val barColor = if (isOutgoingParent) contentColor else colors.accent
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(if (isOutgoingParent) Color.White.copy(alpha = 0.15f) else Color(0x28000000))
+            .background(if (isOutgoingParent) contentColor.copy(alpha = 0.15f) else colors.surfaceHighlight)
             .padding(vertical = 4.dp, horizontal = 8.dp)
     ) {
         Box(
@@ -396,10 +404,10 @@ private fun ReplySnippet(
             Text(
                 text = replyMessage.text.ifEmpty { "Attachment" },
                 fontFamily = ManropeFontFamily,
-                fontSize = 11.5.sp,
+                fontSize = 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                color = Color.White.copy(alpha = 0.85f)
+                color = contentColor.copy(alpha = 0.84f)
             )
         }
     }
@@ -412,11 +420,14 @@ private fun FileAttachmentContent(
     fileExtension: String,
     isOutgoing: Boolean
 ) {
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (isOutgoing) Color.White.copy(alpha = 0.15f) else Color(0x24000000))
+            .background(if (isOutgoing) contentColor.copy(alpha = 0.15f) else colors.surfaceHighlight)
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -424,13 +435,13 @@ private fun FileAttachmentContent(
             modifier = Modifier
                 .size(42.dp)
                 .clip(CircleShape)
-                .background(if (isOutgoing) Color.White.copy(alpha = 0.25f) else AetherEmber.Colors.BrightOrange),
+                .background(if (isOutgoing) contentColor.copy(alpha = 0.25f) else colors.accent),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.InsertDriveFile,
                 contentDescription = "File",
-                tint = Color.White,
+                tint = if (isOutgoing) contentColor else colors.surface,
                 modifier = Modifier.size(22.dp)
             )
         }
@@ -441,18 +452,18 @@ private fun FileAttachmentContent(
             Text(
                 text = fileName,
                 fontFamily = ManropeFontFamily,
-                fontSize = 13.5.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                color = Color.White
+                color = contentColor
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = "$fileSize • $fileExtension",
                 fontFamily = ManropeFontFamily,
                 fontSize = 11.sp,
-                color = Color.White.copy(alpha = 0.75f)
+                color = contentColor.copy(alpha = 0.72f)
             )
         }
     }
@@ -465,6 +476,9 @@ private fun ImageAttachmentContent(
     onMediaClick: (MediaItem) -> Unit,
     isOutgoing: Boolean
 ) {
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(16.dp))
@@ -489,11 +503,11 @@ private fun ImageAttachmentContent(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(200.dp)
-                            .background(Color(0x28000000)),
+                            .background(colors.surfaceHighlight),
                         contentAlignment = Alignment.Center
                     ) {
                         CircularProgressIndicator(
-                            color = Color.White,
+                            color = colors.accent,
                             strokeWidth = 2.dp,
                             modifier = Modifier.size(24.dp)
                         )
@@ -503,14 +517,14 @@ private fun ImageAttachmentContent(
         }
 
         if (caption.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = caption,
                 fontFamily = ManropeFontFamily,
-                color = Color.White,
-                fontSize = 14.5.sp,
-                lineHeight = 19.5.sp,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                color = contentColor,
+                fontSize = 15.sp,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
             )
         }
     }
@@ -521,11 +535,14 @@ private fun LinkPreviewCard(
     preview: com.foresightlabs.aether.domain.model.LinkPreview,
     isOutgoing: Boolean
 ) {
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (isOutgoing) Color.White.copy(alpha = 0.15f) else Color(0x24000000))
+            .background(if (isOutgoing) contentColor.copy(alpha = 0.15f) else colors.surfaceHighlight)
             .padding(8.dp)
     ) {
         preview.thumbnailUrl?.let { thumb ->
@@ -549,15 +566,15 @@ private fun LinkPreviewCard(
             fontFamily = ManropeFontFamily,
             fontSize = 10.sp,
             fontWeight = FontWeight.ExtraBold,
-            color = if (isOutgoing) Color.White.copy(alpha = 0.85f) else AetherEmber.Colors.Amber
+            color = if (isOutgoing) contentColor.copy(alpha = 0.85f) else colors.accent
         )
 
         Text(
             text = preview.title,
             fontFamily = ManropeFontFamily,
-            fontSize = 13.5.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
+            color = contentColor,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
@@ -567,8 +584,8 @@ private fun LinkPreviewCard(
         Text(
             text = preview.description,
             fontFamily = ManropeFontFamily,
-            fontSize = 11.5.sp,
-            color = Color.White.copy(alpha = 0.75f),
+            fontSize = 12.sp,
+            color = contentColor.copy(alpha = 0.72f),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
@@ -578,18 +595,21 @@ private fun LinkPreviewCard(
 @Composable
 private fun ReactionBadge(
     reaction: Reaction,
+    isOutgoing: Boolean,
     onClick: () -> Unit
 ) {
-    val bg = if (reaction.userReacted) AetherEmber.Colors.Accent else Color(0x35000000)
-    val borderColor = if (reaction.userReacted) Color.White.copy(alpha = 0.5f) else Color(0x25FFFFFF)
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+    val bg = if (reaction.userReacted) colors.accent else colors.surfaceElevated
+    val borderColor = if (reaction.userReacted) colors.accent else colors.border
 
     Row(
         modifier = Modifier
             .clip(CircleShape)
             .background(bg)
-            .border(0.5.dp, borderColor, CircleShape)
+            .border(1.dp, borderColor, CircleShape)
             .clickable { onClick() }
-            .padding(horizontal = 7.dp, vertical = 2.5.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(text = reaction.emoji, fontSize = 12.sp)
@@ -600,7 +620,7 @@ private fun ReactionBadge(
                 fontFamily = ManropeFontFamily,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = if (reaction.userReacted) colors.surface else contentColor
             )
         }
     }

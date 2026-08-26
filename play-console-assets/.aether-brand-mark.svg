@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 108 108">
+  <defs>
+    <linearGradient id="orbit" x1="30" y1="28" x2="84" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF9A4A" stop-opacity="0.40"/>
+      <stop offset="0.5" stop-color="#FF7038" stop-opacity="0.60"/>
+      <stop offset="1" stop-color="#F04425" stop-opacity="0.20"/>
+    </linearGradient>
+    <linearGradient id="emblem" x1="32" y1="26" x2="76" y2="72" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFA665"/>
+      <stop offset="0.25" stop-color="#FF753A"/>
+      <stop offset="0.65" stop-color="#F04425"/>
+      <stop offset="1" stop-color="#C90B27"/>
+    </linearGradient>
+    <linearGradient id="bridge" x1="42" y1="50" x2="71" y2="55" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFD5BA" stop-opacity="0.90"/>
+      <stop offset="1" stop-color="#FFA07A" stop-opacity="0.50"/>
+    </linearGradient>
+  </defs>
+  <path d="M31 64 C29.5 58 31 50 35 43 C40 34 50 28 61 28 C73 28 82 36 84 47 C85.5 55 83 62 78 67 C74 71 67 74 59 74 C50 74 43 71 39 67"
+        fill="none" stroke="url(#orbit)" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M54 25.5 C57.5 25.5 60.5 27.5 62.2 30.8 L78.8 63.2 C80.8 67.2 77.8 72 73.2 72 C70.8 72 68.6 70.6 67.5 68.4 L62.8 59 L45.2 59 L40.5 68.4 C39.4 70.6 37.2 72 34.8 72 C30.2 72 27.2 67.2 29.2 63.2 L45.8 30.8 C47.5 27.5 50.5 25.5 54 25.5 Z M54 37.2 L48.8 49.5 L59.2 49.5 L54 37.2 Z"
+        fill="url(#emblem)" fill-rule="evenodd"/>
+  <path d="M42 54 C46 51.5 51 50 56 50 C62 50 67 52 71 55"
+        fill="none" stroke="url(#bridge)" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="54" cy="41.5" r="2.2" fill="#FFFFFF"/>
+</svg>

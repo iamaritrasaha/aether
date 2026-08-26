@@ -11,6 +11,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,16 +58,28 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.ui.components.AetherAtmosphericBackground
+import com.foresightlabs.aether.ui.design.AetherBackButton
+import com.foresightlabs.aether.ui.design.AetherFloatingHeader
+import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
+import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFraction
+import com.foresightlabs.aether.ui.design.aetherFrostSource
+import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AccentColorChoice
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.AtmosphereWeatherService
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
+import com.foresightlabs.aether.ui.theme.LocalAtmosphere
+import com.foresightlabs.aether.ui.theme.WeatherReading
+import com.foresightlabs.aether.ui.theme.WeatherUnavailableReason
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.MessageDensity
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
@@ -78,95 +92,68 @@ fun AppearanceScreen(
     modifier: Modifier = Modifier
 ) {
     val themeState = LocalAppThemeState.current
+    val atmosphere = LocalAtmosphere.current
+    val listState = rememberLazyListState()
+    val headerScrollFraction = rememberAetherFloatingHeaderScrollFraction(listState)
+    val frostState = rememberAetherFrostState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var isFetchingWeather by remember { mutableStateOf(false) }
-    var weatherStatusLabel by remember { mutableStateOf<String?>(null) }
+
+    fun refreshWeather() {
+        scope.launch {
+            isFetchingWeather = true
+            themeState.weatherOverride = null
+            themeState.weatherReading = AtmosphereWeatherService.read(context, forceRefresh = true)
+            isFetchingWeather = false
+        }
+    }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val granted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        if (granted) {
-            scope.launch {
-                isFetchingWeather = true
-                val (weather, loc) = AtmosphereWeatherService.fetchCurrentWeather(context, forceRefresh = true)
-                themeState.weatherCondition = weather
-                weatherStatusLabel = loc ?: "Weather updated: ${weather.displayName}"
-                isFetchingWeather = false
-            }
+        if (permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true) {
+            refreshWeather()
+        } else {
+            themeState.weatherReading =
+                WeatherReading.Unavailable(WeatherUnavailableReason.LOCATION_PERMISSION)
         }
     }
 
     AetherAtmosphericBackground(
         modifier = modifier.fillMaxSize(),
-        heroOnly = true
+        frostState = frostState,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-        ) {
-            // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x28000000))
-                        .border(1.dp, Color(0x20FFFFFF), CircleShape)
-                        .clickable { onBack() }
-                        .testTag("appearance_back_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-
-                Text(
-                    text = "Appearance & Atmosphere",
-                    fontFamily = ManropeFontFamily,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-
-                Spacer(modifier = Modifier.size(38.dp))
-            }
-
+        Box(modifier = Modifier.fillMaxSize()) {
             LazyColumn(
-                modifier = Modifier.fillMaxSize()
+                state = listState,
+                modifier = Modifier.fillMaxSize().aetherFrostSource(frostState),
+                contentPadding = PaddingValues(top = aetherFloatingHeaderContentTopPadding())
             ) {
                 // Live Chat Bubble Preview Container
                 item {
                     Text(
                         text = "LIVE ATMOSPHERE & BUBBLE PREVIEW",
                         fontFamily = ManropeFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
-                        letterSpacing = 1.2.sp,
-                        modifier = Modifier.padding(start = 24.dp, top = 12.dp, bottom = 8.dp)
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(
+                            start = AetherEmber.Spacing.Space24,
+                            top = AetherEmber.Spacing.Space16,
+                            bottom = AetherEmber.Spacing.Space8
+                        )
                     )
 
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
+                            .padding(horizontal = AetherEmber.Spacing.Space16)
                             .clip(AetherEmber.Shapes.L)
-                            .background(AetherEmber.Colors.SurfaceElevated)
-                            .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.L)
-                            .padding(16.dp)
+                            .background(Color(0x35000000))
+                            .border(1.dp, Color(0x28FFFFFF), AetherEmber.Shapes.L)
+                            .padding(AetherEmber.Spacing.Space16)
                     ) {
                         // Incoming Bubble (Frosted Glass)
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
@@ -178,17 +165,25 @@ fun AppearanceScreen(
                                     .padding(horizontal = 14.dp, vertical = 10.dp)
                             ) {
                                 Text(
-                                    text = "Current mood: ${themeState.activePalette().displayName}" +
-                                            if (themeState.atmosphereMode == AtmosphereMode.TIME_AND_WEATHER) " • ${themeState.weatherCondition.displayName} ${themeState.weatherCondition.icon}" else "",
+                                    text = buildString {
+                                        append("Current mood: ")
+                                        append(atmosphere.palette.displayName)
+                                        atmosphere.weatherCondition?.let {
+                                             append(" • ")
+                                             append(it.displayName)
+                                             append(" ")
+                                             append(it.icon)
+                                        }
+                                    },
                                     fontFamily = ManropeFontFamily,
                                     color = Color.White,
-                                    fontSize = (14.5f * themeState.fontScale).sp,
+                                    fontSize = 14.5.sp,
                                     fontWeight = FontWeight.Medium
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space12))
 
                         // Outgoing Bubble (Active Accent gradient)
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -198,8 +193,10 @@ fun AppearanceScreen(
                                     .background(
                                         Brush.linearGradient(
                                             listOf(
-                                                themeState.accentChoice.primaryColor,
-                                                themeState.accentChoice.containerColor
+                                                if (themeState.useAtmosphereAccent) atmosphere.accent
+                                                else themeState.accentChoice.primaryColor,
+                                                if (themeState.useAtmosphereAccent) atmosphere.accentStrong
+                                                else themeState.accentChoice.containerColor
                                             )
                                         )
                                     )
@@ -209,7 +206,7 @@ fun AppearanceScreen(
                                     text = "Warm light glowing inside dark glass. ✨",
                                     fontFamily = ManropeFontFamily,
                                     color = Color.White,
-                                    fontSize = (14.5f * themeState.fontScale).sp,
+                                    fontSize = 14.5.sp,
                                     fontWeight = FontWeight.Medium
                                 )
                             }
@@ -219,15 +216,15 @@ fun AppearanceScreen(
 
                 // Atmosphere System Controls
                 item {
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                     Text(
                         text = "DYNAMIC ATMOSPHERE SYSTEM",
                         fontFamily = ManropeFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
-                        letterSpacing = 1.2.sp,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 8.dp)
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(start = AetherEmber.Spacing.Space24, bottom = AetherEmber.Spacing.Space8)
                     )
 
                     // Atmosphere Mode Pills (Static, Time-Based, Time + Weather, Manual)
@@ -235,21 +232,21 @@ fun AppearanceScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(horizontal = AetherEmber.Spacing.Space16),
+                        horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
                     ) {
                         AtmosphereMode.entries.forEach { mode ->
                             val isSelected = themeState.atmosphereMode == mode
-                            val bg = if (isSelected) AetherEmber.Colors.Accent else AetherEmber.Colors.SurfaceElevated
-                            val textCol = if (isSelected) Color.White else AetherEmber.Colors.TextSecondary
+                            val bg = if (isSelected) atmosphere.accent else Color(0x35000000)
+                            val textCol = if (isSelected) Color.White else AetherEmber.Colors.AtmosphereTextSecondary
 
                             Box(
                                 modifier = Modifier
                                     .clip(AetherEmber.Shapes.Pill)
                                     .background(bg)
-                                    .border(0.5.dp, if (isSelected) Color.Transparent else AetherEmber.Colors.Border, AetherEmber.Shapes.Pill)
+                                    .border(1.dp, if (isSelected) Color.Transparent else Color(0x28FFFFFF), AetherEmber.Shapes.Pill)
                                     .clickable {
-                                        themeState.atmosphereMode = mode
+                                        themeState.setAndPersistAtmosphereMode(mode)
                                         if (mode == AtmosphereMode.TIME_AND_WEATHER) {
                                             locationPermissionLauncher.launch(
                                                 arrayOf(
@@ -258,83 +255,111 @@ fun AppearanceScreen(
                                             )
                                         }
                                     }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = mode.displayName,
                                     fontFamily = ManropeFontFamily,
                                     fontSize = 12.5.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
                                     color = textCol
                                 )
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
 
                     Text(
                         text = themeState.atmosphereMode.description,
                         fontFamily = ManropeFontFamily,
-                        fontSize = 12.sp,
-                        color = AetherEmber.Colors.TextTertiary,
-                        modifier = Modifier.padding(horizontal = 24.dp)
+                        fontSize = 12.5.sp,
+                        lineHeight = 17.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = AetherEmber.Colors.AtmosphereTextTertiary,
+                        modifier = Modifier.padding(horizontal = AetherEmber.Spacing.Space24)
                     )
                 }
 
-                // Automatic Weather Detection Bar
+                // Automatic weather status. States what Aether actually knows.
                 if (themeState.atmosphereMode == AtmosphereMode.TIME_AND_WEATHER) {
                     item {
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space16))
+                        val reading = atmosphere.weather
+                        val headline = when (reading) {
+                            is WeatherReading.Known -> "Weather: ${reading.condition.displayName}"
+                            is WeatherReading.Override -> "Weather override: ${reading.condition.displayName}"
+                            WeatherReading.Loading -> "Checking local weather…"
+                            is WeatherReading.Unavailable -> "Weather unavailable"
+                            WeatherReading.Idle -> "Weather not checked yet"
+                        }
+                        val detail = when (reading) {
+                            is WeatherReading.Known ->
+                                "Modulating the ${atmosphere.palette.displayName} palette."
+                            is WeatherReading.Override ->
+                                "Manual selection. Tap refresh to return to automatic."
+                            WeatherReading.Loading -> "One moment."
+                            is WeatherReading.Unavailable ->
+                                reading.reason.message + " Using time-only atmosphere."
+                            WeatherReading.Idle -> "Using time-only atmosphere."
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
+                                .padding(horizontal = AetherEmber.Spacing.Space16)
                                 .clip(AetherEmber.Shapes.M)
-                                .background(Color(0x22FFFFFF))
-                                .border(1.dp, Color(0x30FFFFFF), AetherEmber.Shapes.M)
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                                .background(Color(0x35000000))
+                                .border(1.dp, Color(0x28FFFFFF), AetherEmber.Shapes.M)
+                                .padding(horizontal = 16.dp, vertical = AetherEmber.Spacing.Space12)
+                                .testTag("weather_status"),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = themeState.weatherCondition.icon,
-                                    fontSize = 18.sp
+                                    text = atmosphere.weatherCondition?.icon ?: "🕓",
+                                    fontSize = 20.sp
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(AetherEmber.Spacing.Space12))
                                 Column {
                                     Text(
-                                        text = "Auto Weather: ${themeState.weatherCondition.displayName}",
+                                        text = headline,
                                         fontFamily = ManropeFontFamily,
-                                        fontSize = 13.sp,
+                                        fontSize = 13.5.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White
                                     )
+                                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space4))
                                     Text(
-                                        text = weatherStatusLabel ?: "Modulating ${themeState.activePalette().displayName} mood",
+                                        text = detail,
                                         fontFamily = ManropeFontFamily,
-                                        fontSize = 11.5.sp,
-                                        color = AetherEmber.Colors.TextSecondary
+                                        fontSize = 12.sp,
+                                        lineHeight = 16.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = AetherEmber.Colors.AtmosphereTextTertiary
                                     )
                                 }
                             }
 
                             Box(
                                 modifier = Modifier
-                                    .size(34.dp)
+                                    .size(36.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0x20FFFFFF))
+                                    .background(Color(0x25FFFFFF))
                                     .clickable(enabled = !isFetchingWeather) {
-                                        scope.launch {
-                                            isFetchingWeather = true
-                                            val (weather, loc) = AtmosphereWeatherService.fetchCurrentWeather(context, forceRefresh = true)
-                                            themeState.weatherCondition = weather
-                                            weatherStatusLabel = loc ?: "Weather updated: ${weather.displayName}"
-                                            isFetchingWeather = false
+                                        if (AtmosphereWeatherService.hasCoarseLocationPermission(context)) {
+                                            refreshWeather()
+                                        } else {
+                                            locationPermissionLauncher.launch(
+                                                arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION)
+                                            )
                                         }
-                                    },
+                                    }
+                                    .semantics { contentDescription = "Refresh weather" },
                                 contentAlignment = Alignment.Center
                             ) {
                                 if (isFetchingWeather) {
@@ -346,9 +371,9 @@ fun AppearanceScreen(
                                 } else {
                                     Icon(
                                         imageVector = Icons.Default.Refresh,
-                                        contentDescription = "Refresh weather",
+                                        contentDescription = null,
                                         tint = Color.White,
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(17.dp)
                                     )
                                 }
                             }
@@ -358,33 +383,33 @@ fun AppearanceScreen(
 
                 // Time Atmosphere Palette Selection (When Manual or previewing)
                 item {
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                     Text(
                         text = "ATMOSPHERE PALETTE",
                         fontFamily = ManropeFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
-                        letterSpacing = 1.2.sp,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 8.dp)
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(start = AetherEmber.Spacing.Space24, bottom = AetherEmber.Spacing.Space8)
                     )
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            .padding(horizontal = AetherEmber.Spacing.Space16),
+                        horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
                     ) {
                         TimeAtmospherePalette.entries.forEach { pal ->
-                            val isSelected = themeState.activePalette() == pal
+                            val isSelected = atmosphere.palette == pal
                             PaletteCard(
                                 palette = pal,
                                 isSelected = isSelected,
                                 onClick = {
-                                    themeState.manualAtmosphere = pal
+                                    themeState.setAndPersistManualAtmosphere(pal)
                                     if (themeState.atmosphereMode == AtmosphereMode.TIME_BASED) {
-                                        themeState.atmosphereMode = AtmosphereMode.MANUAL
+                                        themeState.setAndPersistAtmosphereMode(AtmosphereMode.MANUAL)
                                     }
                                 }
                             )
@@ -394,28 +419,28 @@ fun AppearanceScreen(
 
                 // Weather Modulation Controls (When Time + Weather or to test override)
                 item {
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                     Text(
-                        text = "WEATHER OVERRIDE & TESTING",
+                        text = "WEATHER OVERRIDE (TESTING)",
                         fontFamily = ManropeFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
-                        letterSpacing = 1.2.sp,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 8.dp)
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(start = AetherEmber.Spacing.Space24, bottom = AetherEmber.Spacing.Space8)
                     )
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(horizontal = AetherEmber.Spacing.Space16),
+                        horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
                     ) {
                         WeatherCondition.entries.forEach { weather ->
-                            val isSelected = themeState.weatherCondition == weather
-                            val bg = if (isSelected) AetherEmber.Colors.AccentSubtle else AetherEmber.Colors.SurfaceElevated
-                            val borderCol = if (isSelected) AetherEmber.Colors.Accent else AetherEmber.Colors.Border
+                            val isSelected = themeState.weatherOverride == weather
+                            val bg = if (isSelected) atmosphere.accent.copy(alpha = 0.28f) else Color(0x35000000)
+                            val borderCol = if (isSelected) atmosphere.accent else Color(0x28FFFFFF)
 
                             Row(
                                 modifier = Modifier
@@ -423,22 +448,22 @@ fun AppearanceScreen(
                                     .background(bg)
                                     .border(1.dp, borderCol, AetherEmber.Shapes.M)
                                     .clickable {
-                                        themeState.weatherCondition = weather
-                                        if (themeState.atmosphereMode == AtmosphereMode.STATIC) {
-                                            themeState.atmosphereMode = AtmosphereMode.TIME_AND_WEATHER
-                                        }
+                                        // Toggle: selecting the active override clears it
+                                        // and hands control back to the real reading.
+                                        themeState.weatherOverride =
+                                            if (isSelected) null else weather
                                     }
-                                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(text = weather.icon, fontSize = 14.sp)
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(AetherEmber.Spacing.Space8))
                                 Text(
                                     text = weather.displayName,
                                     fontFamily = ManropeFontFamily,
                                     fontSize = 12.5.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) Color.White else AetherEmber.Colors.TextSecondary
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (isSelected) Color.White else AetherEmber.Colors.AtmosphereTextSecondary
                                 )
                             }
                         }
@@ -447,58 +472,62 @@ fun AppearanceScreen(
 
                 // Privacy Note
                 item {
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space16))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
+                            .padding(horizontal = AetherEmber.Spacing.Space16)
                             .clip(AetherEmber.Shapes.M)
-                            .background(Color(0x18FFFFFF))
-                            .padding(12.dp),
+                            .background(Color(0x30000000))
+                            .border(1.dp, Color(0x24FFFFFF), AetherEmber.Shapes.M)
+                            .padding(AetherEmber.Spacing.Space16),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             imageVector = Icons.Default.Lock,
                             contentDescription = "Privacy",
                             tint = Color(0xFF90F0C0),
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(AetherEmber.Spacing.Space12))
                         Text(
-                            text = "Privacy first: Atmosphere runs locally without continuous tracking or storing coordinates.",
+                            text = "Weather uses your approximate location only when needed. " +
+                                "Aether does not continuously track or store your location. " +
+                                "Approximate coordinates are sent to Open-Meteo to look up the current conditions.",
                             fontFamily = ManropeFontFamily,
-                            fontSize = 11.5.sp,
-                            color = Color(0xDDFFFFFF),
-                            lineHeight = 16.sp
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = AetherEmber.Colors.AtmosphereTextSecondary,
+                            lineHeight = 17.sp
                         )
                     }
                 }
 
                 // Theme Mode Section (Dark, OLED, Light, Auto)
                 item {
-                    Spacer(modifier = Modifier.height(22.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                     Text(
                         text = "THEME MODE",
                         fontFamily = ManropeFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
-                        letterSpacing = 1.2.sp,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 8.dp)
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(start = AetherEmber.Spacing.Space24, bottom = AetherEmber.Spacing.Space8)
                     )
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(horizontal = AetherEmber.Spacing.Space16),
+                        horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
                     ) {
                         ThemeModeCard(
                             mode = AppThemeMode.DARK,
                             label = "Ember Dark",
                             icon = Icons.Default.DarkMode,
                             isSelected = themeState.themeMode == AppThemeMode.DARK,
-                            onClick = { themeState.themeMode = AppThemeMode.DARK },
+                            onClick = { themeState.setAndPersistThemeMode(AppThemeMode.DARK) },
                             modifier = Modifier.weight(1f)
                         )
                         ThemeModeCard(
@@ -506,7 +535,7 @@ fun AppearanceScreen(
                             label = "OLED",
                             icon = Icons.Default.DarkMode,
                             isSelected = themeState.themeMode == AppThemeMode.OLED,
-                            onClick = { themeState.themeMode = AppThemeMode.OLED },
+                            onClick = { themeState.setAndPersistThemeMode(AppThemeMode.OLED) },
                             modifier = Modifier.weight(1f)
                         )
                         ThemeModeCard(
@@ -514,7 +543,7 @@ fun AppearanceScreen(
                             label = "Light",
                             icon = Icons.Default.LightMode,
                             isSelected = themeState.themeMode == AppThemeMode.LIGHT,
-                            onClick = { themeState.themeMode = AppThemeMode.LIGHT },
+                            onClick = { themeState.setAndPersistThemeMode(AppThemeMode.LIGHT) },
                             modifier = Modifier.weight(1f)
                         )
                         ThemeModeCard(
@@ -522,7 +551,7 @@ fun AppearanceScreen(
                             label = "Auto",
                             icon = Icons.Default.PhoneAndroid,
                             isSelected = themeState.themeMode == AppThemeMode.SYSTEM,
-                            onClick = { themeState.themeMode = AppThemeMode.SYSTEM },
+                            onClick = { themeState.setAndPersistThemeMode(AppThemeMode.SYSTEM) },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -530,83 +559,91 @@ fun AppearanceScreen(
 
                 // Accent Color Section
                 item {
-                    Spacer(modifier = Modifier.height(22.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                     Text(
                         text = "ACCENT SPECTRUM",
                         fontFamily = ManropeFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
-                        letterSpacing = 1.2.sp,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 10.dp)
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(start = AetherEmber.Spacing.Space24, bottom = AetherEmber.Spacing.Space8)
                     )
+
+                    Text(
+                        text = "By default the accent follows the current atmosphere. " +
+                            "Pick a colour to pin it instead.",
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 17.sp,
+                        color = AetherEmber.Colors.AtmosphereTextTertiary,
+                        modifier = Modifier.padding(horizontal = AetherEmber.Spacing.Space24, vertical = 2.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = AetherEmber.Spacing.Space16),
+                        horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
                     ) {
+                        AccentSwatch(
+                            color = atmosphere.accent,
+                            label = "Follow atmosphere",
+                            isSelected = themeState.useAtmosphereAccent,
+                            onClick = { themeState.setAndPersistUseAtmosphereAccent(true) },
+                            modifier = Modifier.testTag("accent_atmosphere")
+                        )
                         AccentColorChoice.entries.forEach { choice ->
-                            val isSelected = themeState.accentChoice == choice
-                            Box(
-                                modifier = Modifier
-                                    .size(46.dp)
-                                    .clip(CircleShape)
-                                    .background(choice.primaryColor)
-                                    .clickable { themeState.accentChoice = choice }
-                                    .then(
-                                        if (isSelected) {
-                                            Modifier.border(2.5.dp, Color.White, CircleShape)
-                                        } else Modifier
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = choice.displayName,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                            AccentSwatch(
+                                color = choice.primaryColor,
+                                label = choice.displayName,
+                                isSelected = !themeState.useAtmosphereAccent &&
+                                    themeState.accentChoice == choice,
+                                onClick = {
+                                    themeState.setAndPersistAccentChoice(choice)
+                                    themeState.setAndPersistUseAtmosphereAccent(false)
                                 }
-                            }
+                            )
                         }
                     }
                 }
 
                 // Message Density
                 item {
-                    Spacer(modifier = Modifier.height(22.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                     Text(
                         text = "MESSAGE DENSITY",
                         fontFamily = ManropeFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
-                        letterSpacing = 1.2.sp,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 8.dp)
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(start = AetherEmber.Spacing.Space24, bottom = AetherEmber.Spacing.Space8)
                     )
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
+                            .padding(horizontal = AetherEmber.Spacing.Space16)
                             .clip(AetherEmber.Shapes.M)
-                            .background(AetherEmber.Colors.SurfaceElevated)
-                            .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.M)
-                            .padding(4.dp)
+                            .background(Color(0x35000000))
+                            .border(1.dp, Color(0x28FFFFFF), AetherEmber.Shapes.M)
+                            .padding(AetherEmber.Spacing.Space4)
                     ) {
                         DensityOption(
                             label = "Comfortable",
                             isSelected = themeState.messageDensity == MessageDensity.COMFORTABLE,
-                            onClick = { themeState.messageDensity = MessageDensity.COMFORTABLE },
+                            onClick = { themeState.setAndPersistMessageDensity(MessageDensity.COMFORTABLE) },
                             modifier = Modifier.weight(1f)
                         )
                         DensityOption(
                             label = "Compact",
                             isSelected = themeState.messageDensity == MessageDensity.COMPACT,
-                            onClick = { themeState.messageDensity = MessageDensity.COMPACT },
+                            onClick = { themeState.setAndPersistMessageDensity(MessageDensity.COMPACT) },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -614,59 +651,72 @@ fun AppearanceScreen(
 
                 // Font Size Slider
                 item {
-                    Spacer(modifier = Modifier.height(22.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                     Text(
                         text = "TYPOGRAPHY SCALE",
                         fontFamily = ManropeFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
-                        letterSpacing = 1.2.sp,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 6.dp)
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.0.sp,
+                        modifier = Modifier.padding(start = AetherEmber.Spacing.Space24, bottom = AetherEmber.Spacing.Space8)
                     )
 
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
+                            .padding(horizontal = AetherEmber.Spacing.Space16)
                             .clip(AetherEmber.Shapes.L)
-                            .background(AetherEmber.Colors.SurfaceElevated)
-                            .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.L)
-                            .padding(horizontal = 18.dp, vertical = 14.dp)
+                            .background(Color(0x35000000))
+                            .border(1.dp, Color(0x28FFFFFF), AetherEmber.Shapes.L)
+                            .padding(horizontal = 16.dp, vertical = AetherEmber.Spacing.Space12)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text(text = "A", fontFamily = ManropeFontFamily, fontSize = 13.sp, color = AetherEmber.Colors.TextSecondary)
+                            Text(text = "A", fontFamily = ManropeFontFamily, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AetherEmber.Colors.AtmosphereTextSecondary)
                             Text(
                                 text = "${(themeState.fontScale * 100).toInt()}%",
                                 fontFamily = ManropeFontFamily,
-                                fontSize = 13.sp,
+                                fontSize = 13.5.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = AetherEmber.Colors.Accent
+                                color = LocalAtmosphere.current.accent
                             )
-                            Text(text = "A", fontFamily = ManropeFontFamily, fontSize = 20.sp, color = AetherEmber.Colors.TextSecondary)
+                            Text(text = "A", fontFamily = ManropeFontFamily, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = AetherEmber.Colors.AtmosphereTextSecondary)
                         }
 
                         Slider(
                             value = themeState.fontScale,
-                            onValueChange = { themeState.fontScale = it },
+                            onValueChange = themeState::setAndPersistFontScale,
                             valueRange = 0.85f..1.25f,
                             steps = 4,
                             colors = SliderDefaults.colors(
-                                thumbColor = AetherEmber.Colors.Accent,
-                                activeTrackColor = AetherEmber.Colors.Accent,
-                                inactiveTrackColor = AetherEmber.Colors.SurfaceHighlight
+                                thumbColor = LocalAtmosphere.current.accent,
+                                activeTrackColor = LocalAtmosphere.current.accent,
+                                inactiveTrackColor = Color(0x33FFFFFF)
                             )
                         )
                     }
                 }
 
                 item {
-                    Spacer(modifier = Modifier.height(40.dp))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space48))
                 }
             }
+
+            AetherFloatingHeader(
+                title = "Appearance & Atmosphere",
+                modifier = Modifier.align(Alignment.TopCenter),
+                scrollFraction = headerScrollFraction,
+                frostState = frostState,
+                navigation = {
+                    AetherBackButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag("appearance_back_button")
+                    )
+                }
+            )
         }
     }
 }
@@ -681,14 +731,14 @@ private fun PaletteCard(
         modifier = Modifier
             .width(115.dp)
             .clip(AetherEmber.Shapes.M)
-            .background(AetherEmber.Colors.SurfaceElevated)
+            .background(Color(0x35000000))
             .border(
                 width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) AetherEmber.Colors.Accent else AetherEmber.Colors.Border,
+                color = if (isSelected) LocalAtmosphere.current.accent else Color(0x28FFFFFF),
                 shape = AetherEmber.Shapes.M
             )
             .clickable { onClick() }
-            .padding(10.dp)
+            .padding(AetherEmber.Spacing.Space8)
     ) {
         // Gradient color swatch
         Box(
@@ -699,7 +749,7 @@ private fun PaletteCard(
                 .background(Brush.linearGradient(palette.colors))
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
 
         Text(
             text = palette.displayName,
@@ -712,8 +762,9 @@ private fun PaletteCard(
         Text(
             text = palette.timeLabel,
             fontFamily = ManropeFontFamily,
-            fontSize = 10.5.sp,
-            color = AetherEmber.Colors.TextTertiary
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            color = AetherEmber.Colors.AtmosphereTextTertiary
         )
     }
 }
@@ -730,29 +781,32 @@ private fun ThemeModeCard(
     Column(
         modifier = modifier
             .clip(AetherEmber.Shapes.M)
-            .background(if (isSelected) AetherEmber.Colors.AccentSubtle else AetherEmber.Colors.SurfaceElevated)
+            .background(
+                if (isSelected) LocalAtmosphere.current.accent.copy(alpha = 0.28f)
+                else Color(0x35000000)
+            )
             .border(
-                width = if (isSelected) 1.5.dp else 0.5.dp,
-                color = if (isSelected) AetherEmber.Colors.Accent else AetherEmber.Colors.Border,
+                width = if (isSelected) 1.5.dp else 1.dp,
+                color = if (isSelected) LocalAtmosphere.current.accent else Color(0x28FFFFFF),
                 shape = AetherEmber.Shapes.M
             )
             .clickable { onClick() }
-            .padding(vertical = 12.dp),
+            .padding(vertical = AetherEmber.Spacing.Space12),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = if (isSelected) AetherEmber.Colors.Accent else AetherEmber.Colors.TextSecondary,
+            tint = if (isSelected) LocalAtmosphere.current.accent else AetherEmber.Colors.AtmosphereTextSecondary,
             modifier = Modifier.size(20.dp)
         )
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
         Text(
             text = label,
             fontFamily = ManropeFontFamily,
             fontSize = 11.5.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            color = if (isSelected) Color.White else AetherEmber.Colors.TextPrimary
+            color = Color.White
         )
     }
 }
@@ -769,7 +823,7 @@ private fun DensityOption(
             .clip(AetherEmber.Shapes.M)
             .background(if (isSelected) AetherEmber.Colors.SurfaceHighlight else Color.Transparent)
             .clickable { onClick() }
-            .padding(vertical = 8.dp),
+            .padding(vertical = AetherEmber.Spacing.Space8),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -777,7 +831,41 @@ private fun DensityOption(
             fontFamily = ManropeFontFamily,
             fontSize = 13.5.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            color = if (isSelected) Color.White else AetherEmber.Colors.TextSecondary
+            color = if (isSelected) Color.White else AetherEmber.Colors.AtmosphereTextTertiary
         )
+    }
+}
+
+@Composable
+private fun AccentSwatch(
+    color: Color,
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(46.dp)
+            .clip(CircleShape)
+            .background(color)
+            .clickable { onClick() }
+            .then(
+                if (isSelected) Modifier.border(2.5.dp, Color.White, CircleShape) else Modifier
+            )
+            .semantics {
+                contentDescription = label
+                selected = isSelected
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        if (isSelected) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+        }
     }
 }

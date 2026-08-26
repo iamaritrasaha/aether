@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.ui.theme.AetherEmber
+import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 
 data class AttachmentOption(
@@ -59,13 +60,20 @@ fun AttachmentSheet(
     onDismiss: () -> Unit,
     onOptionSelected: (String) -> Unit
 ) {
+    // Option chips step through the current atmospheric ramp rather than a fixed
+    // ember rainbow, so the sheet belongs to whatever atmosphere is active.
+    val ramp = LocalAtmosphere.current.colors
+    fun rampPair(index: Int): List<Color> = listOf(
+        ramp.getOrElse(index % ramp.size) { AetherEmber.Colors.Accent },
+        ramp.getOrElse((index + 1) % ramp.size) { AetherEmber.Colors.Accent }
+    )
     val options = listOf(
-        AttachmentOption("Gallery", Icons.Default.PhotoLibrary, listOf(Color(0xFFFF9A4A), Color(0xFFFF7038))),
-        AttachmentOption("Camera", Icons.Default.CameraAlt, listOf(Color(0xFFFF7038), Color(0xFFF04425))),
-        AttachmentOption("File", Icons.Default.Description, listOf(Color(0xFFF04425), Color(0xFFC90B27))),
-        AttachmentOption("Audio", Icons.Default.Headphones, listOf(Color(0xFFE92D27), Color(0xFFA5001C))),
-        AttachmentOption("Location", Icons.Default.LocationOn, listOf(Color(0xFFFF9A4A), Color(0xFFE92D27))),
-        AttachmentOption("Contact", Icons.Default.Person, listOf(Color(0xFFFF7038), Color(0xFF8B1225)))
+        AttachmentOption("Gallery", Icons.Default.PhotoLibrary, rampPair(0)),
+        AttachmentOption("Camera", Icons.Default.CameraAlt, rampPair(1)),
+        AttachmentOption("File", Icons.Default.Description, rampPair(2)),
+        AttachmentOption("Audio", Icons.Default.Headphones, rampPair(3)),
+        AttachmentOption("Location", Icons.Default.LocationOn, rampPair(0)),
+        AttachmentOption("Contact", Icons.Default.Person, rampPair(2))
     )
 
     if (isVisible) {

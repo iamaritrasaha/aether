@@ -8,6 +8,7 @@ import com.foresightlabs.aether.domain.model.ConnectionStatus
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageStatus
 import com.foresightlabs.aether.domain.model.MessageType
+import com.foresightlabs.aether.domain.model.Presence
 import com.foresightlabs.aether.domain.model.User
 import org.drinkless.tdlib.TdApi
 import java.text.SimpleDateFormat
@@ -75,7 +76,7 @@ object TelegramMappers {
             }
             is TdApi.ChatTypeBasicGroup -> ChatType.GROUP
             is TdApi.ChatTypeSupergroup -> if (type.isChannel) ChatType.CHANNEL else ChatType.GROUP
-            is TdApi.ChatTypeSecret -> ChatType.DIRECT
+            is TdApi.ChatTypeSecret -> ChatType.SECRET
             else -> ChatType.DIRECT
         }
     }
@@ -92,13 +93,31 @@ object TelegramMappers {
             username = username,
             avatarInitials = initials(name),
             avatarGradient = gradientFor(user.id),
-            isOnline = user.status is TdApi.UserStatusOnline,
+            presence = mapPresence(user.status),
             lastSeenText = formatUserStatus(user.status),
             phone = user.phoneNumber.orEmpty(),
             isVerified = user.verificationStatus?.isVerified == true,
             isPremium = user.isPremium,
+            isBot = user.type is TdApi.UserTypeBot,
+            isContact = user.isContact,
+            isDeleted = user.type is TdApi.UserTypeDeleted,
             photoPath = photoPath ?: localPath(user.profilePhoto?.small)
         )
+    }
+
+    /**
+     * Maps TDLib user status straight through. Approximate statuses stay approximate —
+     * nothing here promotes "recently" to "online".
+     */
+    fun mapPresence(status: TdApi.UserStatus?): Presence {
+        return when (status) {
+            is TdApi.UserStatusOnline -> Presence.ONLINE
+            is TdApi.UserStatusOffline -> Presence.OFFLINE
+            is TdApi.UserStatusRecently -> Presence.RECENTLY
+            is TdApi.UserStatusLastWeek -> Presence.WITHIN_WEEK
+            is TdApi.UserStatusLastMonth -> Presence.WITHIN_MONTH
+            else -> Presence.UNKNOWN
+        }
     }
 
     fun mapChat(
@@ -106,7 +125,8 @@ object TelegramMappers {
         myUserId: Long,
         users: Map<Long, TdApi.User>,
         photoPath: String? = null,
-        typingText: String? = null
+        typingText: String? = null,
+        hasUnseenPulse: Boolean = false
     ): Chat {
         val position = ChatOrdering.mainPosition(chat.positions)
         val type = mapChatType(chat.type, myUserId)
@@ -146,9 +166,48 @@ object TelegramMappers {
             directUser = mappedUser,
             photoPath = photoPath ?: localPath(chat.photo?.small) ?: mappedUser?.photoPath,
             order = position?.order ?: 0L,
-            canSendText = chat.permissions?.canSendBasicMessages != false
+            canSendText = chat.permissions?.canSendBasicMessages != false,
+            hasUnseenPulse = hasUnseenPulse
         )
     }
+
+    fun mapStory(story: TdApi.Story, senderName: String): com.foresightlabs.aether.domain.model.StoryItem {
+        val (mediaUrl, isVideo, duration) = when (val content = story.content) {
+            is TdApi.StoryContentPhoto -> {
+                val path = localPath(content.photo?.sizes?.maxByOrNull { it.photo.size }?.photo)
+                StoryMedia(url = path, isVideo = false)
+            }
+            is TdApi.StoryContentVideo -> {
+                val path = localPath(content.video?.video)
+                StoryMedia(
+                    url = path,
+                    isVideo = true,
+                    duration = content.video?.duration ?: 0.0
+                )
+            }
+            else -> StoryMedia()
+        }
+        return com.foresightlabs.aether.domain.model.StoryItem(
+            id = story.id,
+            senderChatId = story.posterChatId,
+            senderName = senderName,
+            dateSeconds = story.date,
+            expiresInSeconds = 86400,
+            isForCloseFriends = story.privacySettings is TdApi.StoryPrivacySettingsCloseFriends,
+            caption = story.caption?.text.orEmpty(),
+            mediaUrl = mediaUrl,
+            isVideo = isVideo,
+            videoDuration = duration,
+            isSeen = (story.interactionInfo?.viewCount ?: 0) > 0,
+            reactionEmoji = (story.chosenReactionType as? TdApi.ReactionTypeEmoji)?.emoji
+        )
+    }
+
+    private data class StoryMedia(
+        val url: String? = null,
+        val isVideo: Boolean = false,
+        val duration: Double = 0.0
+    )
 
     fun mapMessage(
         message: TdApi.Message,

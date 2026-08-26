@@ -1,0 +1,10 @@
+Initial closed testing release of Aether.
+
+• People-first Telegram conversations powered by TDLib
+• Living time and weather atmospheres
+• Light, Ember Dark and OLED appearance modes
+• Persistent global and per-chat appearance
+• Modern conversation, profile and contacts experiences
+• Frosted floating navigation and headers
+
+This is a testing build. Notification delivery and notification permission handling are still under development.

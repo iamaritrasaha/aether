@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -42,8 +44,16 @@ import com.foresightlabs.aether.BuildConfig
 import com.foresightlabs.aether.domain.model.User
 import com.foresightlabs.aether.ui.components.AetherAtmosphericBackground
 import com.foresightlabs.aether.ui.components.AetherAvatar
+import com.foresightlabs.aether.ui.design.AetherAccent
+import com.foresightlabs.aether.ui.design.AetherBackButton
+import com.foresightlabs.aether.ui.design.AetherFloatingHeader
+import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
+import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFraction
+import com.foresightlabs.aether.ui.design.aetherFrostSource
+import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
+import com.foresightlabs.aether.ui.theme.LocalAetherColors
 
 @Composable
 fun SettingsScreen(
@@ -56,54 +66,19 @@ fun SettingsScreen(
     onDismissLogout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val colors = LocalAetherColors.current
+    val listState = rememberLazyListState()
+    val headerScrollFraction = rememberAetherFloatingHeaderScrollFraction(listState)
+    val frostState = rememberAetherFrostState()
     AetherAtmosphericBackground(
         modifier = modifier.fillMaxSize(),
-        heroOnly = true
+        frostState = frostState,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-        ) {
-            // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x28000000))
-                        .border(1.dp, Color(0x20FFFFFF), CircleShape)
-                        .clickable { onBack() }
-                        .testTag("settings_back_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-
-                Text(
-                    text = "Settings",
-                    fontFamily = ManropeFontFamily,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-
-                Spacer(modifier = Modifier.size(38.dp))
-            }
-
+        Box(modifier = Modifier.fillMaxSize()) {
             LazyColumn(
-                modifier = Modifier.fillMaxSize()
+                state = listState,
+                modifier = Modifier.fillMaxSize().aetherFrostSource(frostState),
+                contentPadding = PaddingValues(top = aetherFloatingHeaderContentTopPadding())
             ) {
                 // Profile Card (Ember glass styled)
                 item {
@@ -112,14 +87,14 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 12.dp)
                             .clip(AetherEmber.Shapes.L)
-                            .background(AetherEmber.Colors.SurfaceElevated)
-                            .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.L)
+                            .background(colors.surfaceElevated)
+                            .border(1.dp, colors.border, AetherEmber.Shapes.L)
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         AetherAvatar(
                             initials = currentUser?.avatarInitials ?: "A",
-                            gradient = currentUser?.avatarGradient ?: listOf(AetherEmber.Colors.Amber, AetherEmber.Colors.BrightOrange),
+                            gradient = currentUser?.avatarGradient ?: listOf(AetherAccent.current, AetherAccent.subtle),
                             size = 60.dp,
                             isOnline = currentUser?.isOnline == true,
                             photoPath = currentUser?.photoPath,
@@ -134,7 +109,7 @@ fun SettingsScreen(
                                 fontFamily = ManropeFontFamily,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = colors.textPrimary
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             if (!currentUser?.phone.isNullOrBlank()) {
@@ -142,21 +117,21 @@ fun SettingsScreen(
                                     text = currentUser?.phone.orEmpty(),
                                     fontFamily = ManropeFontFamily,
                                     fontSize = 13.5.sp,
-                                    color = AetherEmber.Colors.TextSecondary
+                                    color = colors.textSecondary
                                 )
                             }
                             Text(
                                 text = currentUser?.username?.ifBlank { "No username" } ?: "",
                                 fontFamily = ManropeFontFamily,
                                 fontSize = 13.sp,
-                                color = AetherEmber.Colors.Accent
+                                color = AetherAccent.current
                             )
                             if (currentUser?.isPremium == true) {
                                 Text(
                                     text = "Telegram Premium",
                                     fontFamily = ManropeFontFamily,
                                     fontSize = 12.sp,
-                                    color = AetherEmber.Colors.Amber
+                                    color = AetherAccent.current
                                 )
                             }
                         }
@@ -171,7 +146,7 @@ fun SettingsScreen(
                         fontFamily = ManropeFontFamily,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
                         letterSpacing = 1.2.sp,
                         modifier = Modifier.padding(start = 24.dp, bottom = 6.dp)
                     )
@@ -181,8 +156,8 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp)
                             .clip(AetherEmber.Shapes.L)
-                            .background(AetherEmber.Colors.SurfaceElevated)
-                            .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.L)
+                            .background(colors.surfaceElevated)
+                            .border(1.dp, colors.border, AetherEmber.Shapes.L)
                     ) {
                         SettingsRowItem(
                             icon = Icons.Default.Palette,
@@ -202,7 +177,7 @@ fun SettingsScreen(
                         fontFamily = ManropeFontFamily,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.TextTertiary,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
                         letterSpacing = 1.2.sp,
                         modifier = Modifier.padding(start = 24.dp, bottom = 6.dp)
                     )
@@ -212,8 +187,8 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp)
                             .clip(AetherEmber.Shapes.L)
-                            .background(AetherEmber.Colors.SurfaceElevated)
-                            .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.L)
+                            .background(colors.surfaceElevated)
+                            .border(1.dp, colors.border, AetherEmber.Shapes.L)
                     ) {
                         SettingsRowItem(
                             icon = Icons.Default.Info,
@@ -222,7 +197,7 @@ fun SettingsScreen(
                             onClick = { }
                         )
                         HorizontalDivider(
-                            color = AetherEmber.Colors.BorderSubtle,
+                            color = colors.divider,
                             thickness = 0.5.dp,
                             modifier = Modifier.padding(start = 56.dp)
                         )
@@ -256,28 +231,41 @@ fun SettingsScreen(
                             fontFamily = ManropeFontFamily,
                             fontSize = 12.5.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = AetherEmber.Colors.TextSecondary
+                            color = AetherEmber.Colors.AtmosphereTextSecondary
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = "Aether is an independent third-party client that uses the Telegram API. Aether is not affiliated with or endorsed by Telegram.",
                             fontFamily = ManropeFontFamily,
                             fontSize = 11.5.sp,
-                            color = AetherEmber.Colors.TextTertiary,
+                            color = AetherEmber.Colors.AtmosphereTextTertiary,
                             lineHeight = 17.sp
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Includes bundled open source software: TDLib (Boost Software License 1.0), Manrope Variable Font (SIL Open Font License 1.1), Space Grotesk (SIL Open Font License 1.1).",
+                            text = "Includes bundled open source software: TDLib (Boost Software License 1.0), Haze (Apache License 2.0), Manrope Variable Font (SIL Open Font License 1.1), Space Grotesk (SIL Open Font License 1.1).",
                             fontFamily = ManropeFontFamily,
                             fontSize = 11.sp,
-                            color = AetherEmber.Colors.TextTertiary.copy(alpha = 0.8f),
+                            color = AetherEmber.Colors.AtmosphereTextMuted,
                             lineHeight = 16.sp
                         )
                     }
                     Spacer(modifier = Modifier.height(40.dp))
                 }
             }
+
+            AetherFloatingHeader(
+                title = "Settings",
+                modifier = Modifier.align(Alignment.TopCenter),
+                scrollFraction = headerScrollFraction,
+                frostState = frostState,
+                navigation = {
+                    AetherBackButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag("settings_back_button")
+                    )
+                }
+            )
         }
 
         // Custom Logout Confirmation Modal
@@ -294,7 +282,7 @@ fun SettingsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(AetherEmber.Shapes.L)
-                        .background(AetherEmber.Colors.Surface)
+                        .background(colors.surface)
                         .border(1.dp, Color(0x28FFFFFF), AetherEmber.Shapes.L)
                         .clickable(enabled = false) {}
                         .padding(22.dp)
@@ -304,7 +292,7 @@ fun SettingsScreen(
                         fontFamily = ManropeFontFamily,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = colors.textPrimary
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -313,7 +301,7 @@ fun SettingsScreen(
                         text = "This signs this device out of Telegram through TDLib. Your chats and media stay safe on Telegram's cloud servers.",
                         fontFamily = ManropeFontFamily,
                         fontSize = 13.5.sp,
-                        color = AetherEmber.Colors.TextSecondary,
+                        color = colors.textSecondary,
                         lineHeight = 19.sp
                     )
 
@@ -328,7 +316,7 @@ fun SettingsScreen(
                             Text(
                                 "Cancel",
                                 fontFamily = ManropeFontFamily,
-                                color = AetherEmber.Colors.TextSecondary,
+                                color = colors.textSecondary,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -365,6 +353,7 @@ private fun SettingsRowItem(
     onClick: () -> Unit,
     testTag: String = ""
 ) {
+    val colors = LocalAetherColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -377,13 +366,13 @@ private fun SettingsRowItem(
             modifier = Modifier
                 .size(36.dp)
                 .clip(CircleShape)
-                .background(AetherEmber.Colors.AccentSubtle),
+                .background(AetherAccent.subtle),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = title,
-                tint = AetherEmber.Colors.Accent,
+                tint = AetherAccent.current,
                 modifier = Modifier.size(19.dp)
             )
         }
@@ -396,21 +385,21 @@ private fun SettingsRowItem(
                 fontFamily = ManropeFontFamily,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White
+                color = colors.textPrimary
             )
             Spacer(modifier = Modifier.height(1.dp))
             Text(
                 text = subtitle,
                 fontFamily = ManropeFontFamily,
                 fontSize = 12.sp,
-                color = AetherEmber.Colors.TextTertiary
+                color = colors.textSecondary
             )
         }
 
         Icon(
             imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
             contentDescription = null,
-            tint = AetherEmber.Colors.TextTertiary.copy(alpha = 0.6f),
+            tint = colors.textTertiary,
             modifier = Modifier.size(12.dp)
         )
     }

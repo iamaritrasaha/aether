@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.ui.components.AetherAtmosphericBackground
+import com.foresightlabs.aether.ui.design.AetherAccent
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 
@@ -40,7 +41,6 @@ fun CallsScreen(
 ) {
     AetherAtmosphericBackground(
         modifier = modifier.fillMaxSize(),
-        heroOnly = true
     ) {
         Column(
             modifier = Modifier
@@ -100,13 +100,13 @@ fun CallsScreen(
                         modifier = Modifier
                             .size(56.dp)
                             .clip(CircleShape)
-                            .background(AetherEmber.Colors.AccentSubtle),
+                            .background(AetherAccent.subtle),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Call,
                             contentDescription = null,
-                            tint = AetherEmber.Colors.Accent,
+                            tint = AetherAccent.current,
                             modifier = Modifier.size(28.dp)
                         )
                     }

@@ -15,12 +15,13 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Privacy-conscious, on-demand automatic weather service for Aether's living atmosphere system.
- * - No background tracking
- * - No continuous polling
- * - No location history stored
- * - Coarse/approximate location used
- * - Caches result in-memory for 30 minutes
+ * On-demand weather for Aether's living atmosphere.
+ *
+ * - Approximate (coarse) location only, read from last-known network/passive fixes
+ * - No background tracking, no continuous polling, no location history stored
+ * - Approximate coordinates ARE sent to Open-Meteo to resolve the current condition;
+ *   user-facing copy must say so rather than claiming location never leaves the device
+ * - Result cached in memory for 30 minutes
  */
 object AtmosphereWeatherService {
 
@@ -29,40 +30,48 @@ object AtmosphereWeatherService {
     private var cachedLocationName: String? = null
     private const val CACHE_DURATION_MS = 30 * 60 * 1000L // 30 minutes
 
-    suspend fun fetchCurrentWeather(context: Context, forceRefresh: Boolean = false): Pair<WeatherCondition, String?> {
+    /**
+     * Reads local weather, or reports truthfully why it could not.
+     *
+     * Never substitutes a plausible-looking condition for a real one: an unresolved
+     * read returns [WeatherReading.Unavailable] so the atmosphere runs time-only and
+     * the UI can say what is missing.
+     */
+    suspend fun read(context: Context, forceRefresh: Boolean = false): WeatherReading {
         val now = System.currentTimeMillis()
-        if (!forceRefresh && cachedCondition != null && (now - lastFetchTime < CACHE_DURATION_MS)) {
-            return Pair(cachedCondition!!, cachedLocationName)
+        val cached = cachedCondition
+        if (!forceRefresh && cached != null && (now - lastFetchTime < CACHE_DURATION_MS)) {
+            return WeatherReading.Known(cached)
+        }
+
+        if (!hasCoarseLocationPermission(context)) {
+            return WeatherReading.Unavailable(WeatherUnavailableReason.LOCATION_PERMISSION)
         }
 
         return withContext(Dispatchers.IO) {
             try {
-                val loc = getApproximateLocation(context)
-                if (loc != null) {
-                    val weather = fetchFromOpenMeteo(loc.latitude, loc.longitude)
-                    if (weather != null) {
-                        cachedCondition = weather
-                        cachedLocationName = "Local Weather"
-                        lastFetchTime = now
-                        return@withContext Pair(weather, cachedLocationName)
-                    }
-                }
-                // Fallback: Default to Clear / Time-only modulation
-                val fallback = cachedCondition ?: WeatherCondition.CLEAR
-                Pair(fallback, null)
+                val location = getApproximateLocation(context)
+                    ?: return@withContext WeatherReading.Unavailable(WeatherUnavailableReason.NO_LOCATION)
+                val weather = fetchFromOpenMeteo(location.latitude, location.longitude)
+                    ?: return@withContext WeatherReading.Unavailable(WeatherUnavailableReason.SERVICE)
+                cachedCondition = weather
+                cachedLocationName = "Local weather"
+                lastFetchTime = now
+                WeatherReading.Known(weather)
             } catch (_: Exception) {
-                val fallback = cachedCondition ?: WeatherCondition.CLEAR
-                Pair(fallback, null)
+                WeatherReading.Unavailable(WeatherUnavailableReason.SERVICE)
             }
         }
     }
 
-    private fun getApproximateLocation(context: Context): Location? {
-        val hasCoarse = ContextCompat.checkSelfPermission(
+    fun hasCoarseLocationPermission(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.ACCESS_COARSE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
-        if (!hasCoarse) return null
+
+    private fun getApproximateLocation(context: Context): Location? {
+        if (!hasCoarseLocationPermission(context)) return null
 
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
 

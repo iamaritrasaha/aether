@@ -11,6 +11,7 @@ import com.foresightlabs.aether.domain.model.User
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,6 +42,8 @@ class TelegramClient(private val application: Application) {
     private val typing = ConcurrentHashMap<Long, String>()
     private val photoPaths = ConcurrentHashMap<String, String>()
     private val requestedFiles = ConcurrentHashMap<Int, Boolean>()
+    private val activeStories = ConcurrentHashMap<Long, TdApi.ChatActiveStories>()
+    private val storiesCache = ConcurrentHashMap<String, com.foresightlabs.aether.domain.model.StoryItem>()
 
     private val _authState = MutableStateFlow<AuthUiState>(AuthUiState.Initializing)
     val authState: StateFlow<AuthUiState> = _authState.asStateFlow()
@@ -54,12 +57,23 @@ class TelegramClient(private val application: Application) {
     private val _chatList = MutableStateFlow<List<Chat>>(emptyList())
     val chatList: StateFlow<List<Chat>> = _chatList.asStateFlow()
 
+    private val _pulses = MutableStateFlow<List<com.foresightlabs.aether.domain.model.UserPulse>>(emptyList())
+    val pulses: StateFlow<List<com.foresightlabs.aether.domain.model.UserPulse>> = _pulses.asStateFlow()
+
+    private val _myPulse = MutableStateFlow<com.foresightlabs.aether.domain.model.UserPulse?>(null)
+    val myPulse: StateFlow<com.foresightlabs.aether.domain.model.UserPulse?> = _myPulse.asStateFlow()
+
+    private val _canPostPulse = MutableStateFlow(true)
+    val canPostPulse: StateFlow<Boolean> = _canPostPulse.asStateFlow()
+
     private val _isLoadingChats = MutableStateFlow(false)
     val isLoadingChats: StateFlow<Boolean> = _isLoadingChats.asStateFlow()
 
     @Volatile private var myUserId: Long = 0L
     @Volatile private var chatsFullyLoaded = false
     private val chatLoadMutex = Mutex()
+    private var publishChatsJob: Job? = null
+    private var publishPulsesJob: Job? = null
 
     fun start() {
         if (!BuildConfig.HAS_TELEGRAM_CREDENTIALS) {
@@ -67,7 +81,21 @@ class TelegramClient(private val application: Application) {
             return
         }
         if (client != null) return
-        NativeLoader.load()
+        try {
+            NativeLoader.load()
+        } catch (error: UnsatisfiedLinkError) {
+            // Aether ships arm64-v8a TDLib binaries only. On any other ABI the app
+            // must say so plainly instead of crashing on launch with no explanation.
+            if (BuildConfig.DEBUG) {
+                android.util.Log.e(TAG, "TDLib native library unavailable", error)
+            }
+            _authState.value = AuthUiState.Unsupported(
+                "Aether can't run on this device: the Telegram engine is built for " +
+                    "64-bit ARM (arm64-v8a) and this device reports " +
+                    "${Build.SUPPORTED_ABIS.joinToString().ifBlank { "an unsupported ABI" }}."
+            )
+            return
+        }
         val verbosity = if (BuildConfig.DEBUG) 1 else 0
         try {
             Client.execute(TdApi.SetLogVerbosityLevel(verbosity))
@@ -122,14 +150,30 @@ class TelegramClient(private val application: Application) {
         ?: chats[chatId]?.let { TelegramMappers.mapChat(it, myUserId, users, photoPathForChat(it), typing[chatId]) }
 
     suspend fun ensureChatLoaded(chatId: Long): Chat? {
-        if (chats[chatId] == null) {
-            when (val result = send(TdApi.GetChat(chatId))) {
-                is TdApi.Chat -> chats[chatId] = result
-                else -> return null
+        chats[chatId]?.let { return mapUiChat(it) }
+
+        return when (val result = send(TdApi.GetChat(chatId))) {
+            is TdApi.Chat -> {
+                chats[result.id] = result
+                requestChatPhoto(result)
+                publishChats(immediate = true)
+                mapUiChat(result)
             }
+            else -> null
         }
-        publishChats()
-        return chat(chatId)
+    }
+
+    suspend fun createPrivateChat(userId: Long): Result<Chat> {
+        return when (val result = send(TdApi.CreatePrivateChat(userId, false))) {
+            is TdApi.Chat -> {
+                chats[result.id] = result
+                requestChatPhoto(result)
+                publishChats(immediate = true)
+                Result.success(mapUiChat(result))
+            }
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to open chat with user"))
+        }
     }
 
     suspend fun loadHistory(chatId: Long, fromMessageId: Long, limit: Int = 40): List<Message> {
@@ -180,6 +224,178 @@ class TelegramClient(private val application: Application) {
             is TdApi.Message -> Result.success(result)
             is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
             else -> Result.failure(IllegalStateException("Unexpected send result"))
+        }
+    }
+
+    suspend fun sendPhoto(chatId: Long, photoPath: String, caption: String, replyToMessageId: Long?): Result<TdApi.Message> {
+        val reply = replyToMessageId?.takeIf { it != 0L }?.let {
+            TdApi.InputMessageReplyToMessage(it, null, 0, "")
+        }
+        val content = TdApi.InputMessagePhoto(
+            TdApi.InputFileLocal(photoPath),
+            null,
+            null,
+            intArrayOf(),
+            0,
+            0,
+            TdApi.FormattedText(caption, emptyArray()),
+            false,
+            null,
+            false
+        )
+        return when (val result = send(TdApi.SendMessage(chatId, null, reply, null, null, content))) {
+            is TdApi.Message -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Unexpected send photo result"))
+        }
+    }
+
+    suspend fun sendVideo(
+        chatId: Long,
+        videoPath: String,
+        caption: String,
+        duration: Int = 0,
+        width: Int = 0,
+        height: Int = 0,
+        replyToMessageId: Long? = null
+    ): Result<TdApi.Message> {
+        val reply = replyToMessageId?.takeIf { it != 0L }?.let {
+            TdApi.InputMessageReplyToMessage(it, null, 0, "")
+        }
+        val content = TdApi.InputMessageVideo(
+            TdApi.InputFileLocal(videoPath),
+            null,
+            null,
+            0,
+            intArrayOf(),
+            duration,
+            width,
+            height,
+            true,
+            TdApi.FormattedText(caption, emptyArray()),
+            false,
+            null,
+            false
+        )
+        return when (val result = send(TdApi.SendMessage(chatId, null, reply, null, null, content))) {
+            is TdApi.Message -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Unexpected send video result"))
+        }
+    }
+
+    suspend fun sendVoiceNote(
+        chatId: Long,
+        voicePath: String,
+        duration: Int,
+        waveform: ByteArray = ByteArray(0),
+        replyToMessageId: Long? = null
+    ): Result<TdApi.Message> {
+        val reply = replyToMessageId?.takeIf { it != 0L }?.let {
+            TdApi.InputMessageReplyToMessage(it, null, 0, "")
+        }
+        val content = TdApi.InputMessageVoiceNote(
+            TdApi.InputFileLocal(voicePath),
+            duration,
+            waveform,
+            TdApi.FormattedText("", emptyArray()),
+            null
+        )
+        return when (val result = send(TdApi.SendMessage(chatId, null, reply, null, null, content))) {
+            is TdApi.Message -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Unexpected send voice note result"))
+        }
+    }
+
+    suspend fun sendDocument(
+        chatId: Long,
+        docPath: String,
+        caption: String = "",
+        replyToMessageId: Long? = null
+    ): Result<TdApi.Message> {
+        val reply = replyToMessageId?.takeIf { it != 0L }?.let {
+            TdApi.InputMessageReplyToMessage(it, null, 0, "")
+        }
+        val content = TdApi.InputMessageDocument(
+            TdApi.InputFileLocal(docPath),
+            null,
+            false,
+            TdApi.FormattedText(caption, emptyArray())
+        )
+        return when (val result = send(TdApi.SendMessage(chatId, null, reply, null, null, content))) {
+            is TdApi.Message -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Unexpected send document result"))
+        }
+    }
+
+    suspend fun editMessage(chatId: Long, messageId: Long, newText: String): Result<TdApi.Message> {
+        val content = TdApi.InputMessageText(
+            TdApi.FormattedText(newText, emptyArray()),
+            null,
+            true
+        )
+        return when (val result = send(TdApi.EditMessageText(chatId, messageId, null, content))) {
+            is TdApi.Message -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Unexpected edit message result"))
+        }
+    }
+
+    suspend fun addReaction(chatId: Long, messageId: Long, emoji: String): Result<Unit> {
+        val reaction = TdApi.ReactionTypeEmoji(emoji)
+        return sendExpectOk(TdApi.AddMessageReaction(chatId, messageId, reaction, false, true))
+    }
+
+    suspend fun pinMessage(chatId: Long, messageId: Long, onlyForSelf: Boolean = false): Result<Unit> {
+        return sendExpectOk(TdApi.PinChatMessage(chatId, messageId, false, onlyForSelf))
+    }
+
+    suspend fun forwardMessages(toChatId: Long, fromChatId: Long, messageIds: LongArray): Result<Unit> {
+        return when (send(TdApi.ForwardMessages(toChatId, null, fromChatId, messageIds, null, false, false))) {
+            is TdApi.Messages -> Result.success(Unit)
+            is TdApi.Error -> Result.failure(IllegalStateException("Failed to forward"))
+            else -> Result.failure(IllegalStateException("Unexpected forward result"))
+        }
+    }
+
+    suspend fun getContacts(): List<User> {
+        return when (val result = send(TdApi.GetContacts())) {
+            is TdApi.Users -> {
+                val list = mutableListOf<User>()
+                for (id in result.userIds) {
+                    val tdUser = users[id] ?: (send(TdApi.GetUser(id)) as? TdApi.User)?.also { users[id] = it }
+                    if (tdUser != null) {
+                        list.add(TelegramMappers.mapUser(tdUser))
+                    }
+                }
+                list
+            }
+            else -> emptyList()
+        }
+    }
+
+    suspend fun searchContacts(query: String, limit: Int = 50): List<User> {
+        return when (val result = send(TdApi.SearchContacts(query, limit))) {
+            is TdApi.Users -> {
+                val list = mutableListOf<User>()
+                for (id in result.userIds) {
+                    val tdUser = users[id] ?: (send(TdApi.GetUser(id)) as? TdApi.User)?.also { users[id] = it }
+                    if (tdUser != null) {
+                        list.add(TelegramMappers.mapUser(tdUser))
+                    }
+                }
+                list
+            }
+            else -> emptyList()
+        }
+    }
+
+    suspend fun importContacts(contactsList: List<TdApi.ImportedContact>): List<Long> {
+        return when (val result = send(TdApi.ImportContacts(contactsList.toTypedArray()))) {
+            is TdApi.ImportedContacts -> result.userIds.toList()
+            else -> emptyList()
         }
     }
 
@@ -349,6 +565,40 @@ class TelegramClient(private val application: Application) {
                 removeMessages(update.chatId, update.messageIds.map { it.toString() }.toSet())
             }
             is TdApi.UpdateFile -> onFile(update.file)
+            is TdApi.UpdateChatActiveStories -> {
+                val active = update.activeStories
+                if (active != null) {
+                    activeStories[active.chatId] = active
+                    scope.launch { fetchStoriesFor(active) }
+                }
+                publishChats()
+                publishPulses()
+            }
+            is TdApi.UpdateStory -> {
+                val story = update.story
+                val senderChat = chats[story.posterChatId]
+                val senderUser = users[story.posterChatId]
+                val senderName = senderChat?.title ?: senderUser?.let { listOf(it.firstName, it.lastName).filter { n -> !n.isNullOrBlank() }.joinToString(" ") } ?: "Contact"
+                val item = TelegramMappers.mapStory(story, senderName)
+                storiesCache["${story.posterChatId}_${story.id}"] = item
+                publishPulses()
+            }
+            is TdApi.UpdateStoryDeleted -> {
+                storiesCache.remove("${update.storyPosterChatId}_${update.storyId}")
+                publishPulses()
+            }
+            is TdApi.UpdateStoryPostSucceeded -> {
+                val story = update.story
+                val me = users[myUserId]
+                val name = me?.let { listOf(it.firstName, it.lastName).filter { n -> !n.isNullOrBlank() }.joinToString(" ") } ?: "You"
+                storiesCache["${story.posterChatId}_${story.id}"] = TelegramMappers.mapStory(story, name)
+                publishPulses()
+            }
+            is TdApi.UpdateStoryPostFailed -> {
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.w(TAG, "Story post failed: ${update.error.message}")
+                }
+            }
         }
     }
 
@@ -494,7 +744,19 @@ class TelegramClient(private val application: Application) {
         _currentUser.value = TelegramMappers.mapUser(me, TelegramMappers.localPath(me.profilePhoto?.small) ?: photoPaths["file:${me.profilePhoto?.small?.id}"])
     }
 
-    private fun publishChats() {
+    private fun publishChats(immediate: Boolean = false) {
+        if (immediate) {
+            doPublishChats()
+            return
+        }
+        if (publishChatsJob?.isActive == true) return
+        publishChatsJob = scope.launch {
+            delay(40)
+            doPublishChats()
+        }
+    }
+
+    private fun doPublishChats() {
         val mapped = chats.values.map { mapUiChat(it) }
             .filter { ChatOrdering.isInMainList(it.order) }
             .sortedWith { a, b -> ChatOrdering.compare(a.order, b.order) }
@@ -502,7 +764,162 @@ class TelegramClient(private val application: Application) {
     }
 
     private fun mapUiChat(chat: TdApi.Chat): Chat {
-        return TelegramMappers.mapChat(chat, myUserId, users, photoPathForChat(chat), typing[chat.id])
+        val hasUnseen = activeStories[chat.id]?.let { stories ->
+            stories.stories.any { it.storyId > stories.maxReadStoryId }
+        } ?: false
+        return TelegramMappers.mapChat(chat, myUserId, users, photoPathForChat(chat), typing[chat.id], hasUnseenPulse = hasUnseen)
+    }
+
+    private suspend fun fetchStoriesFor(active: TdApi.ChatActiveStories) {
+        val chatId = active.chatId
+        for (info in active.stories) {
+            val key = "${chatId}_${info.storyId}"
+            if (storiesCache[key] == null) {
+                when (val result = send(TdApi.GetStory(chatId, info.storyId, false))) {
+                    is TdApi.Story -> {
+                        val senderChat = chats[chatId]
+                        val senderUser = users[chatId]
+                        val senderName = senderChat?.title ?: senderUser?.let {
+                            listOf(it.firstName, it.lastName).filter { n -> !n.isNullOrBlank() }.joinToString(" ")
+                        } ?: "Contact"
+                        storiesCache[key] = TelegramMappers.mapStory(result, senderName)
+                    }
+                    else -> {}
+                }
+            }
+        }
+        publishPulses()
+    }
+
+    private fun publishPulses(immediate: Boolean = false) {
+        if (immediate) {
+            doPublishPulses()
+            return
+        }
+        if (publishPulsesJob?.isActive == true) return
+        publishPulsesJob = scope.launch {
+            delay(40)
+            doPublishPulses()
+        }
+    }
+
+    private fun doPublishPulses() {
+        val allPulses = mutableListOf<com.foresightlabs.aether.domain.model.UserPulse>()
+        var mine: com.foresightlabs.aether.domain.model.UserPulse? = null
+
+        activeStories.forEach { (chatId, active) ->
+            val chat = chats[chatId]
+            val user = users[chatId]
+            val name = chat?.title ?: user?.let {
+                listOf(it.firstName, it.lastName).filter { n -> !n.isNullOrBlank() }.joinToString(" ")
+            } ?: "Contact"
+            val username = user?.usernames?.activeUsernames?.firstOrNull()?.let { "@$it" }.orEmpty()
+            val photoPath = photoPathForChat(chat ?: TdApi.Chat().apply {
+                id = chatId
+                this.photo = user?.profilePhoto?.let { p -> TdApi.ChatPhotoInfo().apply { small = p.small } }
+            })
+            val isOnline = user?.status is TdApi.UserStatusOnline
+            val isMine = chatId == myUserId
+
+            val items = active.stories.mapNotNull { info ->
+                storiesCache["${chatId}_${info.storyId}"] ?: com.foresightlabs.aether.domain.model.StoryItem(
+                    id = info.storyId,
+                    senderChatId = chatId,
+                    senderName = name,
+                    dateSeconds = info.date,
+                    expiresInSeconds = 86400,
+                    isForCloseFriends = info.isForCloseFriends
+                )
+            }.sortedBy { it.dateSeconds }
+
+            val pulse = com.foresightlabs.aether.domain.model.UserPulse(
+                chatId = chatId,
+                name = name,
+                username = username,
+                avatarInitials = TelegramMappers.initials(name),
+                avatarGradient = TelegramMappers.gradientFor(chatId),
+                photoPath = photoPath,
+                isOnline = isOnline,
+                stories = items,
+                maxReadStoryId = active.maxReadStoryId,
+                isMine = isMine
+            )
+
+            if (isMine) {
+                mine = pulse
+            } else if (items.isNotEmpty()) {
+                allPulses.add(pulse)
+            }
+        }
+
+        _myPulse.value = mine
+        _pulses.value = allPulses.sortedWith(
+            compareByDescending<com.foresightlabs.aether.domain.model.UserPulse> { it.hasUnseen }
+                .thenByDescending { it.latestStory?.dateSeconds ?: 0 }
+        )
+    }
+
+    suspend fun openStory(chatId: Long, storyId: Int) {
+        send(TdApi.OpenStory(chatId, storyId))
+    }
+
+    suspend fun closeStory(chatId: Long, storyId: Int) {
+        send(TdApi.CloseStory(chatId, storyId))
+    }
+
+    suspend fun setStoryReaction(chatId: Long, storyId: Int, emoji: String): Result<Unit> {
+        val reactionType = TdApi.ReactionTypeEmoji(emoji)
+        return sendExpectOk(TdApi.SetStoryReaction(chatId, storyId, reactionType, false))
+    }
+
+    suspend fun postStoryPhoto(
+        photoPath: String,
+        caption: String,
+        privacy: com.foresightlabs.aether.domain.model.StoryPrivacy
+    ): Result<com.foresightlabs.aether.domain.model.StoryItem> {
+        val content = TdApi.InputStoryContentPhoto(
+            TdApi.InputFileLocal(photoPath),
+            intArrayOf()
+        )
+        val privacySettings: TdApi.StoryPrivacySettings = when (privacy) {
+            com.foresightlabs.aether.domain.model.StoryPrivacy.EVERYONE -> TdApi.StoryPrivacySettingsEveryone()
+            com.foresightlabs.aether.domain.model.StoryPrivacy.CONTACTS -> TdApi.StoryPrivacySettingsContacts()
+            com.foresightlabs.aether.domain.model.StoryPrivacy.CLOSE_FRIENDS -> TdApi.StoryPrivacySettingsCloseFriends()
+        }
+        val formatted = TdApi.FormattedText(caption, emptyArray())
+        val post = TdApi.PostStory(
+            myUserId,
+            content,
+            null,
+            formatted,
+            privacySettings,
+            intArrayOf(),
+            86400,
+            null,
+            false,
+            false
+        )
+        return when (val result = send(post)) {
+            is TdApi.Story -> {
+                val item = TelegramMappers.mapStory(result, "You")
+                storiesCache["${myUserId}_${result.id}"] = item
+                publishPulses()
+                Result.success(item)
+            }
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to post story"))
+        }
+    }
+
+    suspend fun deleteStory(storyId: Int): Result<Unit> {
+        return sendExpectOk(TdApi.DeleteStory(myUserId, storyId))
+    }
+
+    suspend fun checkCanPostStory(): Boolean {
+        return when (send(TdApi.CanPostStory(myUserId))) {
+            is TdApi.CanPostStoryResultOk -> true
+            else -> false
+        }
     }
 
     private fun mapUiMessage(message: TdApi.Message): Message {

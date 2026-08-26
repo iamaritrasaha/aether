@@ -10,6 +10,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import com.foresightlabs.aether.data.preferences.AetherAppearancePreferences
+import com.foresightlabs.aether.data.preferences.AppearanceRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import java.util.Calendar
 
 enum class AppThemeMode {
@@ -106,15 +112,25 @@ enum class TimeAtmospherePalette(
     );
 
     companion object {
-        fun fromCurrentHour(): TimeAtmospherePalette {
-            val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-            return when (hour) {
-                in 5..7 -> DAWN
-                in 8..16 -> DAY
-                in 17..19 -> GOLDEN_HOUR
-                in 20..22 -> EVENING
-                else -> NIGHT
+        /**
+         * Canonical Aether time bands, resolved at minute precision so the
+         * half-hour boundaries (16:30, 19:30, 22:30) are honoured exactly.
+         */
+        fun forMinuteOfDay(minuteOfDay: Int): TimeAtmospherePalette {
+            return when (minuteOfDay) {
+                in 300 until 480 -> DAWN          // 05:00 - 07:59
+                in 480 until 990 -> DAY           // 08:00 - 16:29
+                in 990 until 1170 -> GOLDEN_HOUR  // 16:30 - 19:29
+                in 1170 until 1350 -> EVENING     // 19:30 - 22:29
+                else -> NIGHT                     // 22:30 - 04:59
             }
+        }
+
+        fun fromCurrentHour(): TimeAtmospherePalette {
+            val calendar = Calendar.getInstance()
+            return forMinuteOfDay(
+                calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
+            )
         }
     }
 }
@@ -143,53 +159,101 @@ enum class MessageDensity {
 }
 
 @Stable
-class AppThemeState {
-    var themeMode by mutableStateOf(AppThemeMode.DARK)
-    var atmosphereMode by mutableStateOf(AtmosphereMode.TIME_BASED)
+class AppThemeState(
+    private val repository: AppearanceRepository? = null,
+    private val coroutineScope: CoroutineScope? = null
+) {
+    var themeMode by mutableStateOf(AppThemeMode.SYSTEM)
+    var atmosphereMode by mutableStateOf(AtmosphereMode.TIME_AND_WEATHER)
     var manualAtmosphere by mutableStateOf(TimeAtmospherePalette.GOLDEN_HOUR)
-    var weatherCondition by mutableStateOf(WeatherCondition.CLEAR)
+    var weatherReading by mutableStateOf<WeatherReading>(WeatherReading.Idle)
+    var weatherOverride by mutableStateOf<WeatherCondition?>(null)
+    var useAtmosphereAccent by mutableStateOf(true)
     var accentChoice by mutableStateOf(AccentColorChoice.EMBER)
     var messageDensity by mutableStateOf(MessageDensity.COMFORTABLE)
     var fontScale by mutableFloatStateOf(1.0f)
     var useAmoledBlack by mutableStateOf(false)
 
+    init {
+        repository?.let { repo ->
+            val initial = repo.globalPreferences.value
+            applyPreferences(initial)
+
+            coroutineScope?.launch {
+                repo.globalPreferences.collectLatest { prefs ->
+                    applyPreferences(prefs)
+                }
+            }
+        }
+    }
+
+    private fun applyPreferences(prefs: AetherAppearancePreferences) {
+        themeMode = prefs.themeMode
+        atmosphereMode = prefs.atmosphereMode
+        manualAtmosphere = prefs.manualAtmosphere
+        useAtmosphereAccent = prefs.useAtmosphereAccent
+        accentChoice = prefs.accentChoice
+        messageDensity = prefs.messageDensity
+        fontScale = prefs.fontScale
+    }
+
+    fun setAndPersistThemeMode(mode: AppThemeMode) {
+        themeMode = mode
+        coroutineScope?.launch {
+            repository?.updateThemeMode(mode)
+        }
+    }
+
+    fun setAndPersistAtmosphereMode(mode: AtmosphereMode) {
+        atmosphereMode = mode
+        coroutineScope?.launch {
+            repository?.updateAtmosphereMode(mode)
+        }
+    }
+
+    fun setAndPersistManualAtmosphere(palette: TimeAtmospherePalette) {
+        manualAtmosphere = palette
+        coroutineScope?.launch {
+            repository?.updateManualAtmosphere(palette)
+        }
+    }
+
+    fun setAndPersistUseAtmosphereAccent(useAtmosphere: Boolean) {
+        useAtmosphereAccent = useAtmosphere
+        coroutineScope?.launch {
+            repository?.updateUseAtmosphereAccent(useAtmosphere)
+        }
+    }
+
+    fun setAndPersistAccentChoice(choice: AccentColorChoice) {
+        accentChoice = choice
+        coroutineScope?.launch {
+            repository?.updateAccentChoice(choice)
+        }
+    }
+
+    fun setAndPersistMessageDensity(density: MessageDensity) {
+        messageDensity = density
+        coroutineScope?.launch {
+            repository?.updateMessageDensity(density)
+        }
+    }
+
+    fun setAndPersistFontScale(scale: Float) {
+        fontScale = scale
+        coroutineScope?.launch {
+            repository?.updateFontScale(scale)
+        }
+    }
+
     /**
-     * Resolves the current active atmospheric palette based on mode and optional weather.
+     * Resolves the current active atmospheric palette based on mode.
+     * Prefer [LocalAtmosphere] in composables — this exists for non-composable callers.
      */
     fun activePalette(): TimeAtmospherePalette {
         return when (atmosphereMode) {
             AtmosphereMode.STATIC, AtmosphereMode.MANUAL -> manualAtmosphere
             AtmosphereMode.TIME_BASED, AtmosphereMode.TIME_AND_WEATHER -> TimeAtmospherePalette.fromCurrentHour()
-        }
-    }
-
-    /**
-     * Resolves the active modulated colors.
-     */
-    fun resolvedAtmosphereColors(): List<Color> {
-        val base = activePalette().colors
-        return if (atmosphereMode == AtmosphereMode.TIME_AND_WEATHER) {
-            modulatePaletteWithWeather(base, weatherCondition)
-        } else {
-            base
-        }
-    }
-
-    fun resolvedGlowColor(): Color {
-        val baseGlow = activePalette().glowColor
-        return if (atmosphereMode == AtmosphereMode.TIME_AND_WEATHER) {
-            modulateSingleColor(baseGlow, weatherCondition)
-        } else {
-            baseGlow
-        }
-    }
-
-    fun resolvedShadowColor(): Color {
-        val baseShadow = activePalette().shadowColor
-        return if (atmosphereMode == AtmosphereMode.TIME_AND_WEATHER) {
-            modulateSingleColor(baseShadow, weatherCondition)
-        } else {
-            baseShadow
         }
     }
 }
@@ -254,3 +318,6 @@ fun modulateSingleColor(c: Color, weather: WeatherCondition): Color {
 }
 
 val LocalAppThemeState = staticCompositionLocalOf { AppThemeState() }
+val LocalAppearanceRepository = staticCompositionLocalOf<AppearanceRepository> {
+    error("AppearanceRepository not provided")
+}

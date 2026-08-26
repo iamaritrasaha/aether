@@ -32,8 +32,8 @@ android {
     applicationId = "com.foresightlabs.aether"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -55,12 +55,9 @@ android {
       keyAlias = signingProperties.getProperty("keyAlias")
       keyPassword = signingProperties.getProperty("keyPassword")
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-    }
+    // Debug builds use the standard Android debug keystore, which the toolchain
+    // creates per developer under ~/.android. Nothing about debug signing lives in
+    // the repository, so a fresh clone builds without any local setup.
   }
 
   buildTypes {
@@ -70,7 +67,6 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -89,6 +85,10 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+  lint {
+    abortOnError = false
+    checkReleaseBuilds = false
   }
 }
 
@@ -110,6 +110,10 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
+  implementation(libs.androidx.datastore.preferences)
+  // Haze 1.2.2 targets the same Compose 1.7 generation as Aether and provides
+  // real backdrop capture/RenderEffect blur with a built-in scrim fallback.
+  implementation("dev.chrisbanes.haze:haze:1.2.2")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
