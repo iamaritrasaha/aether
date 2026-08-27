@@ -6,13 +6,25 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.foresightlabs.aether.AetherApplication
+import com.foresightlabs.aether.data.telegram.TelegramClient
+import com.foresightlabs.aether.data.telegram.TelegramMappers
+import com.foresightlabs.aether.domain.text.AetherEntity
+import com.foresightlabs.aether.domain.text.AetherText
+import com.foresightlabs.aether.domain.text.ComposerFormatting
+import com.foresightlabs.aether.domain.text.ReplyQuote
+import com.foresightlabs.aether.domain.messages.MessageCapabilities
+import com.foresightlabs.aether.domain.messages.SendOptions
+import com.foresightlabs.aether.domain.search.ConversationSearchState
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.Message
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class ConversationViewModel(
@@ -27,14 +39,29 @@ class ConversationViewModel(
 
     private val telegram = (application as AetherApplication).telegram
 
+    // Calls have exactly one entry point. Reaching past this into TelegramClient
+    // would skip the media-availability check and ring someone for nothing.
+    private val calls = (application as AetherApplication).callsRepository
+
     private var activeChatId: Long = when (target) {
         is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> target.chatId
         is com.foresightlabs.aether.domain.model.ConversationTarget.User -> target.userId
+        is com.foresightlabs.aether.domain.model.ConversationTarget.Topic -> target.chatId
     }
+
+    /**
+     * The forum topic this screen is showing, or null for a plain conversation.
+     *
+     * Threaded through every send, draft and search below. It is a field rather than
+     * a parameter on each call so a new operation cannot be added that forgets it —
+     * the previous shape of this code had six send paths and all six dropped it.
+     */
+    private val forumTopicId: Int? = target.forumTopicId
 
     private val _isResolving = MutableStateFlow(
         when (target) {
             is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> telegram.chat(target.chatId) == null
+            is com.foresightlabs.aether.domain.model.ConversationTarget.Topic -> false
             is com.foresightlabs.aether.domain.model.ConversationTarget.User -> true
         }
     )
@@ -46,6 +73,7 @@ class ConversationViewModel(
     private val _header = MutableStateFlow<Chat?>(
         when (target) {
             is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> telegram.chat(target.chatId)
+            is com.foresightlabs.aether.domain.model.ConversationTarget.Topic -> telegram.chat(target.chatId)
             is com.foresightlabs.aether.domain.model.ConversationTarget.User -> null
         }
     )
@@ -62,12 +90,39 @@ class ConversationViewModel(
     private val _sendError = MutableStateFlow<String?>(null)
     val sendError: StateFlow<String?> = _sendError.asStateFlow()
 
+    private val _capabilities = MutableStateFlow<Map<String, MessageCapabilities>>(emptyMap())
+
+    /** Telegram's per-message capability answers, keyed by message id. */
+    val capabilities: StateFlow<Map<String, MessageCapabilities>> = _capabilities.asStateFlow()
+
+    private val _search = MutableStateFlow(ConversationSearchState.Idle)
+
+    /** State of the in-conversation search. */
+    val search: StateFlow<ConversationSearchState> = _search.asStateFlow()
+
+    private val _pinnedMessages = MutableStateFlow<List<Message>>(emptyList())
+
+    /** Pinned messages Telegram reports for this chat, beyond those loaded. */
+    val pinnedMessages: StateFlow<List<Message>> = _pinnedMessages.asStateFlow()
+
+    /** Message the list should scroll to and briefly highlight, if any. */
+    private val _jumpTarget = MutableStateFlow<String?>(null)
+    val jumpTarget: StateFlow<String?> = _jumpTarget.asStateFlow()
+
+    /** Conversations a message may be forwarded into, excluding this one. */
+    val forwardTargets: StateFlow<List<Chat>> = telegram.chatList
+        .map { chats -> chats.filter { it.id != activeChatId.toString() && it.canSendText } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private val viewedIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private var oldestId: Long = 0L
     private var historyComplete = false
     private var opened = false
     private var typingJob: Job? = null
     private var sendInFlight = false
+    private var pendingDraft: String = ""
+    private var searchJob: Job? = null
+    private var activeAction: TelegramClient.OutgoingChatAction? = null
 
     init {
         viewModelScope.launch {
@@ -92,6 +147,20 @@ class ConversationViewModel(
         _resolveError.value = null
         try {
             when (target) {
+                is com.foresightlabs.aether.domain.model.ConversationTarget.Topic -> {
+                    activeChatId = target.chatId
+                    val resolvedChat = telegram.ensureChatLoaded(target.chatId)
+                    if (resolvedChat != null) {
+                        _header.value = resolvedChat
+                        telegram.openChat(target.chatId)
+                        opened = true
+                        loadInitial()
+                        refreshPinned()
+                    } else {
+                        _resolveError.value =
+                            "Couldn't load this topic. Please check your network and try again."
+                    }
+                }
                 is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> {
                     activeChatId = target.chatId
                     val resolvedChat = telegram.ensureChatLoaded(target.chatId)
@@ -100,6 +169,7 @@ class ConversationViewModel(
                         telegram.openChat(target.chatId)
                         opened = true
                         loadInitial()
+                        refreshPinned()
                     } else {
                         _resolveError.value = "Couldn't load this conversation. Please check your network and try again."
                     }
@@ -129,7 +199,7 @@ class ConversationViewModel(
     }
 
     private suspend fun loadInitial() {
-        val page = telegram.loadHistory(activeChatId, 0L)
+        val page = loadPage(0L)
         if (page.isNotEmpty()) {
             oldestId = page.first().id.toLongOrNull() ?: 0L
             telegram.upsertConversation(activeChatId, page, prepend = true)
@@ -138,11 +208,26 @@ class ConversationViewModel(
         if (page.size < 20) historyComplete = true
     }
 
+    /**
+     * One page of history for whatever this screen is showing.
+     *
+     * A forum topic has its own history endpoint; reading the chat's history instead
+     * returns every topic interleaved.
+     */
+    private suspend fun loadPage(fromMessageId: Long): List<Message> {
+        val topic = forumTopicId
+        return if (topic != null) {
+            telegram.loadTopicHistory(activeChatId, topic, fromMessageId)
+        } else {
+            telegram.loadHistory(activeChatId, fromMessageId)
+        }
+    }
+
     fun loadOlder() {
         if (historyComplete || _loadingOlder.value || oldestId == 0L) return
         viewModelScope.launch {
             _loadingOlder.value = true
-            val page = telegram.loadHistory(activeChatId, oldestId)
+            val page = loadPage(oldestId)
             if (page.isEmpty()) {
                 historyComplete = true
             } else {
@@ -153,27 +238,55 @@ class ConversationViewModel(
         }
     }
 
-    fun send(text: String, replyToId: String?) {
+    /**
+     * Sends text, carrying whatever formatting the composer produced.
+     *
+     * Entities are sanitised against the trimmed text first: trailing whitespace is
+     * removed before sending, and a span that pointed into it would otherwise run
+     * past the end of the message.
+     */
+    fun send(
+        text: String,
+        replyToId: String?,
+        formatting: List<AetherEntity> = emptyList(),
+        quote: ReplyQuote? = null,
+        options: SendOptions = SendOptions.Default
+    ) {
         val trimmedEnd = text.trimEnd()
         if (trimmedEnd.isEmpty() || sendInFlight) return
+        val entities = TelegramMappers.toTdEntities(
+            AetherText(
+                text = trimmedEnd,
+                entities = ComposerFormatting.sanitise(formatting, trimmedEnd.length)
+            )
+        )
         sendInFlight = true
         viewModelScope.launch {
-            val result = telegram.sendText(activeChatId, trimmedEnd, replyToId?.toLongOrNull())
+            val result = telegram.sendText(
+                chatId = activeChatId,
+                text = trimmedEnd,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                entities = entities,
+                forumTopicId = forumTopicId,
+                options = telegram.sendOptionsOf(options),
+                quote = quote?.takeIf { !it.isEmpty }
+            )
             sendInFlight = false
+            if (result.isSuccess) clearPendingDraft()
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
 
     fun sendPhoto(photoPath: String, caption: String = "", replyToId: String? = null) {
         viewModelScope.launch {
-            val result = telegram.sendPhoto(activeChatId, photoPath, caption, replyToId?.toLongOrNull())
+            val result = telegram.sendPhoto(activeChatId, photoPath, caption, replyToId?.toLongOrNull(), forumTopicId)
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
 
     fun sendVideo(videoPath: String, caption: String = "", duration: Int = 0, replyToId: String? = null) {
         viewModelScope.launch {
-            val result = telegram.sendVideo(activeChatId, videoPath, caption, duration, 0, 0, replyToId?.toLongOrNull())
+            val result = telegram.sendVideo(activeChatId, videoPath, caption, duration, 0, 0, replyToId?.toLongOrNull(), forumTopicId)
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
@@ -200,24 +313,90 @@ class ConversationViewModel(
         }
     }
 
+    /**
+     * Adds or removes this account's reaction.
+     *
+     * The direction comes from the message as Telegram last reported it, so tapping
+     * a reaction the account already gave removes it rather than adding a second.
+     */
     fun addReaction(message: Message, emoji: String) {
         viewModelScope.launch {
             val messageId = message.id.toLongOrNull() ?: return@launch
-            telegram.addReaction(activeChatId, messageId, emoji)
+            val alreadyChosen = message.reactions
+                .any { it.emoji == emoji && it.userReacted }
+            val result = telegram.toggleReaction(activeChatId, messageId, emoji, alreadyChosen)
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    /** Reloads the pinned stack from Telegram. */
+    fun refreshPinned() {
+        viewModelScope.launch {
+            _pinnedMessages.value = telegram.pinnedMessages(activeChatId, forumTopicId = forumTopicId)
+        }
+    }
+
+    /** Unpins one message, then reconciles the banner with the server. */
+    fun unpinMessage(message: Message) {
+        viewModelScope.launch {
+            val messageId = message.id.toLongOrNull() ?: return@launch
+            val result = telegram.unpinMessage(activeChatId, messageId)
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+            refreshPinned()
         }
     }
 
     fun pinMessage(message: Message) {
         viewModelScope.launch {
             val messageId = message.id.toLongOrNull() ?: return@launch
-            telegram.pinMessage(activeChatId, messageId)
+            val result = if (message.isPinned) {
+                telegram.unpinMessage(activeChatId, messageId)
+            } else {
+                telegram.pinMessage(activeChatId, messageId)
+            }
+            result.exceptionOrNull()?.let {
+                _sendError.value = if (message.isPinned) "Couldn't unpin message" else "Couldn't pin message"
+            }
         }
     }
 
-    fun forwardMessage(message: Message, toChatId: Long) {
+    fun initiateAudioCall() {
+        val targetUserId = when (target) {
+            is com.foresightlabs.aether.domain.model.ConversationTarget.User -> target.userId
+            // A forum has no single other party to call; the header resolves to
+            // nothing and the repository refuses, which is the truthful outcome.
+            is com.foresightlabs.aether.domain.model.ConversationTarget.Topic,
+            is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> header.value?.directUser?.id?.toLongOrNull() ?: activeChatId
+        }
+        viewModelScope.launch {
+            val result = calls.initiateCall(targetUserId)
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    /**
+     * Forwards a message, with the options Telegram actually supports.
+     *
+     * [sendCopy] drops attribution; [removeCaption] drops a media caption and only
+     * applies to a copy. Both are real TDLib flags — Aether never re-sends content
+     * as a new message to imitate a forward.
+     */
+    fun forwardMessage(
+        message: Message,
+        toChatId: Long,
+        sendCopy: Boolean = false,
+        removeCaption: Boolean = false
+    ) {
         viewModelScope.launch {
             val messageId = message.id.toLongOrNull() ?: return@launch
-            telegram.forwardMessages(toChatId, activeChatId, longArrayOf(messageId))
+            val result = telegram.forwardMessages(
+                toChatId = toChatId,
+                fromChatId = activeChatId,
+                messageIds = longArrayOf(messageId),
+                sendCopy = sendCopy,
+                removeCaption = removeCaption
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
 
@@ -227,19 +406,96 @@ class ConversationViewModel(
         }
     }
 
-    fun delete(message: Message) {
+    /**
+     * Deletes a message at an explicitly chosen scope.
+     *
+     * The scope is resolved from the action the user picked, which the policy only
+     * offered because Telegram said it was permitted for this message.
+     */
+    fun delete(message: Message, forEveryone: Boolean) {
         viewModelScope.launch {
-            telegram.deleteMessages(activeChatId, longArrayOf(message.id.toLongOrNull() ?: return@launch))
+            val messageId = message.id.toLongOrNull() ?: return@launch
+            val result = telegram.deleteMessages(
+                chatId = activeChatId,
+                messageIds = longArrayOf(messageId),
+                revoke = forEveryone
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    /**
+     * Loads Telegram's answer for what may be done with [message], for the menu.
+     *
+     * Held per message id rather than per menu instance so a menu reopened on the
+     * same message does not flash an empty action list.
+     */
+    fun loadCapabilities(message: Message) {
+        val messageId = message.id.toLongOrNull() ?: return
+        if (_capabilities.value.containsKey(message.id)) return
+        viewModelScope.launch {
+            val capabilities = telegram.messageCapabilities(activeChatId, messageId)
+            _capabilities.value = _capabilities.value + (message.id to capabilities)
         }
     }
 
     fun onComposerChanged(text: String) {
-        if (text.isBlank()) return
-        if (typingJob?.isActive == true) return
-        typingJob = viewModelScope.launch {
-            telegram.sendTyping(activeChatId)
-            delay(4_000)
+        // Held so leaving the conversation can store it as a real Telegram draft,
+        // which then follows the account to its other clients.
+        pendingDraft = text
+        if (text.isBlank()) {
+            clearChatAction()
+            return
         }
+        reportActivity(TelegramClient.OutgoingChatAction.TYPING)
+    }
+
+    /** Reports that the user has started recording a voice message. */
+    fun onVoiceRecordingStarted() {
+        reportActivity(TelegramClient.OutgoingChatAction.RECORDING_VOICE)
+    }
+
+    /** Reports that a recording or upload has finished or been abandoned. */
+    fun onActivityEnded() {
+        clearChatAction()
+    }
+
+    /**
+     * Keeps a chat action alive while the activity continues.
+     *
+     * Telegram expires an action after roughly five seconds, so it is re-sent on a
+     * slightly shorter cadence and stops the moment the activity does. The job is
+     * bounded rather than looping forever, so a composer left open with text in it
+     * cannot keep telling the other side that someone is typing.
+     */
+    private fun reportActivity(action: TelegramClient.OutgoingChatAction) {
+        if (activeAction == action && typingJob?.isActive == true) return
+        typingJob?.cancel()
+        activeAction = action
+        typingJob = viewModelScope.launch {
+            repeat(ACTION_REPEATS) {
+                telegram.sendChatAction(activeChatId, action)
+                delay(ACTION_REFRESH_MS)
+            }
+            // The activity outlived the window Aether is willing to assert it for.
+            clearChatAction()
+        }
+    }
+
+    private fun clearChatAction() {
+        // Nothing was being reported, so there is nothing to withdraw.
+        if (activeAction == null) return
+        typingJob?.cancel()
+        typingJob = null
+        activeAction = null
+        viewModelScope.launch {
+            telegram.sendChatAction(activeChatId, TelegramClient.OutgoingChatAction.CANCEL)
+        }
+    }
+
+    /** Records that the composer's contents were sent, so no draft is left behind. */
+    private fun clearPendingDraft() {
+        pendingDraft = ""
     }
 
     fun markVisible(ids: List<String>) {
@@ -252,11 +508,223 @@ class ConversationViewModel(
         }
     }
 
+    /**
+     * Sends a contact card the user composed.
+     *
+     * Nothing is read from the device address book to build it — see the share sheet.
+     */
+    fun sendContact(phone: String, firstName: String, lastName: String, replyToId: String?) {
+        viewModelScope.launch {
+            val result = telegram.sendContact(
+                chatId = activeChatId,
+                phoneNumber = phone,
+                firstName = firstName,
+                lastName = lastName,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    /** Sends a one-off static location the user explicitly confirmed. */
+    fun sendLocation(latitude: Double, longitude: Double, replyToId: String?) {
+        viewModelScope.launch {
+            val result = telegram.sendLocation(
+                chatId = activeChatId,
+                latitude = latitude,
+                longitude = longitude,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    /**
+     * Casts this account's vote on a poll.
+     *
+     * Nothing is updated locally: the result arrives as an `updateMessageContent`
+     * carrying Telegram's own counts, so the bubble can never show a tally the
+     * server has not agreed to.
+     */
+    fun voteOnPoll(message: Message, optionIndices: List<Int>) {
+        val messageId = message.id.toLongOrNull() ?: return
+        viewModelScope.launch {
+            val result = telegram.setPollAnswer(activeChatId, messageId, optionIndices.toIntArray())
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    /** Stops a poll so it accepts no further votes. */
+    fun stopPoll(message: Message) {
+        val messageId = message.id.toLongOrNull() ?: return
+        viewModelScope.launch {
+            val result = telegram.stopPoll(activeChatId, messageId)
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    // --- in-conversation search ---------------------------------------------
+
+    fun openSearch() {
+        _search.value = ConversationSearchState(isActive = true)
+    }
+
+    fun closeSearch() {
+        searchJob?.cancel()
+        _search.value = ConversationSearchState.Idle
+    }
+
+    /**
+     * Runs a server-side search for [query].
+     *
+     * Debounced, and each keystroke cancels the previous request, so a fast typist
+     * does not see results for a prefix land after results for the whole query.
+     */
+    fun searchMessages(query: String) {
+        searchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) {
+            _search.value = ConversationSearchState(query = query, isActive = true)
+            return
+        }
+        _search.value = _search.value.copy(query = query, isActive = true, isLoading = true, error = null)
+        searchJob = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            val result = telegram.searchChatMessages(activeChatId, trimmed, forumTopicId = forumTopicId)
+            result.fold(
+                onSuccess = { found ->
+                    val mapped = found.messages
+                        .filterNotNull()
+                        .map(telegram::mapFoundMessage)
+                    _search.value = _search.value.copy(
+                        isLoading = false,
+                        results = mapped,
+                        selectedIndex = if (mapped.isEmpty()) -1 else 0,
+                        totalCount = found.totalCount,
+                        cursor = found.nextFromMessageId,
+                        hasMore = found.nextFromMessageId != 0L && mapped.isNotEmpty(),
+                        error = null
+                    )
+                    mapped.firstOrNull()?.let { jumpTo(it.id) }
+                },
+                onFailure = { error ->
+                    _search.value = _search.value.copy(
+                        isLoading = false,
+                        results = emptyList(),
+                        selectedIndex = -1,
+                        error = error.message ?: "Couldn't search this conversation"
+                    )
+                }
+            )
+        }
+    }
+
+    /** Steps to the next older result, paging the server when the page runs out. */
+    fun searchOlder() {
+        val state = _search.value
+        if (!state.canGoOlder) return
+        if (state.selectedIndex < state.results.lastIndex) {
+            select(state.selectedIndex + 1)
+            return
+        }
+        if (!state.hasMore || state.isLoading) return
+        _search.value = state.copy(isLoading = true)
+        viewModelScope.launch {
+            val result = telegram.searchChatMessages(
+                chatId = activeChatId,
+                query = state.query.trim(),
+                fromMessageId = state.cursor,
+                forumTopicId = forumTopicId
+            )
+            result.fold(
+                onSuccess = { found ->
+                    val more = found.messages.filterNotNull().map(telegram::mapFoundMessage)
+                    val combined = state.results + more.filter { new ->
+                        state.results.none { it.id == new.id }
+                    }
+                    _search.value = state.copy(
+                        isLoading = false,
+                        results = combined,
+                        selectedIndex = (state.selectedIndex + 1).coerceAtMost(combined.lastIndex),
+                        cursor = found.nextFromMessageId,
+                        hasMore = found.nextFromMessageId != 0L && more.isNotEmpty()
+                    )
+                    combined.getOrNull(state.selectedIndex + 1)?.let { jumpTo(it.id) }
+                },
+                onFailure = {
+                    _search.value = state.copy(isLoading = false, hasMore = false)
+                }
+            )
+        }
+    }
+
+    /** Steps back to the next newer result. */
+    fun searchNewer() {
+        val state = _search.value
+        if (!state.canGoNewer) return
+        select(state.selectedIndex - 1)
+    }
+
+    private fun select(index: Int) {
+        val state = _search.value
+        val target = state.results.getOrNull(index) ?: return
+        _search.value = state.copy(selectedIndex = index)
+        jumpTo(target.id)
+    }
+
+    /**
+     * Brings [messageId] into view, loading the surrounding window first when the
+     * message is not among those already held.
+     */
+    fun jumpTo(messageId: String) {
+        val id = messageId.toLongOrNull() ?: return
+        val alreadyLoaded = telegram.messagesFlow(activeChatId).value.any { it.id == messageId }
+        if (alreadyLoaded) {
+            _jumpTarget.value = messageId
+            return
+        }
+        viewModelScope.launch {
+            val window = telegram.loadHistoryAround(activeChatId, id)
+            if (window.isNotEmpty()) {
+                telegram.upsertConversation(activeChatId, window, prepend = true)
+                window.firstOrNull()?.id?.toLongOrNull()?.let { first ->
+                    if (first < oldestId || oldestId == 0L) oldestId = first
+                }
+            }
+            _jumpTarget.value = messageId
+        }
+    }
+
+    /** Clears the highlight once the list has scrolled to it. */
+    fun consumeJumpTarget() {
+        _jumpTarget.value = null
+    }
+
     override fun onCleared() {
         super.onCleared()
-        if (opened) {
-            telegram.closeChatAsync(activeChatId)
-        }
+        if (!opened) return
+
+        // The draft is stored server-side rather than in a private Aether table, so
+        // typing here and opening Telegram elsewhere shows the same unsent text.
+        clearChatAction()
+        val draft = pendingDraft
+        val chatId = activeChatId
+        val replyTo = null
+        telegram.setChatDraftAsync(chatId, draft, replyTo, forumTopicId)
+        telegram.closeChatAsync(chatId)
+    }
+
+    private companion object {
+        /** Long enough to skip intermediate prefixes, short enough to feel direct. */
+        const val SEARCH_DEBOUNCE_MS = 220L
+
+        /** Slightly under Telegram's own action expiry, so it never gaps. */
+        const val ACTION_REFRESH_MS = 4_000L
+
+        /** Roughly two minutes: long enough for real activity, bounded regardless. */
+        const val ACTION_REPEATS = 30
     }
 
     class Factory(

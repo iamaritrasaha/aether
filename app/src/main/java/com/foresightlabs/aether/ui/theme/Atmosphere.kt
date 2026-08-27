@@ -15,6 +15,25 @@ import kotlinx.coroutines.delay
 import java.util.Calendar
 
 /**
+ * Real atmospheric weather payload retrieved from Open-Meteo or supplied in tests/overrides.
+ */
+@Immutable
+data class WeatherData(
+    val condition: WeatherCondition,
+    val temperatureC: Int,
+    val apparentTemperatureC: Int? = null,
+    val highTempC: Int? = null,
+    val lowTempC: Int? = null,
+    val humidityPercent: Int? = null,
+    val windSpeedKmh: Int? = null,
+    val locationLabel: String? = null,
+    val sunriseEpochMillis: Long? = null,
+    val sunsetEpochMillis: Long? = null,
+    val nextSunriseEpochMillis: Long? = null,
+    val timezoneId: String? = null
+)
+
+/**
  * What Aether actually knows about local weather right now.
  *
  * Weather is never invented. When it is unknown the atmosphere falls back to a
@@ -28,18 +47,31 @@ sealed interface WeatherReading {
     data object Loading : WeatherReading
 
     /** A real reading from the weather service. */
-    data class Known(val condition: WeatherCondition) : WeatherReading
+    data class Known(
+        val condition: WeatherCondition,
+        val data: WeatherData? = null
+    ) : WeatherReading
 
     /** Truthful reason the atmosphere is running time-only. */
     data class Unavailable(val reason: WeatherUnavailableReason) : WeatherReading
 
     /** Explicitly chosen in Appearance for testing or as a deliberate fallback. */
-    data class Override(val condition: WeatherCondition) : WeatherReading
+    data class Override(
+        val condition: WeatherCondition,
+        val data: WeatherData? = null
+    ) : WeatherReading
 
     val conditionOrNull: WeatherCondition?
         get() = when (this) {
             is Known -> condition
             is Override -> condition
+            else -> null
+        }
+
+    val dataOrNull: WeatherData?
+        get() = when (this) {
+            is Known -> data
+            is Override -> data
             else -> null
         }
 }
@@ -145,13 +177,27 @@ fun rememberAtmosphere(themeState: AppThemeState): AetherAtmosphere {
     // A manual override always wins so Appearance can exercise every condition.
     val override = themeState.weatherOverride
 
-    LaunchedEffect(wantsWeather, override, minuteOfDay / WEATHER_REFRESH_MINUTES, inspecting) {
+    val locationMode = themeState.weatherLocationMode
+    val manualLocation = themeState.manualWeatherLocation
+
+    LaunchedEffect(
+        wantsWeather,
+        override,
+        locationMode,
+        manualLocation,
+        minuteOfDay / WEATHER_REFRESH_MINUTES,
+        inspecting
+    ) {
         if (inspecting) return@LaunchedEffect
         if (!wantsWeather || override != null) return@LaunchedEffect
         if (themeState.weatherReading !is WeatherReading.Known) {
             themeState.weatherReading = WeatherReading.Loading
         }
-        themeState.weatherReading = AtmosphereWeatherService.read(context)
+        themeState.weatherReading = AtmosphereWeatherService.read(
+            context = context,
+            locationMode = locationMode,
+            manualLocation = manualLocation
+        )
     }
 
     val weather = when {

@@ -95,11 +95,18 @@ class AtmosphereAndSheetTest {
     @Test
     fun wmoCodesMapToConditions() {
         assertEquals(WeatherCondition.CLEAR, AtmosphereWeatherService.mapWmoCodeToWeather(0))
+        assertEquals(WeatherCondition.CLEAR, AtmosphereWeatherService.mapWmoCodeToWeather(1))
+        assertEquals(WeatherCondition.PARTLY_CLOUDY, AtmosphereWeatherService.mapWmoCodeToWeather(2))
         assertEquals(WeatherCondition.CLOUDY, AtmosphereWeatherService.mapWmoCodeToWeather(3))
         assertEquals(WeatherCondition.FOG, AtmosphereWeatherService.mapWmoCodeToWeather(45))
-        assertEquals(WeatherCondition.RAIN, AtmosphereWeatherService.mapWmoCodeToWeather(65))
-        assertEquals(WeatherCondition.SNOW, AtmosphereWeatherService.mapWmoCodeToWeather(75))
+        assertEquals(WeatherCondition.FOG, AtmosphereWeatherService.mapWmoCodeToWeather(48))
+        assertEquals(WeatherCondition.DRIZZLE, AtmosphereWeatherService.mapWmoCodeToWeather(51))
+        assertEquals(WeatherCondition.RAIN, AtmosphereWeatherService.mapWmoCodeToWeather(61))
+        assertEquals(WeatherCondition.HEAVY_RAIN, AtmosphereWeatherService.mapWmoCodeToWeather(65))
+        assertEquals(WeatherCondition.SNOW, AtmosphereWeatherService.mapWmoCodeToWeather(71))
         assertEquals(WeatherCondition.STORM, AtmosphereWeatherService.mapWmoCodeToWeather(95))
+        assertEquals(WeatherCondition.UNKNOWN, AtmosphereWeatherService.mapWmoCodeToWeather(999))
+        assertEquals(WeatherCondition.UNKNOWN, AtmosphereWeatherService.mapWmoCodeToWeather(-1))
     }
 
     // --- sheet anchors are derived, never a fixed screen split ----------------
@@ -133,6 +140,22 @@ class AtmosphereAndSheetTest {
         assertTrue(2000f - anchors.peek >= 700f - 0.01f)
         // Some atmosphere always stays visible when expanded.
         assertTrue(anchors.expanded >= 260f - 0.01f)
+    }
+
+    @Test
+    fun collapsedLipAnchorLeavesHandleVisibleForWeatherHero() {
+        val anchors = SheetAnchors.derive(
+            containerHeightPx = 1000f,
+            heroBottomPx = 300f,
+            topInsetPx = 60f,
+            minChatViewportPx = 400f,
+            minAtmosphereRevealPx = 100f,
+            relaxedExtraPx = 120f,
+            collapsedLipHeightPx = 150f
+        )
+        assertEquals(850f, anchors.peek, 0.01f)
+        assertTrue(anchors.resting < anchors.peek)
+        assertEquals(150f, 1000f - anchors.peek, 0.01f)
     }
 
     @Test

@@ -23,6 +23,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.AetherMotion
 import com.foresightlabs.aether.ui.theme.LocalAtmosphere
@@ -87,9 +88,10 @@ fun AetherAtmosphericBackground(
     val glow by animateColorAsState(atmosphere.glow, spec, label = "atmosphere_glow")
     val shadow by animateColorAsState(atmosphere.shadow, spec, label = "atmosphere_shadow")
 
+    val isInspection = LocalInspectionMode.current
     // Slow ambient environmental drift when enabled and motion is allowed
     val infiniteTransition = rememberInfiniteTransition(label = "ambient_atmosphere_drift")
-    val driftOffset by if (enableAmbientMotion && !reducedMotion) {
+    val driftOffset by if (enableAmbientMotion && !reducedMotion && !isInspection) {
         infiniteTransition.animateFloat(
             initialValue = -0.04f,
             targetValue = 0.04f,
@@ -106,12 +108,11 @@ fun AetherAtmosphericBackground(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .then(if (frostState != null) Modifier.aetherFrostSource(frostState) else Modifier)
             .background(atmosphere.shadow)
     ) {
         Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .then(if (frostState != null) Modifier.aetherFrostSource(frostState) else Modifier)
+            modifier = Modifier.fillMaxSize()
         ) {
             val width = size.width
             val height = size.height

@@ -26,12 +26,12 @@ val signingProperties = Properties().apply {
 
 android {
   namespace = "com.foresightlabs.aether"
-  compileSdk { version = release(36) { minorApiLevel = 1 } }
+  compileSdk = 37
 
   defaultConfig {
     applicationId = "com.foresightlabs.aether"
     minSdk = 24
-    targetSdk = 36
+    targetSdk = 37
     versionCode = 2
     versionName = "1.1"
 

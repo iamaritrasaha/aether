@@ -31,7 +31,7 @@ class AppearanceRepositoryTest {
         first.updateManualAtmosphere(TimeAtmospherePalette.NIGHT)
         first.updateThemeMode(AppThemeMode.OLED)
         first.updateUseAtmosphereAccent(false)
-        first.updateAccentChoice(AccentColorChoice.EMBER)
+        first.updateAccentChoice(AccentColorChoice.MIST_BLUE)
 
         val recreated = AppearanceRepository(store)
         val preferences = recreated.globalPreferences.first {
@@ -39,7 +39,7 @@ class AppearanceRepositoryTest {
         }
         assertEquals(TimeAtmospherePalette.NIGHT, preferences.manualAtmosphere)
         assertFalse(preferences.useAtmosphereAccent)
-        assertEquals(AccentColorChoice.EMBER, preferences.accentChoice)
+        assertEquals(AccentColorChoice.MIST_BLUE, preferences.accentChoice)
     }
 
     @Test fun chatOverridesAreChatIdScopedPersistentAndReactive() = runBlocking {

@@ -21,7 +21,7 @@ class MainActivity : ComponentActivity() {
       val themeState = remember { AppThemeState(appearanceRepository, scope) }
       CompositionLocalProvider(
         LocalAppThemeState provides themeState,
-        com.foresightlabs.aether.ui.theme.LocalAppearanceRepository provides appearanceRepository
+        com.foresightlabs.aether.ui.theme.LocalAppearanceRepository provides appearanceRepository,
       ) {
         AetherTheme(themeState = themeState) {
           AetherApp()

@@ -249,7 +249,6 @@ fun AetherIconButton(
     borderColor: Color? = null,
     enabled: Boolean = true
 ) {
-    val atmosphere = LocalAtmosphere.current
     val colors = LocalAetherColors.current
     val reducedMotion = LocalReducedMotion.current
     val resolvedTint = tint ?: colors.textPrimary
@@ -264,11 +263,8 @@ fun AetherIconButton(
     )
     val pressedBackground by animateColorAsState(
         targetValue = if (pressed && enabled) {
-            lerp(
-                resolvedBackground,
-                atmosphere.accent.copy(alpha = resolvedBackground.alpha),
-                0.16f
-            )
+            if (colors.isDark) Color.White.copy(alpha = 0.12f)
+            else Color.Black.copy(alpha = 0.08f)
         } else {
             resolvedBackground
         },
@@ -351,7 +347,7 @@ fun AetherFloatingHeader(
             frostState = frostState,
             modifier = surfaceModifier
                 .fillMaxWidth()
-                .heightIn(min = height),
+                .height(height),
             shape = AetherFloatingHeaderDefaults.Shape,
             elevation = shadow,
             emphasis = fraction * 0.35f
@@ -359,7 +355,7 @@ fun AetherFloatingHeader(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .defaultMinSize(minHeight = height)
+                    .height(height)
                     .padding(horizontal = AetherEmber.Spacing.Space12),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8),

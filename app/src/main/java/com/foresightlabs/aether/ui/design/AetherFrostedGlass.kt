@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -19,7 +18,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
-import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.HazeTint
@@ -53,43 +51,38 @@ fun AetherFrostedGlass(
     content: @Composable BoxScope.() -> Unit
 ) {
     val colors = LocalAetherColors.current
-    val atmosphere = LocalAtmosphere.current
     val resolvedEmphasis = emphasis.coerceIn(0f, 1f)
 
     val neutralVeil = when {
         !colors.isDark -> Color(0xFFFBFAF8)
-        colors.isOled -> Color(0xFF050507)
         else -> Color(0xFF111116)
     }
     val tintAlpha = when {
-        !colors.isDark -> 0.28f + resolvedEmphasis * 0.06f
-        colors.isOled -> 0.36f + resolvedEmphasis * 0.07f
-        else -> 0.32f + resolvedEmphasis * 0.07f
+        !colors.isDark -> 0.08f + resolvedEmphasis * 0.04f
+        else -> 0.12f + resolvedEmphasis * 0.05f
     }
     val fallbackAlpha = when {
-        !colors.isDark -> 0.88f
-        colors.isOled -> 0.84f
-        else -> 0.80f
+        !colors.isDark -> 0.94f
+        else -> 0.82f
     }
-    val style = remember(colors.isDark, colors.isOled, atmosphere.accent, resolvedEmphasis) {
+    val style = remember(colors.isDark, resolvedEmphasis) {
         HazeStyle(
             backgroundColor = neutralVeil,
             tints = listOf(
-                HazeTint(neutralVeil.copy(alpha = tintAlpha)),
-                HazeTint(atmosphere.accent.copy(alpha = 0.055f + resolvedEmphasis * 0.025f))
+                HazeTint(neutralVeil.copy(alpha = tintAlpha))
             ),
-            blurRadius = 22.dp,
-            noiseFactor = 0.08f,
+            blurRadius = 24.dp,
+            noiseFactor = 0.06f,
             fallbackTint = HazeTint(neutralVeil.copy(alpha = fallbackAlpha))
         )
     }
-    val edgeBrush = remember(colors.isDark, atmosphere.accent, resolvedEmphasis) {
+    val edgeBrush = remember(colors.isDark, resolvedEmphasis) {
         Brush.linearGradient(
             colors = listOf(
-                Color.White.copy(alpha = if (colors.isDark) 0.22f else 0.58f),
-                atmosphere.accent.copy(alpha = 0.15f + resolvedEmphasis * 0.05f),
-                if (colors.isDark) Color.White.copy(alpha = 0.07f)
-                else Color.Black.copy(alpha = 0.10f)
+                Color.White.copy(alpha = if (colors.isDark) 0.18f else 0.45f),
+                Color.White.copy(alpha = if (colors.isDark) 0.08f else 0.15f),
+                if (colors.isDark) Color.White.copy(alpha = 0.04f)
+                else Color.Black.copy(alpha = 0.12f)
             )
         )
     }
@@ -107,33 +100,23 @@ fun AetherFrostedGlass(
                 elevation = elevation,
                 shape = shape,
                 clip = false,
-                ambientColor = Color.Black.copy(alpha = if (colors.isDark) 0.24f else 0.12f),
-                spotColor = atmosphere.shadow.copy(alpha = if (colors.isDark) 0.30f else 0.16f)
+                ambientColor = Color.Black.copy(alpha = if (colors.isDark) 0.20f else 0.14f),
+                spotColor = Color.Black.copy(alpha = if (colors.isDark) 0.25f else 0.18f)
             )
             .clip(shape)
             .then(frostModifier)
             .drawWithCache {
                 val specular = Brush.verticalGradient(
                     colorStops = arrayOf(
-                        0f to Color.White.copy(alpha = if (colors.isDark) 0.10f else 0.22f),
+                        0f to Color.White.copy(alpha = if (colors.isDark) 0.08f else 0.15f),
                         0.24f to Color.Transparent,
                         0.76f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = if (colors.isDark) 0.08f else 0.025f)
+                        1f to Color.Black.copy(alpha = if (colors.isDark) 0.06f else 0.04f)
                     )
                 )
-                val refraction = Brush.linearGradient(
-                    colors = listOf(
-                        atmosphere.accent.copy(alpha = 0.045f),
-                        Color.Transparent,
-                        atmosphere.glow.copy(alpha = 0.025f)
-                    ),
-                    start = Offset.Zero,
-                    end = Offset(size.width, size.height)
-                )
                 onDrawWithContent {
-                    drawContent()
-                    drawRect(refraction)
                     drawRect(specular)
+                    drawContent()
                 }
             }
             .border(BorderStroke(1.dp, edgeBrush), shape),

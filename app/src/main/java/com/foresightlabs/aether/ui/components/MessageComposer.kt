@@ -27,6 +27,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
+import com.foresightlabs.aether.domain.text.AetherEntity
+import com.foresightlabs.aether.domain.text.ComposerFormatting
+import com.foresightlabs.aether.domain.text.ComposerStyle
+import com.foresightlabs.aether.domain.text.ReplyQuote
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -72,14 +86,28 @@ import com.foresightlabs.aether.ui.theme.LocalAetherColors
 fun MessageComposer(
     replyingTo: Message?,
     onDismissReply: () -> Unit,
-    onSendMessage: (String) -> Unit,
+    onSendMessage: (String, List<AetherEntity>) -> Unit,
+    /** Quoted excerpt shown above the composer when replying to part of a message. */
+    replyQuote: ReplyQuote? = null,
     onOpenAttachmentSheet: () -> Unit,
     onVoiceNoteRecorded: () -> Unit,
     enabled: Boolean = true,
     onTextChanged: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var text by remember { mutableStateOf("") }
+    // Held as a TextFieldValue so the selection is available for formatting.
+    var field by remember { mutableStateOf(TextFieldValue("")) }
+    var formatting by remember { mutableStateOf<List<AetherEntity>>(emptyList()) }
+    val text = field.text
+    val selection = field.selection
+    val hasSelection = !selection.collapsed
+    val activeStyles = remember(formatting, selection) {
+        if (hasSelection) {
+            ComposerFormatting.activeStyles(formatting, selection.min, selection.max)
+        } else {
+            emptySet()
+        }
+    }
     val colors = LocalAetherColors.current
     val hasText = text.isNotBlank()
     val dockShape = RoundedCornerShape(26.dp)
@@ -129,14 +157,20 @@ fun MessageComposer(
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Replying to ${replyMsg.senderName}",
+                                text = if (replyQuote != null) {
+                                    "Quoting ${replyMsg.senderName}"
+                                } else {
+                                    "Replying to ${replyMsg.senderName}"
+                                },
                                 fontFamily = ManropeFontFamily,
                                 fontSize = 11.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = AetherAccent.current
                             )
                             Text(
-                                text = replyMsg.text.ifEmpty { "Attachment" },
+                                // The quote is what the reply is about, so it is
+                                // what the preview shows.
+                                text = replyQuote?.text ?: replyMsg.text.ifEmpty { "Attachment" },
                                 fontFamily = ManropeFontFamily,
                                 fontSize = 11.5.sp,
                                 color = colors.textSecondary,
@@ -208,12 +242,40 @@ fun MessageComposer(
                         )
                     }
 
+                    if (hasSelection && enabled) {
+                        AetherFormattingBar(
+                            active = activeStyles,
+                            onToggle = { style ->
+                                formatting = ComposerFormatting.toggle(
+                                    formatting,
+                                    style,
+                                    selection.min,
+                                    selection.max
+                                )
+                            }
+                        )
+                    }
+
                     BasicTextField(
-                        value = text,
-                        onValueChange = {
-                            text = it
-                            onTextChanged(it)
+                        value = field,
+                        onValueChange = { next ->
+                            // Re-anchor the spans against the edit before adopting
+                            // it, so styling stays on the characters it was applied
+                            // to rather than drifting with every keystroke.
+                            if (next.text != field.text) {
+                                formatting = ComposerFormatting.sanitise(
+                                    reanchorForEdit(field.text, next.text, formatting),
+                                    next.text.length
+                                )
+                                onTextChanged(next.text)
+                            }
+                            field = next
                         },
+                        visualTransformation = rememberFormattingTransformation(
+                            formatting = formatting,
+                            accent = AetherAccent.current,
+                            codeBackground = colors.textPrimary.copy(alpha = 0.10f)
+                        ),
                         textStyle = TextStyle(
                             color = colors.textPrimary,
                             fontFamily = ManropeFontFamily,
@@ -257,8 +319,9 @@ fun MessageComposer(
                                 .background(AetherAccent.actionBrush)
                                 .clickable(enabled = enabled) {
                                     if (text.isNotBlank() && enabled) {
-                                        onSendMessage(text.trimEnd())
-                                        text = ""
+                                        onSendMessage(text.trimEnd(), formatting)
+                                        field = TextFieldValue("")
+                                        formatting = emptyList()
                                     }
                                 }
                                 .testTag("send_message_button"),
@@ -294,4 +357,138 @@ fun MessageComposer(
             }
         }
     }
+}
+
+
+/**
+ * Formatting actions for the current selection.
+ *
+ * Appears only while text is selected, because that is the only time it can do
+ * anything. Aether's own pill row rather than a floating Material toolbar.
+ */
+@Composable
+private fun AetherFormattingBar(
+    active: Set<ComposerStyle>,
+    onToggle: (ComposerStyle) -> Unit
+) {
+    val colors = LocalAetherColors.current
+    Row(
+        modifier = Modifier
+            .padding(bottom = 6.dp)
+            .clip(AetherEmber.Shapes.Pill)
+            .background(colors.surfaceHighlight)
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+            .testTag("formatting_bar"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        ComposerStyle.entries.forEach { style ->
+            val isActive = style in active
+            Box(
+                modifier = Modifier
+                    .clip(AetherEmber.Shapes.Pill)
+                    .background(
+                        if (isActive) AetherAccent.current.copy(alpha = 0.28f) else Color.Transparent
+                    )
+                    .clickable { onToggle(style) }
+                    // 44dp target once the 12dp horizontal padding is applied.
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .testTag("format_${style.name.lowercase()}"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = styleLabel(style),
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 13.sp,
+                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isActive) colors.textPrimary else colors.textSecondary,
+                    style = styleTextStyle(style)
+                )
+            }
+        }
+    }
+}
+
+private fun styleLabel(style: ComposerStyle): String = when (style) {
+    ComposerStyle.BOLD -> "B"
+    ComposerStyle.ITALIC -> "I"
+    ComposerStyle.UNDERLINE -> "U"
+    ComposerStyle.STRIKETHROUGH -> "S"
+    ComposerStyle.SPOILER -> "◍"
+    ComposerStyle.CODE -> "{ }"
+}
+
+private fun styleTextStyle(style: ComposerStyle): TextStyle = when (style) {
+    ComposerStyle.ITALIC -> TextStyle(fontStyle = FontStyle.Italic)
+    ComposerStyle.UNDERLINE -> TextStyle(textDecoration = TextDecoration.Underline)
+    ComposerStyle.STRIKETHROUGH -> TextStyle(textDecoration = TextDecoration.LineThrough)
+    else -> TextStyle()
+}
+
+/**
+ * Draws the composer's own formatting as the user types.
+ *
+ * A visual transformation rather than a rewrite of the text: the underlying string
+ * stays exactly what will be sent, so offsets never diverge from what the server
+ * receives.
+ */
+@Composable
+private fun rememberFormattingTransformation(
+    formatting: List<AetherEntity>,
+    accent: Color,
+    codeBackground: Color
+): VisualTransformation = remember(formatting, accent, codeBackground) {
+    VisualTransformation { original ->
+        val styled = buildAnnotatedString {
+            append(original.text)
+            formatting.forEach { entity ->
+                val start = entity.offset.coerceIn(0, original.text.length)
+                val end = entity.end.coerceIn(start, original.text.length)
+                if (start == end) return@forEach
+                val span = when (entity) {
+                    is AetherEntity.Bold -> SpanStyle(fontWeight = FontWeight.Bold)
+                    is AetherEntity.Italic -> SpanStyle(fontStyle = FontStyle.Italic)
+                    is AetherEntity.Underline ->
+                        SpanStyle(textDecoration = TextDecoration.Underline)
+                    is AetherEntity.Strikethrough ->
+                        SpanStyle(textDecoration = TextDecoration.LineThrough)
+                    is AetherEntity.Code ->
+                        SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground)
+                    // Shown marked rather than hidden: the writer needs to see what
+                    // they have covered before they send it.
+                    is AetherEntity.Spoiler -> SpanStyle(background = accent.copy(alpha = 0.22f))
+                    else -> SpanStyle()
+                }
+                addStyle(span, start, end)
+            }
+        }
+        TransformedText(styled, OffsetMapping.Identity)
+    }
+}
+
+/**
+ * Works out what changed between two composer strings and re-anchors spans.
+ *
+ * Compose gives the new text, not an edit description, so the common prefix and
+ * suffix are compared to recover one. That is exact for the single contiguous edit a
+ * keyboard actually produces.
+ */
+private fun reanchorForEdit(
+    before: String,
+    after: String,
+    entities: List<AetherEntity>
+): List<AetherEntity> {
+    var prefix = 0
+    val maxPrefix = minOf(before.length, after.length)
+    while (prefix < maxPrefix && before[prefix] == after[prefix]) prefix++
+
+    var suffix = 0
+    while (
+        suffix < maxPrefix - prefix &&
+        before[before.length - 1 - suffix] == after[after.length - 1 - suffix]
+    ) suffix++
+
+    val removed = before.length - prefix - suffix
+    val inserted = after.length - prefix - suffix
+    return ComposerFormatting.reanchor(entities, prefix, removed, inserted)
 }

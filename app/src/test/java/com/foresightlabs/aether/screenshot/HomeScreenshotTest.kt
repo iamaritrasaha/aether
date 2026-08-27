@@ -283,13 +283,57 @@ class HomeScreenshotTest {
 
     @Test
     fun homeWithWeatherModulation() {
-        WeatherCondition.entries.forEach { weather ->
+        WeatherCondition.entries.filter { it != WeatherCondition.UNKNOWN }.forEach { weather ->
             capture(
-                name = "home-weather-${weather.name.lowercase()}",
+                name = "home-weather-${weather.name.lowercase().replace('_', '-')}",
                 chats = HomeFixtures.populated,
                 state = themeState(TimeAtmospherePalette.DAY, weather = weather)
             )
         }
+    }
+
+    @Test
+    fun homeWeatherHeroAcrossConditionsAtPeek() {
+        val conditions = listOf(
+            WeatherCondition.CLEAR,
+            WeatherCondition.PARTLY_CLOUDY,
+            WeatherCondition.CLOUDY,
+            WeatherCondition.RAIN,
+            WeatherCondition.HEAVY_RAIN,
+            WeatherCondition.STORM,
+            WeatherCondition.FOG,
+            WeatherCondition.SNOW
+        )
+        conditions.forEach { weather ->
+            capture(
+                name = "home-weather-hero-${weather.name.lowercase().replace('_', '-')}",
+                chats = HomeFixtures.populated,
+                state = themeState(TimeAtmospherePalette.DAY, weather = weather),
+                anchor = SheetAnchor.PEEK
+            )
+        }
+    }
+
+    @Test
+    fun homeWeatherHeroNightAndGoldenHour() {
+        capture(
+            name = "home-weather-hero-clear-night",
+            chats = HomeFixtures.populated,
+            state = themeState(TimeAtmospherePalette.NIGHT, weather = WeatherCondition.CLEAR),
+            anchor = SheetAnchor.PEEK
+        )
+        capture(
+            name = "home-weather-hero-rain-night",
+            chats = HomeFixtures.populated,
+            state = themeState(TimeAtmospherePalette.NIGHT, weather = WeatherCondition.RAIN),
+            anchor = SheetAnchor.PEEK
+        )
+        capture(
+            name = "home-weather-hero-golden-hour",
+            chats = HomeFixtures.populated,
+            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = WeatherCondition.CLEAR),
+            anchor = SheetAnchor.PEEK
+        )
     }
 
     @Test
@@ -298,6 +342,12 @@ class HomeScreenshotTest {
             name = "home-weather-unavailable",
             chats = HomeFixtures.populated,
             state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = null)
+        )
+        capture(
+            name = "home-weather-hero-unavailable",
+            chats = HomeFixtures.populated,
+            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = null),
+            anchor = SheetAnchor.PEEK
         )
     }
 

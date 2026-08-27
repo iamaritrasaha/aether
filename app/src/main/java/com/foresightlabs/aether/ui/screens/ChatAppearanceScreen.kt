@@ -44,7 +44,6 @@ import com.foresightlabs.aether.ui.design.AetherFloatingHeader
 import com.foresightlabs.aether.ui.design.AetherSectionLabel
 import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
 import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFraction
-import com.foresightlabs.aether.ui.design.aetherFrostSource
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAppearanceRepository
@@ -66,11 +65,14 @@ fun ChatAppearanceScreen(chatId: Long, onBack: () -> Unit, modifier: Modifier = 
     val headerScrollFraction = rememberAetherFloatingHeaderScrollFraction(listState)
     val frostState = rememberAetherFrostState()
 
-    AetherAtmosphericBackground(modifier = modifier.fillMaxSize(), frostState = frostState) {
-        Box(Modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize()) {
+        AetherAtmosphericBackground(
+            modifier = Modifier.fillMaxSize(),
+            frostState = frostState
+        ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize().aetherFrostSource(frostState),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = aetherFloatingHeaderContentTopPadding()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -114,16 +116,16 @@ fun ChatAppearanceScreen(chatId: Long, onBack: () -> Unit, modifier: Modifier = 
                 }
                 item { Spacer(Modifier.height(32.dp)) }
             }
-
-            AetherFloatingHeader(
-                title = "Chat Appearance",
-                subtitle = "Saved only on this device",
-                modifier = Modifier.align(Alignment.TopCenter),
-                scrollFraction = headerScrollFraction,
-                frostState = frostState,
-                navigation = { AetherBackButton(onClick = onBack) }
-            )
         }
+
+        AetherFloatingHeader(
+            title = "Chat Appearance",
+            subtitle = "Saved only on this device",
+            modifier = Modifier.align(Alignment.TopCenter),
+            scrollFraction = headerScrollFraction,
+            frostState = frostState,
+            navigation = { AetherBackButton(onClick = onBack) }
+        )
     }
 }
 

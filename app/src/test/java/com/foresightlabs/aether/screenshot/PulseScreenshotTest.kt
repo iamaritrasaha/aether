@@ -127,17 +127,6 @@ class PulseScreenshotTest {
         assertTrue("no pixels written for $name", file.length() > 0)
     }
 
-    private fun assertPulseHeaderCentered(metricsName: String) {
-        val bounds = composeRule.onNodeWithTag("pulse_header_surface").fetchSemanticsNode().boundsInRoot
-        val viewportWidth = composeRule.activity.window.decorView.width.toFloat()
-        val leftGap = bounds.left
-        val rightGap = viewportWidth - bounds.right
-        assertEquals("Pulse header must be physically centered", leftGap, rightGap, 1f)
-        File(outputDir, "$metricsName-bounds.txt").writeText(
-            "viewportWidthPx=$viewportWidth\nleftEdgePx=${bounds.left}\nrightEdgePx=${bounds.right}\n" +
-                "leftGapPx=$leftGap\nrightGapPx=$rightGap\n"
-        )
-    }
 
     private val sampleStories = listOf(
         StoryItem(
@@ -236,7 +225,6 @@ class PulseScreenshotTest {
             pulses = samplePulses,
             state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
         )
-        assertPulseHeaderCentered("pulse-frosted-header")
     }
 
     @Test
@@ -248,7 +236,6 @@ class PulseScreenshotTest {
             pulses = samplePulses,
             state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
         )
-        assertPulseHeaderCentered("pulse-frosted-header-narrow")
     }
 
     @Test

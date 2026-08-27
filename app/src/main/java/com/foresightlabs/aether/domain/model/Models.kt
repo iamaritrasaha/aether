@@ -2,6 +2,7 @@ package com.foresightlabs.aether.domain.model
 
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
+import com.foresightlabs.aether.domain.calls.MediaConnectionState
 
 enum class ChatType {
     DIRECT,
@@ -11,10 +12,22 @@ enum class ChatType {
     SECRET
 }
 
+/**
+ * What a conversation screen is showing.
+ *
+ * A forum topic is a distinct destination, not a filtered view of its chat: it has
+ * its own history endpoint, its own draft, its own unread state, and messages sent
+ * without its id land in the forum's root chat instead.
+ */
 @Immutable
 sealed interface ConversationTarget {
     data class Chat(val chatId: Long) : ConversationTarget
     data class User(val userId: Long) : ConversationTarget
+    data class Topic(val chatId: Long, val topicId: Int) : ConversationTarget
+
+    /** The forum topic this target belongs to, or null for a plain conversation. */
+    val forumTopicId: Int?
+        get() = (this as? Topic)?.topicId
 }
 
 enum class MessageType {
@@ -26,6 +39,12 @@ enum class MessageType {
     FORWARDED,
     LINK_PREVIEW,
     STICKER,
+    ANIMATION,
+    POLL,
+    CONTACT,
+    LOCATION,
+    SERVICE,
+    CALL,
     UNSUPPORTED
 }
 
@@ -133,8 +152,33 @@ data class Message(
     val linkPreview: LinkPreview? = null,
     val reactions: List<Reaction> = emptyList(),
     val isPinned: Boolean = false,
-    val canRetry: Boolean = false
-)
+    val canRetry: Boolean = false,
+    /** Present only for poll messages; every count in it is Telegram's. */
+    val poll: PollPresentation? = null,
+    /**
+     * Telegram's album grouping id, or 0 when the message stands alone.
+     *
+     * Messages sharing a non-zero id were sent together and must be shown as one
+     * cluster rather than as a column of independent bubbles.
+     */
+    val mediaAlbumId: Long = 0L,
+    /**
+     * [text] together with the formatting Telegram attached to it.
+     *
+     * Defaults to the plain text so a message constructed without entities still
+     * renders identically; nothing has to opt in.
+     */
+    val formatted: com.foresightlabs.aether.domain.text.AetherText? = null,
+    /**
+     * True when this is a reply preview showing a *quoted span* rather than the
+     * whole original message, so the UI can mark it as an excerpt.
+     */
+    val isQuotedExcerpt: Boolean = false
+) {
+    /** The message's text with its entities, falling back to plain text. */
+    val richText: com.foresightlabs.aether.domain.text.AetherText
+        get() = formatted ?: com.foresightlabs.aether.domain.text.AetherText(text)
+}
 
 @Immutable
 data class Chat(
@@ -162,7 +206,31 @@ data class Chat(
     val photoPath: String? = null,
     val order: Long = 0L,
     val canSendText: Boolean = true,
-    val hasUnseenPulse: Boolean = false
+    val hasUnseenPulse: Boolean = false,
+    /** Whether Telegram currently holds this chat in the archive list. */
+    val isArchived: Boolean = false,
+    /** Whether the account has explicitly marked the chat unread on the server. */
+    val isMarkedAsUnread: Boolean = false,
+    /** Whether the account may leave this chat, per its membership status. */
+    val canLeave: Boolean = false,
+    /** Whether the account may delete this chat's history for everyone. */
+    val canRevokeHistory: Boolean = false,
+    /** Whether the account may clear this chat's history for itself only. */
+    val canDeleteOnlyForSelf: Boolean = false,
+    /** The other party, when this is a private chat that can be blocked. */
+    val blockableUserId: Long? = null,
+    /** Whether the other party is currently blocked. */
+    val isBlocked: Boolean = false,
+    /** Id of the newest message, for marking the chat read. */
+    val lastMessageId: Long = 0L,
+    /**
+     * Whether this is a forum supergroup.
+     *
+     * A forum opens as a list of topics rather than as one conversation; its
+     * messages belong to topics, and routing them through the chat interleaves
+     * every topic together.
+     */
+    val isForum: Boolean = false
 )
 
 @Immutable
@@ -202,6 +270,67 @@ data class UserPulse(
 ) {
     val hasUnseen: Boolean get() = stories.any { it.id > maxReadStoryId }
     val latestStory: StoryItem? get() = stories.lastOrNull()
+}
+
+enum class CallStateEnum {
+    PENDING,
+    EXCHANGING_KEYS,
+    READY,
+    HANGING_UP,
+    DISCARDED,
+    ERROR
+}
+
+@Immutable
+data class ActiveCall(
+    val callId: Int,
+    val userId: Long,
+    val user: User? = null,
+    val isOutgoing: Boolean = true,
+    val isVideo: Boolean = false,
+    val state: CallStateEnum = CallStateEnum.PENDING,
+    val mediaState: MediaConnectionState = MediaConnectionState.IDLE,
+    val isMuted: Boolean = false,
+    val isSpeakerOn: Boolean = false,
+    val durationSec: Int = 0,
+    val isMinimized: Boolean = false,
+    val errorMessage: String? = null
+)
+
+enum class CallOutcome {
+    COMPLETED,
+    MISSED,
+    DECLINED,
+    CANCELLED,
+    FAILED
+}
+
+@Immutable
+data class CallHistoryItem(
+    val id: String,
+    val messageId: Long,
+    val chatId: Long,
+    val userId: Long,
+    val user: User? = null,
+    val isOutgoing: Boolean = false,
+    val isVideo: Boolean = false,
+    val outcome: CallOutcome = CallOutcome.COMPLETED,
+    val durationSeconds: Int = 0,
+    val timestampSeconds: Int = 0,
+    val formattedTimestamp: String = "",
+    val formattedDuration: String = ""
+)
+
+sealed interface CallHistoryUiState {
+    data object Loading : CallHistoryUiState
+    data class Content(
+        val items: List<CallHistoryItem>,
+        val hasMore: Boolean = false,
+        val isLoadingMore: Boolean = false,
+        val nextOffset: String = ""
+    ) : CallHistoryUiState
+    data class Error(val message: String) : CallHistoryUiState
+    data object Empty : CallHistoryUiState
 }
 
 @Immutable

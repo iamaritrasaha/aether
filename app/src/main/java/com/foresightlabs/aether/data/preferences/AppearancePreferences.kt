@@ -18,6 +18,36 @@ enum class ChatBubbleStyle(val displayName: String, val description: String) {
     EMBER("Ember", "Warm ember-infused gradient surfaces")
 }
 
+enum class WeatherLocationMode(val displayName: String, val description: String) {
+    AUTOMATIC("Automatic", "Approximate device location without continuous tracking"),
+    MANUAL("Selected location", "Fixed city of your choice")
+}
+
+/**
+ * Manually chosen city coordinates for weather.
+ */
+@Immutable
+data class ManualWeatherLocation(
+    val name: String,
+    val admin1: String? = null,
+    val country: String? = null,
+    val latitude: Double,
+    val longitude: Double,
+    val timezone: String? = null
+) {
+    val displayLabel: String
+        get() = buildString {
+            append(name)
+            if (!admin1.isNullOrBlank()) {
+                append(", ")
+                append(admin1)
+            } else if (!country.isNullOrBlank()) {
+                append(", ")
+                append(country)
+            }
+        }
+}
+
 /**
  * Persistent global appearance configuration for Aether.
  */
@@ -27,9 +57,11 @@ data class AetherAppearancePreferences(
     val atmosphereMode: AtmosphereMode = AtmosphereMode.TIME_AND_WEATHER,
     val manualAtmosphere: TimeAtmospherePalette = TimeAtmospherePalette.GOLDEN_HOUR,
     val useAtmosphereAccent: Boolean = true,
-    val accentChoice: AccentColorChoice = AccentColorChoice.EMBER,
+    val accentChoice: AccentColorChoice = AccentColorChoice.MIST_BLUE,
     val messageDensity: MessageDensity = MessageDensity.COMFORTABLE,
-    val fontScale: Float = 1.0f
+    val fontScale: Float = 1.0f,
+    val weatherLocationMode: WeatherLocationMode = WeatherLocationMode.AUTOMATIC,
+    val manualWeatherLocation: ManualWeatherLocation? = null
 )
 
 /**

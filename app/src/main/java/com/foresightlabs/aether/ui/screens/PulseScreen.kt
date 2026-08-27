@@ -78,18 +78,16 @@ import com.foresightlabs.aether.domain.model.UserPulse
 import com.foresightlabs.aether.ui.components.AetherAtmosphericBackground
 import com.foresightlabs.aether.ui.components.AetherAvatar
 import com.foresightlabs.aether.ui.design.AetherElevation
-import com.foresightlabs.aether.ui.design.AetherFloatingHeader
+import com.foresightlabs.aether.ui.design.AetherFrostState
 import com.foresightlabs.aether.ui.design.AetherIconButton
 import com.foresightlabs.aether.ui.design.AetherNavItem
 import com.foresightlabs.aether.ui.design.AetherNavPill
 import com.foresightlabs.aether.ui.design.AetherNavPillDefaults
 import com.foresightlabs.aether.ui.design.AetherSurface
-import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
-import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFraction
-import com.foresightlabs.aether.ui.design.aetherFrostSource
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.pulse.PulseViewerState
 import com.foresightlabs.aether.ui.theme.AetherEmber
+import com.foresightlabs.aether.ui.theme.AetherType
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import com.foresightlabs.aether.ui.theme.LocalReducedMotion
@@ -136,7 +134,6 @@ fun PulseScreen(
     val unseenPulses = remember(pulses) { pulses.filter { it.hasUnseen } }
     val seenPulses = remember(pulses) { pulses.filter { !it.hasUnseen } }
     val listState = rememberLazyListState()
-    val headerScrollFraction = rememberAetherFloatingHeaderScrollFraction(listState)
     val frostState = rememberAetherFrostState()
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -150,13 +147,17 @@ fun PulseScreen(
                     state = listState,
                     modifier = Modifier
                         .fillMaxSize()
-                        .aetherFrostSource(frostState)
                         .testTag("pulse_list"),
                     contentPadding = PaddingValues(
-                        top = aetherFloatingHeaderContentTopPadding(headerHeight = 56.dp),
+                        top = 0.dp,
                         bottom = AetherNavPillDefaults.Height + AetherEmber.Spacing.Space40
                     )
                 ) {
+                    item(key = "pulse_header") {
+                        PulsePageHeader(
+                            onAddClick = { if (canPostPulse) photoPickerLauncher.launch("image/*") }
+                        )
+                    }
                     // --- YOUR PULSE ---
                     item(key = "my_pulse_section") {
                         PulseSectionHeader(title = "Your Pulse")
@@ -276,28 +277,6 @@ fun PulseScreen(
                     }
                 }
 
-                AetherFloatingHeader(
-                    title = "Pulse",
-                    subtitle = "Stories from your people",
-                    modifier = Modifier.align(Alignment.TopCenter),
-                    surfaceModifier = Modifier.testTag("pulse_header_surface"),
-                    frostState = frostState,
-                    horizontalMargin = AetherEmber.Spacing.Space24,
-                    expandedHeight = 56.dp,
-                    compactHeight = 56.dp,
-                    scrollFraction = headerScrollFraction,
-                    actions = {
-                        if (canPostPulse) {
-                            AetherIconButton(
-                                icon = Icons.Default.Add,
-                                contentDescription = "Add to Pulse",
-                                onClick = { photoPickerLauncher.launch("image/*") },
-                                iconSize = 20.dp,
-                                modifier = Modifier.testTag("pulse_add_button")
-                            )
-                        }
-                    }
-                )
             }
         }
 
@@ -376,6 +355,39 @@ fun PulseScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PulsePageHeader(onAddClick: () -> Unit) {
+    val colors = LocalAetherColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = AetherEmber.Spacing.ScreenHorizontal)
+            .padding(top = AetherEmber.Spacing.Space24, bottom = AetherEmber.Spacing.Space16),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Pulse",
+                style = AetherType.ScreenTitle,
+                color = colors.atmosphereTextPrimary
+            )
+            Text(
+                text = "Stories from your people",
+                style = AetherType.Caption,
+                color = colors.atmosphereTextSecondary
+            )
+        }
+
+        AetherIconButton(
+            icon = Icons.Default.Add,
+            contentDescription = "Add to Pulse",
+            onClick = onAddClick,
+            modifier = Modifier.testTag("pulse_add_button")
+        )
     }
 }
 

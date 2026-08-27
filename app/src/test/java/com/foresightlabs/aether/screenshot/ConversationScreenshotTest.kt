@@ -96,10 +96,10 @@ class ConversationScreenshotTest {
                     canSend = true,
                     onBack = {},
                     onNavigateToProfile = {},
-                    onSendMessage = { _, _ -> },
+                    onSendMessage = { _, _, _, _ -> },
                     onComposerChanged = {},
                     onLoadOlder = {},
-                    onDeleteMessage = {},
+                    onDeleteMessage = { _, _ -> },
                     onRetryMessage = {},
                     onVisibleMessages = {}
                 )

@@ -23,14 +23,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,7 +57,6 @@ import com.foresightlabs.aether.ui.design.AetherBackButton
 import com.foresightlabs.aether.ui.design.AetherFloatingHeader
 import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
 import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFraction
-import com.foresightlabs.aether.ui.design.aetherFrostSource
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
@@ -70,14 +77,14 @@ fun SettingsScreen(
     val listState = rememberLazyListState()
     val headerScrollFraction = rememberAetherFloatingHeaderScrollFraction(listState)
     val frostState = rememberAetherFrostState()
-    AetherAtmosphericBackground(
-        modifier = modifier.fillMaxSize(),
-        frostState = frostState,
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize()) {
+        AetherAtmosphericBackground(
+            modifier = Modifier.fillMaxSize(),
+            frostState = frostState
+        ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize().aetherFrostSource(frostState),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = aetherFloatingHeaderContentTopPadding())
             ) {
                 // Profile Card (Ember glass styled)
@@ -169,6 +176,81 @@ fun SettingsScreen(
                     }
                 }
 
+                // Permissions & System Privacy Group
+                item {
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val coordinator = remember(context) { com.foresightlabs.aether.data.permissions.PermissionCoordinator(context) }
+                    val state = coordinator.state.collectAsStateWithLifecycle().value
+
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Text(
+                        text = "PERMISSIONS & SYSTEM PRIVACY",
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.2.sp,
+                        modifier = Modifier.padding(start = 24.dp, bottom = 6.dp)
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .clip(AetherEmber.Shapes.L)
+                            .background(colors.surfaceElevated)
+                            .border(1.dp, colors.border, AetherEmber.Shapes.L)
+                    ) {
+                        val isNotifGranted = state.notification == com.foresightlabs.aether.data.permissions.PermissionStatus.GRANTED
+                        val isMicGranted = state.microphone == com.foresightlabs.aether.data.permissions.PermissionStatus.GRANTED
+                        val isCamGranted = state.camera == com.foresightlabs.aether.data.permissions.PermissionStatus.GRANTED
+                        val isContactsGranted = state.contacts == com.foresightlabs.aether.data.permissions.PermissionStatus.GRANTED
+                        val isLocGranted = state.location == com.foresightlabs.aether.data.permissions.PermissionStatus.GRANTED
+
+                        SettingsRowItem(
+                            icon = Icons.Default.Notifications,
+                            title = "Notifications",
+                            subtitle = if (isNotifGranted) "Allowed" else "Not allowed (Contextual request on Home)",
+                            onClick = { coordinator.openAppSettings(context) }
+                        )
+                        HorizontalDivider(color = colors.divider, thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp))
+                        SettingsRowItem(
+                            icon = Icons.Default.Mic,
+                            title = "Microphone",
+                            subtitle = if (isMicGranted) "Allowed" else "Not allowed (Asked when making calls/voice notes)",
+                            onClick = { coordinator.openAppSettings(context) }
+                        )
+                        HorizontalDivider(color = colors.divider, thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp))
+                        SettingsRowItem(
+                            icon = Icons.Default.CameraAlt,
+                            title = "Camera",
+                            subtitle = if (isCamGranted) "Allowed" else "Not allowed (Asked when taking photos)",
+                            onClick = { coordinator.openAppSettings(context) }
+                        )
+                        HorizontalDivider(color = colors.divider, thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp))
+                        SettingsRowItem(
+                            icon = Icons.Default.Contacts,
+                            title = "Contacts",
+                            subtitle = if (isContactsGranted) "Allowed" else "Not allowed (Asked when searching device contacts)",
+                            onClick = { coordinator.openAppSettings(context) }
+                        )
+                        HorizontalDivider(color = colors.divider, thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp))
+                        SettingsRowItem(
+                            icon = Icons.Default.LocationOn,
+                            title = "Approximate Location",
+                            subtitle = if (isLocGranted) "Allowed" else "Not allowed (Used for weather atmosphere)",
+                            onClick = { coordinator.openAppSettings(context) }
+                        )
+                        HorizontalDivider(color = colors.divider, thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp))
+                        SettingsRowItem(
+                            icon = Icons.Default.Settings,
+                            title = "Open System App Settings",
+                            subtitle = "Manage Android system permissions directly",
+                            onClick = { coordinator.openAppSettings(context) }
+                        )
+                    }
+                }
+
                 // System & Account Group
                 item {
                     Spacer(modifier = Modifier.height(18.dp))
@@ -253,20 +335,20 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(40.dp))
                 }
             }
-
-            AetherFloatingHeader(
-                title = "Settings",
-                modifier = Modifier.align(Alignment.TopCenter),
-                scrollFraction = headerScrollFraction,
-                frostState = frostState,
-                navigation = {
-                    AetherBackButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("settings_back_button")
-                    )
-                }
-            )
         }
+
+        AetherFloatingHeader(
+            title = "Settings",
+            modifier = Modifier.align(Alignment.TopCenter),
+            scrollFraction = headerScrollFraction,
+            frostState = frostState,
+            navigation = {
+                AetherBackButton(
+                    onClick = onBack,
+                    modifier = Modifier.testTag("settings_back_button")
+                )
+            }
+        )
 
         // Custom Logout Confirmation Modal
         if (confirmLogout) {

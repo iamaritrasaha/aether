@@ -1,5 +1,13 @@
 package com.foresightlabs.aether.ui.components
 
+import android.content.ContentValues
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -10,10 +18,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,10 +44,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.foresightlabs.aether.domain.model.MediaItem
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 
 @Composable
 fun MediaViewer(
@@ -51,6 +61,7 @@ fun MediaViewer(
     onClose: () -> Unit
 ) {
     if (mediaItem == null || !isVisible) return
+    val context = LocalContext.current
 
     AnimatedVisibility(
         visible = isVisible,
@@ -64,7 +75,7 @@ fun MediaViewer(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
-                ) { /* toggle header/caption visibility or consume */ },
+                ) { /* consume tap */ },
             contentAlignment = Alignment.Center
         ) {
             // Main Image
@@ -128,14 +139,14 @@ fun MediaViewer(
                 }
 
                 Row {
-                    IconButton(onClick = { /* mock share */ }) {
+                    IconButton(onClick = { shareMediaItem(context, mediaItem) }) {
                         Icon(
                             imageVector = Icons.Default.Share,
                             contentDescription = "Share",
                             tint = Color.White
                         )
                     }
-                    IconButton(onClick = { /* mock download */ }) {
+                    IconButton(onClick = { saveMediaToDownloads(context, mediaItem) }) {
                         Icon(
                             imageVector = Icons.Default.Download,
                             contentDescription = "Download",
@@ -166,5 +177,63 @@ fun MediaViewer(
                 }
             }
         }
+    }
+}
+
+private fun shareMediaItem(context: Context, mediaItem: MediaItem) {
+    try {
+        val path = mediaItem.url.removePrefix("file://")
+        val file = File(path)
+        val isVideo = mediaItem.url.endsWith(".mp4", ignoreCase = true) || mediaItem.url.endsWith(".mkv", ignoreCase = true)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = if (isVideo) "video/*" else "image/*"
+            if (file.exists()) {
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } else {
+                putExtra(Intent.EXTRA_TEXT, mediaItem.url)
+            }
+        }
+        context.startActivity(Intent.createChooser(intent, "Share media"))
+    } catch (_: Exception) {
+        Toast.makeText(context, "Couldn't share media", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun saveMediaToDownloads(context: Context, mediaItem: MediaItem) {
+    try {
+        val path = mediaItem.url.removePrefix("file://")
+        val sourceFile = File(path)
+        if (!sourceFile.exists()) {
+            Toast.makeText(context, "Media file not available locally", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val fileName = sourceFile.name
+        val isVideo = mediaItem.url.endsWith(".mp4", ignoreCase = true) || mediaItem.url.endsWith(".mkv", ignoreCase = true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, if (isVideo) "video/mp4" else "image/jpeg")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+            if (uri != null) {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    FileInputStream(sourceFile).use { input -> input.copyTo(out) }
+                }
+                Toast.makeText(context, "Saved to Downloads", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val destFile = File(downloadsDir, fileName)
+            FileInputStream(sourceFile).use { input ->
+                FileOutputStream(destFile).use { output -> input.copyTo(output) }
+            }
+            Toast.makeText(context, "Saved to ${destFile.absolutePath}", Toast.LENGTH_SHORT).show()
+        }
+    } catch (_: Exception) {
+        Toast.makeText(context, "Failed to save media", Toast.LENGTH_SHORT).show()
     }
 }

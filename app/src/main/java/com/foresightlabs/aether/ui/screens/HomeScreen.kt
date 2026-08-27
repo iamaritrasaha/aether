@@ -35,29 +35,38 @@ import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.Canvas
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.launch
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.foresightlabs.aether.ui.theme.LocalReducedMotion
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -74,6 +83,8 @@ import com.foresightlabs.aether.domain.presence.ActivePerson
 import com.foresightlabs.aether.ui.components.AetherAtmosphericBackground
 import com.foresightlabs.aether.ui.components.AetherAvatar
 import com.foresightlabs.aether.ui.components.AetherSearchPill
+import com.foresightlabs.aether.domain.chats.ChatAction
+import com.foresightlabs.aether.ui.components.ChatActionSheet
 import com.foresightlabs.aether.ui.components.ChatRow
 import com.foresightlabs.aether.ui.design.AetherAccent
 import com.foresightlabs.aether.ui.design.AetherChip
@@ -90,13 +101,16 @@ import com.foresightlabs.aether.ui.design.PresenceStripTokens
 import com.foresightlabs.aether.ui.design.SheetAnchor
 import com.foresightlabs.aether.ui.design.SheetAnchors
 import com.foresightlabs.aether.ui.design.rememberAetherSheetState
-import com.foresightlabs.aether.ui.design.aetherFrostSource
+import com.foresightlabs.aether.ui.design.aetherReveal
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
+import com.foresightlabs.aether.ui.weather.AetherWeatherHero
+import com.foresightlabs.aether.ui.weather.AetherWeatherVisuals
+import com.foresightlabs.aether.ui.weather.buildWeatherHeroState
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -119,6 +133,7 @@ fun HomeScreen(
     connection: ConnectionStatus,
     isLoading: Boolean,
     onChatClick: (Chat) -> Unit,
+    onChatAction: (Chat, ChatAction) -> Unit = { _, _ -> },
     onNavigateToCalls: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNewMessageClick: () -> Unit,
@@ -135,6 +150,12 @@ fun HomeScreen(
     var heroHeightPx by remember { mutableIntStateOf(0) }
     var heroCoreHeightPx by remember { mutableIntStateOf(0) }
     var requestSearchFocus by remember { mutableStateOf(false) }
+    var showLocationPicker by remember { mutableStateOf(false) }
+    var actionSheetChat by remember { mutableStateOf<Chat?>(null) }
+
+    val themeState = com.foresightlabs.aether.ui.theme.LocalAppThemeState.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     val sheetState = rememberAetherSheetState(SheetAnchor.RESTING)
     val listState = rememberLazyListState()
@@ -195,19 +216,27 @@ fun HomeScreen(
             } else {
                 0f
             }
+            val collapsedLipPx = with(density) { AetherSheetDefaults.CollapsedLipHeight.toPx() }
             SheetAnchors.derive(
                 containerHeightPx = containerHeightPx,
                 heroBottomPx = measuredHeroBottomPx,
                 topInsetPx = topInsetPx,
                 minChatViewportPx = minChatViewportPx,
                 minAtmosphereRevealPx = minAtmospherePx,
-                relaxedExtraPx = relaxedExtraPx
+                relaxedExtraPx = relaxedExtraPx,
+                collapsedLipHeightPx = collapsedLipPx
             )
         }
         LaunchedEffect(anchors) { sheetState.updateAnchors(anchors) }
 
+        val atmosphere = LocalAtmosphere.current
+        val weatherState = remember(atmosphere) {
+            buildWeatherHeroState(atmosphere, atmosphere.palette)
+        }
+        val weatherRevealProgress = sheetState.relaxProgress
+        val expandProgress = sheetState.expandProgress
+
         // The luminous region is sized from the sheet's relaxed anchor so the
-        // atmosphere stays put behind the sheet instead of resizing with it.
         val heroFraction = if (containerHeightPx > 0f && anchors.isResolved) {
             ((anchors.peek + relaxedExtraPx) / containerHeightPx).coerceIn(0.3f, 1f)
         } else {
@@ -217,31 +246,61 @@ fun HomeScreen(
         AetherAtmosphericBackground(
             modifier = Modifier.fillMaxSize(),
             heroFraction = heroFraction,
+            enableAmbientMotion = true,
             frostState = frostState
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
 
-                // --- Layer 2: personal hero -------------------------------------
-                val expandProgress = sheetState.expandProgress
+                // --- Layer 2: dynamic atmospheric weather phenomena -----------
+                AetherWeatherVisuals(
+                    condition = weatherState.condition,
+                    timeBand = weatherState.timeBand,
+                    revealProgress = weatherRevealProgress,
+                    weatherState = weatherState,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // --- Layer 3a: Weather Hero (Ambient Temperature -> Full Hero) -
+                AetherWeatherHero(
+                    weatherState = weatherState,
+                    revealProgress = weatherRevealProgress,
+                    onLocationClick = { showLocationPicker = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aetherReveal(
+                            alpha = 1f - expandProgress * 0.85f,
+                            verticalShiftPx = -expandProgress * 28f
+                        )
+                )
+
+                // --- Layer 3b: personal hero (Greeting & Active Now) ----------
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aetherFrostSource(frostState)
                         .statusBarsPadding()
                         .onSizeChanged { heroHeightPx = it.height }
-                        .graphicsLayer {
-                            // Parallax: the hero drifts slightly as it is covered,
-                            // and fades because something is physically over it.
-                            translationY = -expandProgress * 28f
-                            alpha = 1f - expandProgress * 0.85f
-                        }
+                        // Parallax & fade as the Weather Hero takes the upper stage.
+                        // Layout-level so the greeting's controls and the presence
+                        // avatars — which open chats — cannot be tapped once they
+                        // have moved away or faded out.
+                        .aetherReveal(
+                            alpha = if (weatherRevealProgress > 0f) {
+                                (1f - weatherRevealProgress * 2.8f).coerceIn(0f, 1f)
+                            } else {
+                                1f - expandProgress * 0.85f
+                            },
+                            verticalShiftPx = if (weatherRevealProgress > 0f) {
+                                weatherRevealProgress * 14f
+                            } else {
+                                -expandProgress * 28f
+                            }
+                        )
                 ) {
-                    // The core is measured on its own so the Active Now decision below
-                    // cannot feed back into its own measurement and oscillate.
                     Column(modifier = Modifier.onSizeChanged { heroCoreHeightPx = it.height }) {
                         HomeTopBar(
                             currentUser = currentUser,
                             connection = connection,
+                            hasWeather = weatherState.isAvailable,
                             onNewMessageClick = onNewMessageClick,
                             onNavigateToSettings = onNavigateToSettings
                         )
@@ -264,13 +323,12 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                 }
 
-                // --- Layer 3: foreground conversations sheet ---------------------
+                // --- Layer 4: foreground conversations sheet -----------------
                 AetherSheet(
                     state = sheetState,
                     containerHeightPx = containerHeightPx,
                     label = "Conversations",
                     modifier = Modifier
-                        .aetherFrostSource(frostState)
                         .testTag("conversations_sheet")
                 ) {
                     AetherSearchPill(
@@ -280,8 +338,6 @@ fun HomeScreen(
                         requestFocus = requestSearchFocus,
                         onFocused = {
                             requestSearchFocus = false
-                            // Search is spatially part of Home: it expands the sheet
-                            // rather than navigating to a separate destination.
                             sheetState.animateTo(SheetAnchor.EXPANDED)
                         },
                         modifier = Modifier.padding(
@@ -328,7 +384,11 @@ fun HomeScreen(
                         )
                     ) {
                         items(visibleChats, key = { it.id }) { chat ->
-                            ChatRow(chat = chat, onClick = { onChatClick(chat) })
+                            ChatRow(
+                                chat = chat,
+                                onClick = { onChatClick(chat) },
+                                onLongPress = { actionSheetChat = chat }
+                            )
                             HorizontalDivider(
                                 color = colors.divider,
                                 thickness = 0.5.dp,
@@ -353,40 +413,86 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+        }
 
-                // --- Dock: fixed near the safe bottom, outside the sheet ---------
-                AetherNavPill(
-                    items = listOf(
-                        AetherNavItem(
-                            key = HOME_KEY,
-                            icon = Icons.Default.ChatBubble,
-                            contentDescription = "Chats",
-                            onClick = { sheetState.animateTo(SheetAnchor.RESTING) }
-                        ),
-                        AetherNavItem(
-                            key = "pulse",
-                            icon = Icons.Default.AutoAwesome,
-                            contentDescription = "Pulse",
-                            onClick = onNavigateToPulse
-                        ),
-                        AetherNavItem(
-                            key = "calls",
-                            icon = Icons.Default.Call,
-                            contentDescription = "Calls",
-                            onClick = onNavigateToCalls
-                        ),
-                        AetherNavItem(
-                            key = "settings",
-                            icon = Icons.Default.Settings,
-                            contentDescription = "Settings",
-                            onClick = onNavigateToSettings
-                        )
-                    ),
-                    selectedKey = dockSelectedKey,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .testTag("home_dock"),
-                    frostState = frostState
+        ChatActionSheet(
+            chat = actionSheetChat,
+            onDismiss = { actionSheetChat = null },
+            onAction = { action ->
+                actionSheetChat?.let { onChatAction(it, action) }
+            }
+        )
+
+        // --- Dock: fixed near the safe bottom, overlaying the backdrop scene ---------
+        AetherNavPill(
+            items = listOf(
+                AetherNavItem(
+                    key = HOME_KEY,
+                    icon = Icons.Default.ChatBubble,
+                    contentDescription = "Chats",
+                    onClick = { sheetState.animateTo(SheetAnchor.RESTING) }
+                ),
+                AetherNavItem(
+                    key = "pulse",
+                    icon = Icons.Default.AutoAwesome,
+                    contentDescription = "Pulse",
+                    onClick = onNavigateToPulse
+                ),
+                AetherNavItem(
+                    key = "calls",
+                    icon = Icons.Default.Call,
+                    contentDescription = "Calls",
+                    onClick = onNavigateToCalls
+                ),
+                AetherNavItem(
+                    key = "settings",
+                    icon = Icons.Default.Settings,
+                    contentDescription = "Settings",
+                    onClick = onNavigateToSettings
+                )
+            ),
+            selectedKey = dockSelectedKey,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .testTag("home_dock"),
+            frostState = frostState
+        )
+
+        if (showLocationPicker) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x80000000))
+                    .clickable { showLocationPicker = false },
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                com.foresightlabs.aether.ui.weather.AetherLocationPickerSheet(
+                    currentMode = themeState.weatherLocationMode,
+                    currentManualLocation = themeState.manualWeatherLocation,
+                    onSelectAutomatic = {
+                        themeState.clearManualWeatherLocation()
+                        scope.launch {
+                            themeState.weatherReading = com.foresightlabs.aether.ui.theme.AtmosphereWeatherService.read(
+                                context = context,
+                                locationMode = com.foresightlabs.aether.data.preferences.WeatherLocationMode.AUTOMATIC,
+                                manualLocation = null,
+                                forceRefresh = true
+                            )
+                        }
+                    },
+                    onSelectLocation = { location ->
+                        themeState.setAndPersistManualWeatherLocation(location)
+                        scope.launch {
+                            themeState.weatherReading = com.foresightlabs.aether.ui.theme.AtmosphereWeatherService.read(
+                                context = context,
+                                locationMode = com.foresightlabs.aether.data.preferences.WeatherLocationMode.MANUAL,
+                                manualLocation = location,
+                                forceRefresh = true
+                            )
+                        }
+                    },
+                    onDismiss = { showLocationPicker = false }
                 )
             }
         }
@@ -399,6 +505,7 @@ private const val HOME_KEY = "chats"
 private fun HomeTopBar(
     currentUser: User?,
     connection: ConnectionStatus,
+    hasWeather: Boolean,
     onNewMessageClick: () -> Unit,
     onNavigateToSettings: () -> Unit
 ) {
@@ -412,23 +519,33 @@ private fun HomeTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .border(1.5.dp, Color(0x55FFFFFF), CircleShape)
-                .padding(2.dp)
-                .clickable { onNavigateToSettings() }
-                .testTag("current_user_avatar"),
-            contentAlignment = Alignment.Center
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space12)
         ) {
-            AetherAvatar(
-                initials = currentUser?.avatarInitials ?: "A",
-                gradient = currentUser?.avatarGradient
-                    ?: listOf(AetherAccent.current, AetherAccent.subtle),
-                size = 34.dp,
-                photoPath = currentUser?.photoPath
-            )
+            if (hasWeather) {
+                // Reserves space for the ambient temperature floating at top-left
+                Spacer(modifier = Modifier.width(60.dp))
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .border(1.5.dp, Color(0x55FFFFFF), CircleShape)
+                    .padding(2.dp)
+                    .clickable { onNavigateToSettings() }
+                    .testTag("current_user_avatar"),
+                contentAlignment = Alignment.Center
+            ) {
+                AetherAvatar(
+                    initials = currentUser?.avatarInitials ?: "A",
+                    gradient = currentUser?.avatarGradient
+                        ?: listOf(AetherAccent.current, AetherAccent.subtle),
+                    size = 34.dp,
+                    photoPath = currentUser?.photoPath
+                )
+            }
         }
 
         // Truthful connection state only; nothing is shown when connected.
@@ -610,6 +727,7 @@ private fun PresenceSection(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .width(labelWidth)
+                        .testTag("active_now_person_${person.chat.id}")
                         .clickable { onPersonClick(person) }
                         .clearAndSetSemantics {
                             contentDescription = "${person.name}, $descriptionSuffix"

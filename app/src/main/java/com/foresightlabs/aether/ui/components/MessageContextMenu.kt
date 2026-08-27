@@ -28,8 +28,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -49,24 +54,40 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.foresightlabs.aether.domain.messages.MessageAction
+import com.foresightlabs.aether.domain.messages.MessageActionPolicy
+import com.foresightlabs.aether.domain.messages.MessageCapabilities
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 
+/**
+ * Long-press actions for a message.
+ *
+ * The menu renders whatever [MessageActionPolicy] resolved from Telegram's answer for
+ * this message and nothing else. It has no opinion of its own about who may edit,
+ * pin or delete what — an action visible here is an action the server has already
+ * said will succeed.
+ */
 @Composable
 fun MessageContextMenu(
     message: Message?,
+    capabilities: MessageCapabilities,
     isVisible: Boolean,
     onDismiss: () -> Unit,
     onReactionSelected: (String) -> Unit,
-    onReply: () -> Unit,
-    onCopy: () -> Unit,
-    onForward: () -> Unit,
-    onEdit: () -> Unit,
-    onPin: () -> Unit,
-    onDelete: () -> Unit
+    onAction: (MessageAction) -> Unit,
+    canReact: Boolean = true,
+    allowSelect: Boolean = true
 ) {
     if (message == null || !isVisible) return
+
+    val actions = remember(message, capabilities, allowSelect) {
+        MessageActionPolicy.actionsFor(message, capabilities, allowSelect = allowSelect)
+    }
+    val showReactionTray = remember(message, canReact) {
+        MessageActionPolicy.isReactionTrayAvailable(message, canReact)
+    }
 
     val reactions = listOf("❤️", "🔥", "👍", "😂", "👏", "🚀", "⚡")
 
@@ -99,7 +120,7 @@ fun MessageContextMenu(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // Emoji Reaction Strip
-                Row(
+                if (showReactionTray) Row(
                     modifier = Modifier
                         .clip(AetherEmber.Shapes.Pill)
                         .background(AetherEmber.Colors.Surface)
@@ -134,7 +155,7 @@ fun MessageContextMenu(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                if (showReactionTray) Spacer(modifier = Modifier.height(16.dp))
 
                 // Actions Menu Box (24dp rounded dark surface)
                 Column(
@@ -145,68 +166,33 @@ fun MessageContextMenu(
                         .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.L)
                         .padding(vertical = 6.dp)
                 ) {
-                    ContextMenuActionItem(
-                        icon = Icons.AutoMirrored.Filled.Reply,
-                        title = "Reply",
-                        onClick = {
-                            onReply()
-                            onDismiss()
+                    actions.forEachIndexed { index, action ->
+                        if (action == MessageAction.DELETE_FOR_ME ||
+                            action == MessageAction.DELETE_FOR_EVERYONE
+                        ) {
+                            val isFirstDestructive = actions
+                                .indexOfFirst { it == MessageAction.DELETE_FOR_ME || it == MessageAction.DELETE_FOR_EVERYONE } == index
+                            if (isFirstDestructive && index > 0) {
+                                HorizontalDivider(
+                                    color = AetherEmber.Colors.BorderSubtle,
+                                    thickness = 0.5.dp,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                                )
+                            }
                         }
-                    )
-
-                    ContextMenuActionItem(
-                        icon = Icons.Default.ContentCopy,
-                        title = "Copy Text",
-                        onClick = {
-                            onCopy()
-                            onDismiss()
-                        }
-                    )
-
-                    ContextMenuActionItem(
-                        icon = Icons.AutoMirrored.Filled.Send,
-                        title = "Forward",
-                        onClick = {
-                            onForward()
-                            onDismiss()
-                        }
-                    )
-
-                    if (message.isOutgoing) {
                         ContextMenuActionItem(
-                            icon = Icons.Default.Edit,
-                            title = "Edit Message",
+                            icon = iconFor(action),
+                            title = titleFor(action),
+                            tint = if (action == MessageAction.DELETE_FOR_ME ||
+                                action == MessageAction.DELETE_FOR_EVERYONE
+                            ) DestructiveTint else null,
+                            testTag = "message_action_${action.name.lowercase()}",
                             onClick = {
-                                onEdit()
+                                onAction(action)
                                 onDismiss()
                             }
                         )
                     }
-
-                    ContextMenuActionItem(
-                        icon = Icons.Default.PushPin,
-                        title = if (message.isPinned) "Unpin Message" else "Pin Message",
-                        onClick = {
-                            onPin()
-                            onDismiss()
-                        }
-                    )
-
-                    HorizontalDivider(
-                        color = AetherEmber.Colors.BorderSubtle,
-                        thickness = 0.5.dp,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                    )
-
-                    ContextMenuActionItem(
-                        icon = Icons.Default.Delete,
-                        title = "Delete",
-                        tint = Color(0xFFEF4444),
-                        onClick = {
-                            onDelete()
-                            onDismiss()
-                        }
-                    )
                 }
             }
         }
@@ -218,6 +204,7 @@ private fun ContextMenuActionItem(
     icon: ImageVector,
     title: String,
     tint: Color? = null,
+    testTag: String,
     onClick: () -> Unit
 ) {
     val itemTint = tint ?: Color.White
@@ -225,7 +212,7 @@ private fun ContextMenuActionItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("context_action_${title.lowercase().replace(" ", "_")}")
+            .testTag(testTag)
             .clickable { onClick() }
             .padding(horizontal = 18.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -247,4 +234,36 @@ private fun ContextMenuActionItem(
             color = itemTint
         )
     }
+}
+
+private val DestructiveTint = Color(0xFFEF4444)
+
+private fun titleFor(action: MessageAction): String = when (action) {
+    MessageAction.REPLY -> "Reply"
+    MessageAction.QUOTE_REPLY -> "Reply with quote"
+    MessageAction.COPY -> "Copy text"
+    MessageAction.FORWARD -> "Forward"
+    MessageAction.EDIT -> "Edit message"
+    MessageAction.PIN -> "Pin message"
+    MessageAction.UNPIN -> "Unpin message"
+    MessageAction.SAVE -> "Save to downloads"
+    MessageAction.COPY_LINK -> "Copy link"
+    MessageAction.INFO -> "Message info"
+    MessageAction.SELECT -> "Select"
+    MessageAction.DELETE_FOR_ME -> "Delete for me"
+    MessageAction.DELETE_FOR_EVERYONE -> "Delete for everyone"
+}
+
+private fun iconFor(action: MessageAction): ImageVector = when (action) {
+    MessageAction.REPLY -> Icons.AutoMirrored.Filled.Reply
+    MessageAction.QUOTE_REPLY -> Icons.Default.FormatQuote
+    MessageAction.COPY -> Icons.Default.ContentCopy
+    MessageAction.FORWARD -> Icons.AutoMirrored.Filled.Send
+    MessageAction.EDIT -> Icons.Default.Edit
+    MessageAction.PIN, MessageAction.UNPIN -> Icons.Default.PushPin
+    MessageAction.SAVE -> Icons.Default.Download
+    MessageAction.COPY_LINK -> Icons.Default.Link
+    MessageAction.INFO -> Icons.Default.Info
+    MessageAction.SELECT -> Icons.Default.CheckCircle
+    MessageAction.DELETE_FOR_ME, MessageAction.DELETE_FOR_EVERYONE -> Icons.Default.Delete
 }

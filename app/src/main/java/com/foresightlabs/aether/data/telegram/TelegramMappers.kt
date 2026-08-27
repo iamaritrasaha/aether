@@ -5,6 +5,13 @@ import com.foresightlabs.aether.domain.model.AuthUiState
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.ChatType
 import com.foresightlabs.aether.domain.model.ConnectionStatus
+import com.foresightlabs.aether.domain.model.MediaItem
+import com.foresightlabs.aether.domain.model.Reaction
+import com.foresightlabs.aether.domain.model.PollChoice
+import com.foresightlabs.aether.domain.model.PollKind
+import com.foresightlabs.aether.domain.model.PollPresentation
+import com.foresightlabs.aether.domain.text.AetherEntity
+import com.foresightlabs.aether.domain.text.AetherText
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageStatus
 import com.foresightlabs.aether.domain.model.MessageType
@@ -81,6 +88,26 @@ object TelegramMappers {
         }
     }
 
+    /**
+     * A conversation row standing for a contact with no chat open yet.
+     *
+     * Everything shown comes from the user record; nothing about a conversation is
+     * invented, because there is not one — opening the row is what creates it.
+     */
+    fun chatForUser(user: User): Chat = Chat(
+        id = user.id,
+        title = user.name,
+        type = ChatType.DIRECT,
+        lastMessageText = "",
+        lastMessageTime = "",
+        avatarInitials = user.avatarInitials,
+        avatarGradient = user.avatarGradient,
+        subtitle = user.lastSeenText,
+        directUser = user,
+        photoPath = user.photoPath,
+        blockableUserId = user.id.toLongOrNull()
+    )
+
     fun mapUser(user: TdApi.User, photoPath: String? = null): User {
         val name = listOf(user.firstName, user.lastName)
             .filter { !it.isNullOrBlank() }
@@ -126,7 +153,8 @@ object TelegramMappers {
         users: Map<Long, TdApi.User>,
         photoPath: String? = null,
         typingText: String? = null,
-        hasUnseenPulse: Boolean = false
+        hasUnseenPulse: Boolean = false,
+        isForum: Boolean = false
     ): Chat {
         val position = ChatOrdering.mainPosition(chat.positions)
         val type = mapChatType(chat.type, myUserId)
@@ -167,7 +195,16 @@ object TelegramMappers {
             photoPath = photoPath ?: localPath(chat.photo?.small) ?: mappedUser?.photoPath,
             order = position?.order ?: 0L,
             canSendText = chat.permissions?.canSendBasicMessages != false,
-            hasUnseenPulse = hasUnseenPulse
+            hasUnseenPulse = hasUnseenPulse,
+            isArchived = ChatOrdering.isArchived(chat.positions),
+            isMarkedAsUnread = chat.isMarkedAsUnread,
+            canLeave = type == ChatType.GROUP || type == ChatType.CHANNEL,
+            canRevokeHistory = chat.canBeDeletedForAllUsers,
+            canDeleteOnlyForSelf = chat.canBeDeletedOnlyForSelf,
+            blockableUserId = (chat.type as? TdApi.ChatTypePrivate)?.userId,
+            isBlocked = chat.blockList is TdApi.BlockListMain,
+            lastMessageId = last?.id ?: 0L,
+            isForum = isForum
         )
     }
 
@@ -215,10 +252,17 @@ object TelegramMappers {
         chats: Map<Long, TdApi.Chat>,
         myUserId: Long,
         lastReadOutboxMessageId: Long,
-        reply: Message? = null
+        reply: Message? = null,
+        resolvePath: (TdApi.File?) -> String? = { localPath(it) }
     ): Message {
         val senderName = senderName(message.senderId, users, chats, message.isOutgoing)
-        val (text, type) = mapContent(message.content)
+        val presentation = mapPresentation(message.content, message.id, resolvePath)
+        val type = presentation.type
+        val text = if (type == MessageType.SERVICE) {
+            ServiceMessages.describe(message.content, senderName).trim()
+        } else {
+            presentation.text
+        }
         return Message(
             id = message.id.toString(),
             chatId = message.chatId.toString(),
@@ -233,10 +277,461 @@ object TelegramMappers {
             type = type,
             replyToMessage = reply,
             forwardedFrom = forwardOrigin(message.forwardInfo, users, chats),
+            mediaItems = presentation.mediaItems,
+            fileName = presentation.fileName,
+            fileSize = presentation.fileSize,
+            fileExtension = presentation.fileExtension,
+            voiceDurationSec = presentation.voiceDurationSec,
+            voiceWaveform = presentation.voiceWaveform,
+            formatted = presentation.formatted,
+            poll = presentation.poll,
+            mediaAlbumId = message.mediaAlbumId,
+            reactions = mapReactions(message.interactionInfo),
             isPinned = message.isPinned,
             canRetry = message.sendingState is TdApi.MessageSendingStateFailed
         )
     }
+
+
+    /**
+     * How a message's content should be presented, resolved from the real
+     * [TdApi.MessageContent] rather than from a text label.
+     *
+     * [mediaPath] is null until the file is on disk. A media bubble with no path
+     * shows its own loading state; it never renders a stand-in for content that has
+     * not arrived.
+     */
+    data class MediaPresentation(
+        val text: String,
+        val type: MessageType,
+        /** Present only for poll messages. */
+        val poll: PollPresentation? = null,
+        /** The same text with the spans Telegram attached to it. */
+        val formatted: AetherText = AetherText(text),
+        val mediaItems: List<MediaItem> = emptyList(),
+        val fileName: String? = null,
+        val fileSize: String? = null,
+        val fileExtension: String? = null,
+        val voiceDurationSec: Int = 0,
+        val voiceWaveform: List<Float> = emptyList()
+    )
+
+    /**
+     * Resolves a message's presentation, including the local path of its media.
+     *
+     * [resolvePath] is supplied by the client, which owns the download cache; this
+     * keeps the mapper free of I/O while still producing a real path when there is
+     * one.
+     */
+    fun mapPresentation(
+        content: TdApi.MessageContent?,
+        messageId: Long,
+        resolvePath: (TdApi.File?) -> String?
+    ): MediaPresentation {
+        fun mediaItem(file: TdApi.File?, caption: String, width: Int, height: Int): List<MediaItem> {
+            val path = resolvePath(file) ?: return emptyList()
+            return listOf(
+                MediaItem(
+                    id = "$messageId:${file?.id ?: 0}",
+                    url = path,
+                    caption = caption,
+                    width = width.coerceAtLeast(1),
+                    height = height.coerceAtLeast(1)
+                )
+            )
+        }
+
+        if (ServiceMessages.isServiceEvent(content)) {
+            // Described with the sender in mapMessage, which knows who acted.
+            return MediaPresentation(
+                text = ServiceMessages.describe(content, ""),
+                type = MessageType.SERVICE
+            )
+        }
+        return when (content) {
+            is TdApi.MessageText -> {
+                val formatted = mapFormattedText(content.text)
+                MediaPresentation(
+                    text = formatted.text,
+                    type = MessageType.TEXT,
+                    formatted = formatted
+                )
+            }
+            is TdApi.MessagePhoto -> {
+                val captionText = mapFormattedText(content.caption)
+                val caption = captionText.text
+                // Largest size TDLib offers; anything smaller would be shown scaled up.
+                val best = content.photo?.sizes?.maxByOrNull { it.width * it.height }
+                MediaPresentation(
+                    text = caption,
+                    type = MessageType.IMAGE,
+                    formatted = captionText,
+                    mediaItems = mediaItem(best?.photo, caption, best?.width ?: 0, best?.height ?: 0)
+                )
+            }
+            is TdApi.MessageVideo -> {
+                val captionText = mapFormattedText(content.caption)
+                val caption = captionText.text
+                val video = content.video
+                MediaPresentation(
+                    text = caption,
+                    type = MessageType.IMAGE,
+                    formatted = captionText,
+                    mediaItems = mediaItem(
+                        video?.thumbnail?.file ?: video?.video,
+                        caption,
+                        video?.width ?: 0,
+                        video?.height ?: 0
+                    )
+                )
+            }
+            is TdApi.MessageDocument -> {
+                val document = content.document
+                val name = document?.fileName?.takeIf { it.isNotBlank() } ?: "Document"
+                MediaPresentation(
+                    text = content.caption?.text.orEmpty(),
+                    type = MessageType.FILE,
+                    fileName = name,
+                    fileSize = formatFileSize(document?.document?.size ?: 0L),
+                    fileExtension = name.substringAfterLast('.', "").uppercase().ifBlank { null }
+                )
+            }
+            is TdApi.MessageAudio -> {
+                val audio = content.audio
+                val name = listOfNotNull(
+                    audio?.performer?.takeIf { it.isNotBlank() },
+                    audio?.title?.takeIf { it.isNotBlank() }
+                ).joinToString(" — ").ifBlank { audio?.fileName ?: "Audio" }
+                MediaPresentation(
+                    text = content.caption?.text.orEmpty(),
+                    type = MessageType.FILE,
+                    fileName = name,
+                    fileSize = formatFileSize(audio?.audio?.size ?: 0L),
+                    fileExtension = "AUDIO"
+                )
+            }
+            is TdApi.MessageVoiceNote -> {
+                val voice = content.voiceNote
+                MediaPresentation(
+                    text = content.caption?.text.orEmpty(),
+                    type = MessageType.VOICE,
+                    voiceDurationSec = voice?.duration ?: 0,
+                    voiceWaveform = decodeWaveform(voice?.waveform)
+                )
+            }
+            is TdApi.MessageContact -> {
+                val contact = content.contact
+                val name = listOfNotNull(
+                    contact?.firstName?.takeIf { it.isNotBlank() },
+                    contact?.lastName?.takeIf { it.isNotBlank() }
+                ).joinToString(" ").ifBlank { "Contact" }
+                MediaPresentation(
+                    text = name,
+                    type = MessageType.CONTACT,
+                    fileName = name,
+                    fileSize = contact?.phoneNumber?.takeIf { it.isNotBlank() }
+                )
+            }
+            is TdApi.MessageLocation -> {
+                val location = content.location
+                MediaPresentation(
+                    text = "Location",
+                    type = MessageType.LOCATION,
+                    fileName = location?.let { formatCoordinates(it.latitude, it.longitude) }
+                )
+            }
+            is TdApi.MessageVenue -> {
+                val venue = content.venue
+                MediaPresentation(
+                    text = venue?.title.orEmpty().ifBlank { "Venue" },
+                    type = MessageType.LOCATION,
+                    fileName = venue?.address.orEmpty().ifBlank {
+                        venue?.location?.let { formatCoordinates(it.latitude, it.longitude) }
+                    }
+                )
+            }
+            is TdApi.MessageAnimatedEmoji -> {
+                // A large animated emoji. Aether cannot play the sticker behind it,
+                // but the emoji itself is the message and reads correctly on its own.
+                val emoji = content.emoji.orEmpty()
+                MediaPresentation(
+                    text = emoji,
+                    type = MessageType.TEXT,
+                    formatted = AetherText(emoji)
+                )
+            }
+            is TdApi.MessageChecklist -> {
+                val list = content.list
+                val title = list?.title?.text.orEmpty().ifBlank { "Checklist" }
+                val done = list?.tasks?.count { it?.completedBy != null } ?: 0
+                val total = list?.tasks?.size ?: 0
+                MediaPresentation(
+                    text = title,
+                    type = MessageType.FILE,
+                    fileName = title,
+                    fileSize = "$done of $total done"
+                )
+            }
+            is TdApi.MessageStory -> MediaPresentation(
+                text = if (content.viaMention) "Mentioned you in a story" else "Shared a story",
+                type = MessageType.UNSUPPORTED
+            )
+            is TdApi.MessagePaidMedia -> MediaPresentation(
+                // Aether does not purchase or unlock paid media; saying what it is
+                // beats presenting an empty bubble.
+                text = content.caption?.text.orEmpty().ifBlank { "Paid media" },
+                type = MessageType.UNSUPPORTED
+            )
+            is TdApi.MessageGiveaway -> MediaPresentation(
+                text = "Giveaway · ${content.winnerCount} winners",
+                type = MessageType.UNSUPPORTED
+            )
+            is TdApi.MessagePoll -> {
+                val poll = mapPoll(content.poll)
+                MediaPresentation(
+                    text = poll?.question.orEmpty(),
+                    type = if (poll == null) MessageType.UNSUPPORTED else MessageType.POLL,
+                    poll = poll
+                )
+            }
+            is TdApi.MessageSticker -> {
+                val sticker = content.sticker
+                // Only a static WebP sticker can actually be drawn with the image
+                // pipeline Aether ships. A .tgs or .webm sticker is presented as its
+                // emoji rather than as a blank bubble claiming to be an image.
+                val isStatic = sticker?.format is TdApi.StickerFormatWebp
+                MediaPresentation(
+                    text = sticker?.emoji.orEmpty(),
+                    type = MessageType.STICKER,
+                    mediaItems = if (isStatic) {
+                        mediaItem(
+                            sticker?.sticker,
+                            sticker?.emoji.orEmpty(),
+                            sticker?.width ?: 0,
+                            sticker?.height ?: 0
+                        )
+                    } else {
+                        emptyList()
+                    },
+                    fileExtension = when (sticker?.format) {
+                        is TdApi.StickerFormatTgs -> "TGS"
+                        is TdApi.StickerFormatWebm -> "WEBM"
+                        else -> "WEBP"
+                    }
+                )
+            }
+            is TdApi.MessageAnimation -> {
+                val animation = content.animation
+                val captionText = mapFormattedText(content.caption)
+                // The still thumbnail is what Aether can render; the animation file
+                // itself is not played, so nothing claims to be playing.
+                MediaPresentation(
+                    text = captionText.text,
+                    type = MessageType.ANIMATION,
+                    formatted = captionText,
+                    mediaItems = mediaItem(
+                        animation?.thumbnail?.file ?: animation?.animation,
+                        captionText.text,
+                        animation?.width ?: 0,
+                        animation?.height ?: 0
+                    ),
+                    fileName = animation?.fileName?.takeIf { it.isNotBlank() } ?: "GIF",
+                    voiceDurationSec = animation?.duration ?: 0
+                )
+            }
+            else -> {
+                val (text, type) = mapContent(content)
+                MediaPresentation(text = text, type = type, formatted = AetherText(text))
+            }
+        }
+    }
+
+    /**
+     * Maps the reactions Telegram holds against a message.
+     *
+     * Counts and the "you reacted" flag are the server's. Aether previously wrote
+     * reactions without ever reading them back, so a reaction it sent was invisible
+     * until the conversation was reloaded — and reactions from anyone else never
+     * appeared at all.
+     *
+     * Custom-emoji reactions are kept with an empty emoji rather than dropped: the
+     * count is real and belongs in the total, even though Aether cannot yet draw the
+     * glyph.
+     */
+    fun mapReactions(info: TdApi.MessageInteractionInfo?): List<Reaction> {
+        val reactions = info?.reactions?.reactions ?: return emptyList()
+        return reactions.mapNotNull { reaction ->
+            if (reaction == null) return@mapNotNull null
+            val emoji = when (val type = reaction.type) {
+                is TdApi.ReactionTypeEmoji -> type.emoji.orEmpty()
+                // A premium custom emoji Aether cannot render yet.
+                is TdApi.ReactionTypeCustomEmoji -> ""
+                else -> ""
+            }
+            Reaction(
+                emoji = emoji,
+                count = reaction.totalCount,
+                userReacted = reaction.isChosen
+            )
+        }
+    }
+
+    /**
+     * Maps a TDLib poll, including its per-option state.
+     *
+     * The correct answers of a quiz are only known once Telegram sends them — that
+     * is, after the account has answered — so [PollChoice.isCorrect] is false until
+     * then rather than being guessed.
+     */
+    fun mapPoll(poll: TdApi.Poll?): PollPresentation? {
+        if (poll == null) return null
+        val quiz = poll.type as? TdApi.PollTypeQuiz
+        val correct = quiz?.correctOptionIds?.toSet() ?: emptySet()
+        val options = poll.options ?: emptyArray()
+        return PollPresentation(
+            id = poll.id,
+            question = poll.question?.text.orEmpty(),
+            choices = options.mapIndexed { index, option ->
+                PollChoice(
+                    index = index,
+                    text = option?.text?.text.orEmpty(),
+                    voterCount = option?.voterCount ?: 0,
+                    votePercentage = option?.votePercentage ?: 0,
+                    isChosen = option?.isChosen == true,
+                    isBeingChosen = option?.isBeingChosen == true,
+                    isCorrect = index in correct
+                )
+            },
+            totalVoterCount = poll.totalVoterCount,
+            kind = if (quiz != null) PollKind.QUIZ else PollKind.REGULAR,
+            isAnonymous = poll.isAnonymous,
+            allowsMultipleAnswers = poll.allowsMultipleAnswers,
+            allowsRevoting = poll.allowsRevoting,
+            isClosed = poll.isClosed,
+            explanation = quiz?.explanation?.text?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    /**
+     * Unpacks TDLib's voice-note waveform.
+     *
+     * Telegram stores it as 5-bit samples packed end to end, most significant bit
+     * first. Anything else drawn in a voice bubble would be decoration, not audio,
+     * so an absent waveform yields an empty list rather than invented amplitudes.
+     */
+    fun decodeWaveform(packed: ByteArray?): List<Float> {
+        if (packed == null || packed.isEmpty()) return emptyList()
+        val bitCount = packed.size * 8
+        val sampleCount = bitCount / 5
+        val samples = ArrayList<Float>(sampleCount)
+        for (index in 0 until sampleCount) {
+            val bitOffset = index * 5
+            var value = 0
+            for (bit in 0 until 5) {
+                val absolute = bitOffset + bit
+                val byte = packed[absolute / 8].toInt() and 0xFF
+                val bitValue = (byte shr (7 - (absolute % 8))) and 1
+                value = (value shl 1) or bitValue
+            }
+            samples += value / 31f
+        }
+        return samples
+    }
+
+    /** Coordinates at roughly street precision, which is all a static point needs. */
+    fun formatCoordinates(latitude: Double, longitude: Double): String =
+        String.format(java.util.Locale.US, "%.5f, %.5f", latitude, longitude)
+
+    private fun formatFileSize(bytes: Long): String? {
+        if (bytes <= 0L) return null
+        val units = listOf("B", "KB", "MB", "GB")
+        var size = bytes.toDouble()
+        var unit = 0
+        while (size >= 1024 && unit < units.lastIndex) {
+            size /= 1024
+            unit++
+        }
+        return if (unit == 0) "$bytes B" else String.format(java.util.Locale.US, "%.1f %s", size, units[unit])
+    }
+
+
+    /**
+     * Maps a TDLib formatted text into Aether's own entity model.
+     *
+     * Entity types Aether has no representation for are dropped rather than
+     * approximated: an unmapped span renders as ordinary text, which is correct,
+     * whereas guessing a style would misrepresent what the sender wrote.
+     */
+    fun mapFormattedText(formatted: TdApi.FormattedText?): AetherText {
+        val text = formatted?.text.orEmpty()
+        val raw = formatted?.entities ?: return AetherText(text)
+        val entities = raw.mapNotNull { entity -> mapEntity(entity) }
+        return AetherText(text = text, entities = entities)
+    }
+
+    private fun mapEntity(entity: TdApi.TextEntity?): AetherEntity? {
+        if (entity == null) return null
+        val offset = entity.offset
+        val length = entity.length
+        if (length <= 0) return null
+        return when (val type = entity.type) {
+            is TdApi.TextEntityTypeBold -> AetherEntity.Bold(offset, length)
+            is TdApi.TextEntityTypeItalic -> AetherEntity.Italic(offset, length)
+            is TdApi.TextEntityTypeUnderline -> AetherEntity.Underline(offset, length)
+            is TdApi.TextEntityTypeStrikethrough -> AetherEntity.Strikethrough(offset, length)
+            is TdApi.TextEntityTypeSpoiler -> AetherEntity.Spoiler(offset, length)
+            is TdApi.TextEntityTypeCode -> AetherEntity.Code(offset, length)
+            is TdApi.TextEntityTypePre -> AetherEntity.Pre(offset, length)
+            is TdApi.TextEntityTypePreCode -> AetherEntity.Pre(offset, length, type.language)
+            is TdApi.TextEntityTypeBlockQuote -> AetherEntity.BlockQuote(offset, length)
+            is TdApi.TextEntityTypeExpandableBlockQuote ->
+                AetherEntity.BlockQuote(offset, length, isExpandable = true)
+            is TdApi.TextEntityTypeUrl -> AetherEntity.Url(offset, length)
+            is TdApi.TextEntityTypeTextUrl -> AetherEntity.TextUrl(offset, length, type.url.orEmpty())
+            is TdApi.TextEntityTypeMention -> AetherEntity.Mention(offset, length)
+            is TdApi.TextEntityTypeMentionName -> AetherEntity.MentionName(offset, length, type.userId)
+            is TdApi.TextEntityTypeHashtag -> AetherEntity.Hashtag(offset, length)
+            is TdApi.TextEntityTypeCashtag -> AetherEntity.Cashtag(offset, length)
+            is TdApi.TextEntityTypeEmailAddress -> AetherEntity.Email(offset, length)
+            is TdApi.TextEntityTypePhoneNumber -> AetherEntity.Phone(offset, length)
+            is TdApi.TextEntityTypeBankCardNumber -> AetherEntity.BankCard(offset, length)
+            is TdApi.TextEntityTypeBotCommand -> AetherEntity.BotCommand(offset, length)
+            is TdApi.TextEntityTypeCustomEmoji ->
+                AetherEntity.CustomEmoji(offset, length, type.customEmojiId)
+            is TdApi.TextEntityTypeMediaTimestamp ->
+                AetherEntity.MediaTimestamp(offset, length, type.mediaTimestamp)
+            // DateTime carries no action Aether performs, so it renders as plain text.
+            else -> null
+        }
+    }
+
+    /** Converts Aether's entities back into TDLib's, for sending and editing. */
+    fun toTdEntities(text: AetherText): Array<TdApi.TextEntity> =
+        text.entities.mapNotNull { entity ->
+            val type: TdApi.TextEntityType = when (entity) {
+                is AetherEntity.Bold -> TdApi.TextEntityTypeBold()
+                is AetherEntity.Italic -> TdApi.TextEntityTypeItalic()
+                is AetherEntity.Underline -> TdApi.TextEntityTypeUnderline()
+                is AetherEntity.Strikethrough -> TdApi.TextEntityTypeStrikethrough()
+                is AetherEntity.Spoiler -> TdApi.TextEntityTypeSpoiler()
+                is AetherEntity.Code -> TdApi.TextEntityTypeCode()
+                is AetherEntity.Pre -> entity.language
+                    ?.let { TdApi.TextEntityTypePreCode(it) }
+                    ?: TdApi.TextEntityTypePre()
+                is AetherEntity.BlockQuote -> if (entity.isExpandable) {
+                    TdApi.TextEntityTypeExpandableBlockQuote()
+                } else {
+                    TdApi.TextEntityTypeBlockQuote()
+                }
+                is AetherEntity.TextUrl -> TdApi.TextEntityTypeTextUrl(entity.url)
+                is AetherEntity.CustomEmoji -> TdApi.TextEntityTypeCustomEmoji(entity.customEmojiId)
+                is AetherEntity.MentionName -> TdApi.TextEntityTypeMentionName(entity.userId)
+                // The rest are recognised by the server from the text itself; sending
+                // them back would be asserting a classification Aether did not make.
+                else -> return@mapNotNull null
+            }
+            TdApi.TextEntity(entity.offset, entity.length, type)
+        }.toTypedArray()
 
     fun mapMessageStatus(message: TdApi.Message, lastReadOutboxMessageId: Long): MessageStatus {
         return when (message.sendingState) {
@@ -268,7 +763,7 @@ object TelegramMappers {
         return prefix + text
     }
 
-    fun mapContent(content: TdApi.MessageContent?): Pair<String, MessageType> {
+    fun mapContent(content: TdApi.MessageContent?, isOutgoing: Boolean = false): Pair<String, MessageType> {
         return when (content) {
             is TdApi.MessageText -> content.text?.text.orEmpty() to MessageType.TEXT
             is TdApi.MessagePhoto -> (content.caption?.text?.ifBlank { "Photo" } ?: "Photo") to MessageType.UNSUPPORTED
@@ -280,20 +775,23 @@ object TelegramMappers {
             is TdApi.MessageSticker -> (content.sticker?.emoji?.let { "Sticker $it" } ?: "Sticker") to MessageType.UNSUPPORTED
             is TdApi.MessageAnimation -> "GIF" to MessageType.UNSUPPORTED
             is TdApi.MessagePoll -> (content.poll?.question?.text ?: "Poll") to MessageType.UNSUPPORTED
-            is TdApi.MessageCall -> "Call" to MessageType.UNSUPPORTED
+            is TdApi.MessageCall -> TelegramCallMessageMapper.formatCallMessagePresentation(content, isOutgoing) to MessageType.CALL
             is TdApi.MessageLocation -> "Location" to MessageType.UNSUPPORTED
             is TdApi.MessageContact -> "Contact" to MessageType.UNSUPPORTED
             is TdApi.MessageVenue -> "Venue" to MessageType.UNSUPPORTED
             is TdApi.MessageDice -> (content.emoji ?: "Dice") to MessageType.UNSUPPORTED
             null -> "" to MessageType.UNSUPPORTED
-            else -> {
-                val label = content.javaClass.simpleName
-                    .removePrefix("Message")
-                    .replace(Regex("([a-z])([A-Z])"), "$1 $2")
-                label.ifBlank { "Unsupported message" } to MessageType.UNSUPPORTED
+            else -> if (ServiceMessages.isServiceEvent(content)) {
+                ServiceMessages.describe(content, "").trim() to MessageType.SERVICE
+            } else {
+                // Genuinely unknown, non-service content. Named from its own type so
+                // the preview says what it is instead of pretending it is text.
+                ServiceMessages.fallbackDescription(content) to MessageType.UNSUPPORTED
             }
         }
     }
+
+
 
     fun codeLength(type: TdApi.AuthenticationCodeType?): Int? {
         return when (type) {
@@ -357,7 +855,7 @@ object TelegramMappers {
         }
     }
 
-    private fun draftText(draft: TdApi.DraftMessage?): String? {
+    fun draftText(draft: TdApi.DraftMessage?): String? {
         val content = draft?.inputMessageText as? TdApi.InputMessageText ?: return null
         return content.text?.text?.takeIf { it.isNotBlank() }
     }

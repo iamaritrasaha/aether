@@ -104,14 +104,19 @@ data class SheetAnchors(
             topInsetPx: Float,
             minChatViewportPx: Float,
             minAtmosphereRevealPx: Float,
-            relaxedExtraPx: Float
+            relaxedExtraPx: Float,
+            collapsedLipHeightPx: Float = 0f
         ): SheetAnchors {
             if (containerHeightPx <= 0f) return Unresolved
-            // The sheet may never collapse past a usable conversation viewport.
+            // The sheet may never collapse past a usable conversation viewport for resting/expanded.
             val lowestOffset = (containerHeightPx - minChatViewportPx).coerceAtLeast(0f)
             val expanded = (topInsetPx + minAtmosphereRevealPx).coerceIn(0f, lowestOffset)
             val resting = heroBottomPx.coerceIn(expanded, lowestOffset)
-            val peek = (heroBottomPx + relaxedExtraPx).coerceIn(resting, lowestOffset)
+            val peek = if (collapsedLipHeightPx > 0f) {
+                (containerHeightPx - collapsedLipHeightPx).coerceAtLeast(resting)
+            } else {
+                (heroBottomPx + relaxedExtraPx).coerceIn(resting, lowestOffset)
+            }
             return SheetAnchors(expanded = expanded, resting = resting, peek = peek)
         }
     }
@@ -306,6 +311,7 @@ object AetherSheetDefaults {
     val MinChatViewport: Dp = 232.dp
     val MinAtmosphereReveal: Dp = 76.dp
     val RelaxedExtraAtmosphere: Dp = 84.dp
+    val CollapsedLipHeight: Dp = 120.dp
     val HandleWidth: Dp = 36.dp
     val HandleHeight: Dp = 4.dp
 }

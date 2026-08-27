@@ -8,6 +8,28 @@ data class ChatListPosition(
 )
 
 object ChatOrdering {
+    /**
+     * The chat's position within a specific Telegram folder, if it is in one.
+     *
+     * Folder membership is an *additional* [TdApi.ChatPosition], not a replacement
+     * for the main one, so a chat in a folder still appears in the main list — which
+     * is why omitting folder support never hid a conversation.
+     */
+    fun folderPosition(
+        positions: Array<TdApi.ChatPosition>?,
+        folderId: Int
+    ): ChatListPosition? {
+        val match = positions?.firstOrNull { position ->
+            (position.list as? TdApi.ChatListFolder)?.chatFolderId == folderId &&
+                position.order != 0L
+        } ?: return null
+        return ChatListPosition(order = match.order, isPinned = match.isPinned)
+    }
+
+    /** Whether Telegram currently holds this chat in the archive list. */
+    fun isArchived(positions: Array<TdApi.ChatPosition>?): Boolean =
+        positions?.any { it.list is TdApi.ChatListArchive && it.order != 0L } == true
+
     fun mainPosition(positions: Array<TdApi.ChatPosition>?): ChatListPosition? {
         if (positions == null) return null
         var best: TdApi.ChatPosition? = null

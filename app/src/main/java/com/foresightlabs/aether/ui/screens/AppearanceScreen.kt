@@ -69,7 +69,6 @@ import com.foresightlabs.aether.ui.design.AetherBackButton
 import com.foresightlabs.aether.ui.design.AetherFloatingHeader
 import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
 import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFraction
-import com.foresightlabs.aether.ui.design.aetherFrostSource
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AccentColorChoice
 import com.foresightlabs.aether.ui.theme.AetherEmber
@@ -86,6 +85,10 @@ import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
 import com.foresightlabs.aether.ui.theme.WeatherCondition
 import kotlinx.coroutines.launch
 
+import com.foresightlabs.aether.data.preferences.ManualWeatherLocation
+import com.foresightlabs.aether.data.preferences.WeatherLocationMode
+import com.foresightlabs.aether.ui.weather.AetherLocationPickerSheet
+
 @Composable
 fun AppearanceScreen(
     onBack: () -> Unit,
@@ -99,12 +102,18 @@ fun AppearanceScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var isFetchingWeather by remember { mutableStateOf(false) }
+    var showLocationPicker by remember { mutableStateOf(false) }
 
     fun refreshWeather() {
         scope.launch {
             isFetchingWeather = true
             themeState.weatherOverride = null
-            themeState.weatherReading = AtmosphereWeatherService.read(context, forceRefresh = true)
+            themeState.weatherReading = AtmosphereWeatherService.read(
+                context = context,
+                locationMode = themeState.weatherLocationMode,
+                manualLocation = themeState.manualWeatherLocation,
+                forceRefresh = true
+            )
             isFetchingWeather = false
         }
     }
@@ -120,14 +129,14 @@ fun AppearanceScreen(
         }
     }
 
-    AetherAtmosphericBackground(
-        modifier = modifier.fillMaxSize(),
-        frostState = frostState,
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize()) {
+        AetherAtmosphericBackground(
+            modifier = Modifier.fillMaxSize(),
+            frostState = frostState
+        ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize().aetherFrostSource(frostState),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = aetherFloatingHeaderContentTopPadding())
             ) {
                 // Live Chat Bubble Preview Container
@@ -247,7 +256,7 @@ fun AppearanceScreen(
                                     .border(1.dp, if (isSelected) Color.Transparent else Color(0x28FFFFFF), AetherEmber.Shapes.Pill)
                                     .clickable {
                                         themeState.setAndPersistAtmosphereMode(mode)
-                                        if (mode == AtmosphereMode.TIME_AND_WEATHER) {
+                                        if (mode == AtmosphereMode.TIME_AND_WEATHER && themeState.weatherLocationMode == WeatherLocationMode.AUTOMATIC) {
                                             locationPermissionLauncher.launch(
                                                 arrayOf(
                                                     Manifest.permission.ACCESS_COARSE_LOCATION
@@ -282,7 +291,7 @@ fun AppearanceScreen(
                     )
                 }
 
-                // Automatic weather status. States what Aether actually knows.
+                // Automatic / Manual weather status & location selector
                 if (themeState.atmosphereMode == AtmosphereMode.TIME_AND_WEATHER) {
                     item {
                         Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space16))
@@ -351,7 +360,8 @@ fun AppearanceScreen(
                                     .clip(CircleShape)
                                     .background(Color(0x25FFFFFF))
                                     .clickable(enabled = !isFetchingWeather) {
-                                        if (AtmosphereWeatherService.hasCoarseLocationPermission(context)) {
+                                        if (themeState.weatherLocationMode == WeatherLocationMode.MANUAL ||
+                                            AtmosphereWeatherService.hasCoarseLocationPermission(context)) {
                                             refreshWeather()
                                         } else {
                                             locationPermissionLauncher.launch(
@@ -376,6 +386,63 @@ fun AppearanceScreen(
                                         modifier = Modifier.size(17.dp)
                                     )
                                 }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space12))
+
+                        // Weather Location Selector Card
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = AetherEmber.Spacing.Space16)
+                                .clip(AetherEmber.Shapes.M)
+                                .background(Color(0x35000000))
+                                .border(1.dp, Color(0x28FFFFFF), AetherEmber.Shapes.M)
+                                .clickable { showLocationPicker = true }
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                                .testTag("weather_location_card"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "LOCATION",
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.8.sp,
+                                    color = AetherEmber.Colors.AtmosphereTextSecondary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                val locTitle = if (themeState.weatherLocationMode == WeatherLocationMode.MANUAL &&
+                                    themeState.manualWeatherLocation != null) {
+                                    themeState.manualWeatherLocation?.displayLabel ?: "Selected location"
+                                } else {
+                                    "Automatic (approximate location)"
+                                }
+                                Text(
+                                    text = locTitle,
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(AetherEmber.Shapes.Pill)
+                                    .background(Color(0x20FFFFFF))
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = "Change",
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
                             }
                         }
                     }
@@ -437,7 +504,7 @@ fun AppearanceScreen(
                             .padding(horizontal = AetherEmber.Spacing.Space16),
                         horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
                     ) {
-                        WeatherCondition.entries.forEach { weather ->
+                        WeatherCondition.entries.filter { it != WeatherCondition.UNKNOWN }.forEach { weather ->
                             val isSelected = themeState.weatherOverride == weather
                             val bg = if (isSelected) atmosphere.accent.copy(alpha = 0.28f) else Color(0x35000000)
                             val borderCol = if (isSelected) atmosphere.accent else Color(0x28FFFFFF)
@@ -561,7 +628,7 @@ fun AppearanceScreen(
                 item {
                     Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                     Text(
-                        text = "ACCENT SPECTRUM",
+                        text = "ACCENT PALETTE",
                         fontFamily = ManropeFontFamily,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold,
@@ -572,7 +639,7 @@ fun AppearanceScreen(
 
                     Text(
                         text = "By default the accent follows the current atmosphere. " +
-                            "Pick a colour to pin it instead.",
+                            "Pick a curated aesthetic tone to pin it instead.",
                         fontFamily = ManropeFontFamily,
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.Medium,
@@ -581,33 +648,83 @@ fun AppearanceScreen(
                         modifier = Modifier.padding(horizontal = AetherEmber.Spacing.Space24, vertical = 2.dp)
                     )
 
-                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space12))
 
+                    // Follow Atmosphere Option
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = AetherEmber.Spacing.Space16),
-                        horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
-                    ) {
-                        AccentSwatch(
-                            color = atmosphere.accent,
-                            label = "Follow atmosphere",
-                            isSelected = themeState.useAtmosphereAccent,
-                            onClick = { themeState.setAndPersistUseAtmosphereAccent(true) },
-                            modifier = Modifier.testTag("accent_atmosphere")
-                        )
-                        AccentColorChoice.entries.forEach { choice ->
-                            AccentSwatch(
-                                color = choice.primaryColor,
-                                label = choice.displayName,
-                                isSelected = !themeState.useAtmosphereAccent &&
-                                    themeState.accentChoice == choice,
-                                onClick = {
-                                    themeState.setAndPersistAccentChoice(choice)
-                                    themeState.setAndPersistUseAtmosphereAccent(false)
-                                }
+                            .padding(horizontal = AetherEmber.Spacing.Space16)
+                            .clip(AetherEmber.Shapes.M)
+                            .background(
+                                if (themeState.useAtmosphereAccent) atmosphere.accent.copy(alpha = 0.28f)
+                                else Color(0x35000000)
                             )
+                            .border(
+                                width = if (themeState.useAtmosphereAccent) 1.5.dp else 1.dp,
+                                color = if (themeState.useAtmosphereAccent) atmosphere.accent else Color(0x28FFFFFF),
+                                shape = AetherEmber.Shapes.M
+                            )
+                            .clickable { themeState.setAndPersistUseAtmosphereAccent(true) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .testTag("accent_atmosphere"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(CircleShape)
+                                    .background(atmosphere.accent)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Follow Atmosphere",
+                                fontFamily = ManropeFontFamily,
+                                fontSize = 13.5.sp,
+                                fontWeight = if (themeState.useAtmosphereAccent) FontWeight.Bold else FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                        }
+                        if (themeState.useAtmosphereAccent) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space16))
+
+                    // 2x6 Palette Grid
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = AetherEmber.Spacing.Space16),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        val entries = AccentColorChoice.entries
+                        val rows = entries.chunked(6)
+                        rows.forEach { rowEntries ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                rowEntries.forEach { choice ->
+                                    val isSelected = !themeState.useAtmosphereAccent && themeState.accentChoice == choice
+                                    AccentSwatch(
+                                        choice = choice,
+                                        isSelected = isSelected,
+                                        onClick = {
+                                            themeState.setAndPersistAccentChoice(choice)
+                                            themeState.setAndPersistUseAtmosphereAccent(false)
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -704,19 +821,43 @@ fun AppearanceScreen(
                     Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space48))
                 }
             }
+        }
 
-            AetherFloatingHeader(
-                title = "Appearance & Atmosphere",
-                modifier = Modifier.align(Alignment.TopCenter),
-                scrollFraction = headerScrollFraction,
-                frostState = frostState,
-                navigation = {
-                    AetherBackButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("appearance_back_button")
-                    )
-                }
-            )
+        AetherFloatingHeader(
+            title = "Appearance & Atmosphere",
+            modifier = Modifier.align(Alignment.TopCenter),
+            scrollFraction = headerScrollFraction,
+            frostState = frostState,
+            navigation = {
+                AetherBackButton(
+                    onClick = onBack,
+                    modifier = Modifier.testTag("appearance_back_button")
+                )
+            }
+        )
+
+        if (showLocationPicker) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x80000000))
+                    .clickable { showLocationPicker = false },
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                AetherLocationPickerSheet(
+                    currentMode = themeState.weatherLocationMode,
+                    currentManualLocation = themeState.manualWeatherLocation,
+                    onSelectAutomatic = {
+                        themeState.clearManualWeatherLocation()
+                        refreshWeather()
+                    },
+                    onSelectLocation = { location ->
+                        themeState.setAndPersistManualWeatherLocation(location)
+                        refreshWeather()
+                    },
+                    onDismiss = { showLocationPicker = false }
+                )
+            }
         }
     }
 }
@@ -838,34 +979,45 @@ private fun DensityOption(
 
 @Composable
 private fun AccentSwatch(
-    color: Color,
-    label: String,
+    choice: AccentColorChoice,
     isSelected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
-            .size(46.dp)
-            .clip(CircleShape)
-            .background(color)
-            .clickable { onClick() }
-            .then(
-                if (isSelected) Modifier.border(2.5.dp, Color.White, CircleShape) else Modifier
-            )
+            .size(44.dp)
+            .clickable(onClick = onClick)
             .semantics {
-                contentDescription = label
+                contentDescription = choice.displayName
                 selected = isSelected
             },
         contentAlignment = Alignment.Center
     ) {
         if (isSelected) {
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(20.dp)
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .border(1.5.dp, Color.White.copy(alpha = 0.8f), CircleShape)
             )
+        }
+
+        Box(
+            modifier = Modifier
+                .size(if (isSelected) 32.dp else 36.dp)
+                .clip(CircleShape)
+                .background(choice.primaryColor),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = choice.onAccent,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }

@@ -7,7 +7,9 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,17 +57,28 @@ import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.VerifiedBadge
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatRow(
     chat: Chat,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onLongPress: (() -> Unit)? = null
 ) {
     val colors = LocalAetherColors.current
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            .then(
+                if (onLongPress == null) {
+                    Modifier.clickable { onClick() }
+                } else {
+                    Modifier.combinedClickable(
+                        onClick = onClick,
+                        onLongClick = onLongPress
+                    )
+                }
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .testTag("chat_row_${chat.id}"),
         verticalAlignment = Alignment.CenterVertically

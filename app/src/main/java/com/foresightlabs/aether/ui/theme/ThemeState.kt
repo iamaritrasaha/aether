@@ -12,6 +12,8 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import com.foresightlabs.aether.data.preferences.AetherAppearancePreferences
 import com.foresightlabs.aether.data.preferences.AppearanceRepository
+import com.foresightlabs.aether.data.preferences.ManualWeatherLocation
+import com.foresightlabs.aether.data.preferences.WeatherLocationMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -137,20 +139,42 @@ enum class TimeAtmospherePalette(
 
 enum class WeatherCondition(val displayName: String, val icon: String, val description: String) {
     CLEAR("Clear", "☀️", "Brighter, vivid atmospheric saturation"),
+    PARTLY_CLOUDY("Partly Cloudy", "⛅", "Soft drifting cloud layers with warm light"),
     CLOUDY("Cloudy", "☁️", "Muted, subtle soft tones"),
+    DRIZZLE("Drizzle", "🌦️", "Gentle translucent mist and light rain"),
     RAIN("Rain", "🌧️", "Cooler, oceanic cyan-blue tint"),
+    HEAVY_RAIN("Heavy Rain", "🌧️", "Deep atmospheric depth and dense rain"),
     STORM("Storm", "⚡", "Darker electric indigo shift"),
     FOG("Fog", "🌫️", "Soft desaturated lilac mist"),
-    SNOW("Snow", "❄️", "Icy crystalline highlights")
+    SNOW("Snow", "❄️", "Icy crystalline highlights"),
+    UNKNOWN("Unknown", "🌤️", "Atmospheric time-based sky")
 }
 
-enum class AccentColorChoice(val displayName: String, val primaryColor: Color, val containerColor: Color) {
-    EMBER("Ember Orange", Color(0xFFFF7038), Color(0xFFF04425)),
-    CRIMSON("Crimson", Color(0xFFE92D27), Color(0xFFC90B27)),
-    AMBER("Warm Amber", Color(0xFFFF9A4A), Color(0xFFFF7038)),
-    CORAL("Coral Glow", Color(0xFFFF5E4D), Color(0xFFDC2626)),
-    COBALT("Electric Blue", Color(0xFF4DA3FF), Color(0xFF173252)),
-    EMERALD("Emerald", Color(0xFF10B981), Color(0xFF064E3B))
+enum class AccentColorChoice(
+    val id: String,
+    val displayName: String,
+    val primaryColor: Color,
+    val containerColor: Color,
+    val onAccent: Color = Color.White
+) {
+    MIST_BLUE("mist_blue", "Mist Blue", Color(0xFF8FAFC4), Color(0xFF718EA3), Color(0xFF171719)),
+    DUSTY_DENIM("dusty_denim", "Dusty Denim", Color(0xFF718EA3), Color(0xFF5A7283)),
+    SAGE("sage", "Sage", Color(0xFFAEB8A0), Color(0xFF8B9481), Color(0xFF171719)),
+    EUCALYPTUS("eucalyptus", "Eucalyptus", Color(0xFF809A88), Color(0xFF667B6D)),
+    DUSTY_ROSE("dusty_rose", "Dusty Rose", Color(0xFFC28F99), Color(0xFF9B727A), Color(0xFF171719)),
+    MAUVE("mauve", "Mauve", Color(0xFFA58A9D), Color(0xFF846E7E)),
+    SOFT_LAVENDER("soft_lavender", "Soft Lavender", Color(0xFF9690B5), Color(0xFF787391)),
+    PLUM_DUST("plum_dust", "Plum Dust", Color(0xFF806879), Color(0xFF665361)),
+    CLAY("clay", "Clay", Color(0xFFB6816C), Color(0xFF926756)),
+    TERRACOTTA("terracotta", "Terracotta", Color(0xFFAD705F), Color(0xFF8A594C)),
+    MUTED_GOLD("muted_gold", "Muted Gold", Color(0xFFB8A06D), Color(0xFF938057), Color(0xFF171719)),
+    MUSHROOM_TAUPE("mushroom_taupe", "Mushroom Taupe", Color(0xFF968A80), Color(0xFF786E66));
+
+    companion object {
+        fun fromId(id: String?): AccentColorChoice? {
+            return entries.find { it.id == id || it.name == id }
+        }
+    }
 }
 
 enum class MessageDensity {
@@ -169,10 +193,12 @@ class AppThemeState(
     var weatherReading by mutableStateOf<WeatherReading>(WeatherReading.Idle)
     var weatherOverride by mutableStateOf<WeatherCondition?>(null)
     var useAtmosphereAccent by mutableStateOf(true)
-    var accentChoice by mutableStateOf(AccentColorChoice.EMBER)
+    var accentChoice by mutableStateOf(AccentColorChoice.MIST_BLUE)
     var messageDensity by mutableStateOf(MessageDensity.COMFORTABLE)
     var fontScale by mutableFloatStateOf(1.0f)
     var useAmoledBlack by mutableStateOf(false)
+    var weatherLocationMode by mutableStateOf(WeatherLocationMode.AUTOMATIC)
+    var manualWeatherLocation by mutableStateOf<ManualWeatherLocation?>(null)
 
     init {
         repository?.let { repo ->
@@ -195,6 +221,8 @@ class AppThemeState(
         accentChoice = prefs.accentChoice
         messageDensity = prefs.messageDensity
         fontScale = prefs.fontScale
+        weatherLocationMode = prefs.weatherLocationMode
+        manualWeatherLocation = prefs.manualWeatherLocation
     }
 
     fun setAndPersistThemeMode(mode: AppThemeMode) {
@@ -246,6 +274,29 @@ class AppThemeState(
         }
     }
 
+    fun setAndPersistWeatherLocationMode(mode: WeatherLocationMode) {
+        weatherLocationMode = mode
+        coroutineScope?.launch {
+            repository?.updateWeatherLocationMode(mode)
+        }
+    }
+
+    fun setAndPersistManualWeatherLocation(location: ManualWeatherLocation) {
+        weatherLocationMode = WeatherLocationMode.MANUAL
+        manualWeatherLocation = location
+        coroutineScope?.launch {
+            repository?.setManualWeatherLocation(location)
+        }
+    }
+
+    fun clearManualWeatherLocation() {
+        weatherLocationMode = WeatherLocationMode.AUTOMATIC
+        manualWeatherLocation = null
+        coroutineScope?.launch {
+            repository?.clearManualWeatherLocation()
+        }
+    }
+
     /**
      * Resolves the current active atmospheric palette based on mode.
      * Prefer [LocalAtmosphere] in composables — this exists for non-composable callers.
@@ -272,6 +323,15 @@ fun modulateSingleColor(c: Color, weather: WeatherCondition): Color {
                 alpha = c.alpha
             )
         }
+        WeatherCondition.PARTLY_CLOUDY -> {
+            val gray = (c.red * 0.3f + c.green * 0.59f + c.blue * 0.11f)
+            Color(
+                red = (c.red * 0.92f + gray * 0.08f).coerceIn(0f, 1f),
+                green = (c.green * 0.92f + gray * 0.08f).coerceIn(0f, 1f),
+                blue = (c.blue * 0.92f + gray * 0.08f).coerceIn(0f, 1f),
+                alpha = c.alpha
+            )
+        }
         WeatherCondition.CLOUDY -> {
             val gray = (c.red * 0.3f + c.green * 0.59f + c.blue * 0.11f)
             Color(
@@ -281,11 +341,27 @@ fun modulateSingleColor(c: Color, weather: WeatherCondition): Color {
                 alpha = c.alpha
             )
         }
+        WeatherCondition.DRIZZLE -> {
+            Color(
+                red = (c.red * 0.86f).coerceIn(0f, 1f),
+                green = (c.green * 0.92f + 0.02f).coerceIn(0f, 1f),
+                blue = (c.blue * 0.96f + 0.05f).coerceIn(0f, 1f),
+                alpha = c.alpha
+            )
+        }
         WeatherCondition.RAIN -> {
             Color(
                 red = (c.red * 0.82f).coerceIn(0f, 1f),
                 green = (c.green * 0.90f + 0.03f).coerceIn(0f, 1f),
                 blue = (c.blue * 0.95f + 0.08f).coerceIn(0f, 1f),
+                alpha = c.alpha
+            )
+        }
+        WeatherCondition.HEAVY_RAIN -> {
+            Color(
+                red = (c.red * 0.74f).coerceIn(0f, 1f),
+                green = (c.green * 0.82f + 0.04f).coerceIn(0f, 1f),
+                blue = (c.blue * 0.92f + 0.10f).coerceIn(0f, 1f),
                 alpha = c.alpha
             )
         }
@@ -314,6 +390,7 @@ fun modulateSingleColor(c: Color, weather: WeatherCondition): Color {
                 alpha = c.alpha
             )
         }
+        WeatherCondition.UNKNOWN -> c
     }
 }
 

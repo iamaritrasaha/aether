@@ -26,7 +26,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Check
+import com.foresightlabs.aether.ui.theme.OnlineGreen
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,6 +58,10 @@ import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.foresightlabs.aether.domain.model.MediaItem
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.text.TextStyle
+import com.foresightlabs.aether.domain.text.EntityAction
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageStatus
 import com.foresightlabs.aether.domain.model.MessageType
@@ -74,7 +80,14 @@ fun MessageBubble(
     onLongPress: (Message) -> Unit,
     onMediaClick: (MediaItem) -> Unit,
     onReactionClick: (Message, String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onEntityAction: (EntityAction) -> Unit = {},
+    /** Briefly marked after a jump, so the reader can find what they landed on. */
+    isHighlighted: Boolean = false,
+    onPollVote: (Message, List<Int>) -> Unit = { _, _ -> },
+    isSelected: Boolean = false,
+    /** Non-null only while a multi-selection is running. */
+    onSelectToggle: (() -> Unit)? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
     val colors = LocalAetherColors.current
@@ -102,10 +115,108 @@ fun MessageBubble(
         )
     }
 
+    if (message.type == MessageType.CALL) {
+        val isMissed = "Missed" in message.text || "Declined" in message.text || "Cancelled" in message.text || "Failed" in message.text
+        val iconColor = if (isMissed) Color(0xFFEF4444) else OnlineGreen
+
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                modifier = Modifier
+                    .clip(AetherEmber.Shapes.Pill)
+                    .background(Color(0x35000000))
+                    .border(0.5.dp, Color(0x28FFFFFF), AetherEmber.Shapes.Pill)
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Call,
+                    contentDescription = null,
+                    tint = iconColor,
+                    modifier = Modifier.size(15.dp)
+                )
+                Text(
+                    text = message.text,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xF5FFFFFF),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+        return
+    }
+
+    if (message.type == MessageType.SERVICE) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(AetherEmber.Shapes.Pill)
+                    .background(Color(0x35000000))
+                    .border(0.5.dp, Color(0x28FFFFFF), AetherEmber.Shapes.Pill)
+                    .padding(horizontal = 14.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = message.text,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xF5FFFFFF),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+        return
+    }
+
+    // A jump highlight fades rather than flashing, and settles to nothing so the
+    // marker cannot outlive the moment the reader needed it.
+    val highlightAlpha by animateFloatAsState(
+        targetValue = if (isHighlighted) 1f else 0f,
+        animationSpec = tween(durationMillis = if (isHighlighted) 140 else 520),
+        label = "jump_highlight"
+    )
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 2.5.dp)
+            .padding(horizontal = 14.dp, vertical = 2.dp)
+            .then(
+                if (onSelectToggle != null) {
+                    Modifier.clickable { onSelectToggle() }
+                } else {
+                    Modifier
+                }
+            )
+            .then(
+                if (isSelected) {
+                    Modifier
+                        .clip(AetherEmber.Shapes.L)
+                        .background(colors.accent.copy(alpha = 0.20f))
+                } else {
+                    Modifier
+                }
+            )
+            .then(
+                if (highlightAlpha > 0.01f) {
+                    Modifier
+                        .clip(AetherEmber.Shapes.L)
+                        .background(colors.accent.copy(alpha = 0.16f * highlightAlpha))
+                } else {
+                    Modifier
+                }
+            )
     ) {
         // Reply indicator on drag
         val replyIconAlpha = (-offsetX.value / 120f).coerceIn(0f, 1f)
@@ -174,7 +285,7 @@ fun MessageBubble(
         ) {
             Column(
                 horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
-                modifier = Modifier.widthIn(max = 310.dp)
+                modifier = Modifier.widthIn(max = 280.dp)
             ) {
                 // Main Bubble Container
                 Box(
@@ -196,8 +307,12 @@ fun MessageBubble(
                                 }
                             )
                         }
-                        .padding(
-                            if (message.type == MessageType.IMAGE) 4.dp else 12.dp
+                        .then(
+                            if (message.type == MessageType.IMAGE) {
+                                Modifier.padding(4.dp)
+                            } else {
+                                Modifier.padding(horizontal = 11.dp, vertical = 7.dp)
+                            }
                         )
                         .testTag("message_bubble_${message.id}")
                 ) {
@@ -251,6 +366,16 @@ fun MessageBubble(
                                     )
                                 }
                             }
+                            MessageType.POLL -> {
+                                message.poll?.let { poll ->
+                                    PollBubble(
+                                        poll = poll,
+                                        contentColor = contentColor,
+                                        metaColor = metaColor,
+                                        onVote = { options -> onPollVote(message, options) }
+                                    )
+                                }
+                            }
                             MessageType.LINK_PREVIEW -> {
                                 Text(
                                     text = message.text,
@@ -266,13 +391,19 @@ fun MessageBubble(
                                 }
                             }
                             else -> {
-                                Text(
-                                    text = message.text,
-                                    fontFamily = ManropeFontFamily,
+                                AetherRichText(
+                                    value = message.richText,
+                                    style = TextStyle(
+                                        fontFamily = ManropeFontFamily,
+                                        fontSize = 15.sp,
+                                        lineHeight = 20.5.sp,
+                                        fontWeight = FontWeight.Medium
+                                    ),
                                     color = contentColor,
-                                    fontSize = 15.sp,
-                                    lineHeight = 20.5.sp,
-                                    fontWeight = FontWeight.Medium
+                                    accentColor = colors.accent,
+                                    spoilerCover = metaColor.copy(alpha = 0.55f),
+                                    codeBackground = contentColor.copy(alpha = 0.10f),
+                                    onAction = onEntityAction
                                 )
                             }
                         }
@@ -378,7 +509,7 @@ private fun ReplySnippet(
 
     Row(
         modifier = Modifier
-            .fillMaxWidth()
+            .widthIn(max = 240.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(if (isOutgoingParent) contentColor.copy(alpha = 0.15f) else colors.surfaceHighlight)
             .padding(vertical = 4.dp, horizontal = 8.dp)
@@ -425,7 +556,7 @@ private fun FileAttachmentContent(
 
     Row(
         modifier = Modifier
-            .fillMaxWidth()
+            .widthIn(max = 240.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(if (isOutgoing) contentColor.copy(alpha = 0.15f) else colors.surfaceHighlight)
             .padding(8.dp),
@@ -448,7 +579,7 @@ private fun FileAttachmentContent(
 
         Spacer(modifier = Modifier.width(10.dp))
 
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f, fill = false)) {
             Text(
                 text = fileName,
                 fontFamily = ManropeFontFamily,
@@ -481,13 +612,14 @@ private fun ImageAttachmentContent(
 
     Column(
         modifier = Modifier
+            .width(230.dp)
             .clip(RoundedCornerShape(16.dp))
             .clickable { onMediaClick(media) }
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp)
+                .width(230.dp)
+                .height(170.dp)
                 .clip(RoundedCornerShape(16.dp))
         ) {
             SubcomposeAsyncImage(
@@ -497,12 +629,12 @@ private fun ImageAttachmentContent(
                     .build(),
                 contentDescription = caption.ifEmpty { "Photo" },
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxWidth().height(200.dp),
+                modifier = Modifier.width(230.dp).height(170.dp),
                 loading = {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp)
+                            .width(230.dp)
+                            .height(170.dp)
                             .background(colors.surfaceHighlight),
                         contentAlignment = Alignment.Center
                     ) {
@@ -540,7 +672,7 @@ private fun LinkPreviewCard(
 
     Column(
         modifier = Modifier
-            .fillMaxWidth()
+            .widthIn(max = 250.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(if (isOutgoing) contentColor.copy(alpha = 0.15f) else colors.surfaceHighlight)
             .padding(8.dp)

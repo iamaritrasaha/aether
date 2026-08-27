@@ -9,10 +9,11 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
@@ -22,6 +23,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -30,6 +34,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -44,7 +50,6 @@ import androidx.compose.ui.unit.dp
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.AetherMotion
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
-import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import com.foresightlabs.aether.ui.theme.LocalReducedMotion
 import com.foresightlabs.aether.ui.theme.aetherDuration
 
@@ -61,7 +66,7 @@ object AetherNavPillDefaults {
     val OuterHorizontalPadding: Dp = 40.dp
     val IconSize: Dp = 20.dp
     val DestinationSlotSize: Dp = 44.dp
-    val SelectionLensSize: Dp = 40.dp
+    val SelectionLensSize: Dp = 38.dp
 }
 
 /**
@@ -78,6 +83,7 @@ fun AetherNavPill(
     modifier: Modifier = Modifier,
     frostState: AetherFrostState? = null
 ) {
+    val pillShape = RoundedCornerShape(percent = 50)
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -85,31 +91,29 @@ fun AetherNavPill(
             .padding(
                 horizontal = AetherNavPillDefaults.OuterHorizontalPadding,
                 vertical = AetherEmber.Spacing.Space12
-            )
+            ),
+        contentAlignment = Alignment.Center
     ) {
         AetherFrostedGlass(
             frostState = frostState,
             modifier = Modifier
-                .fillMaxWidth()
+                .wrapContentWidth()
                 .height(AetherNavPillDefaults.Height),
-            shape = AetherEmber.Shapes.Pill,
-            elevation = 12.dp,
-            emphasis = 0.12f
+            shape = pillShape,
+            elevation = 8.dp,
+            emphasis = 0.08f
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .wrapContentWidth()
                     .height(AetherNavPillDefaults.Height)
-                    .padding(horizontal = AetherEmber.Spacing.Space8, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                    .padding(horizontal = AetherEmber.Spacing.Space8),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items.forEach { item ->
                     AetherNavSlot(
                         item = item,
-                        selected = item.key == selectedKey,
-                        frostState = frostState,
-                        modifier = Modifier.weight(1f)
+                        selected = item.key == selectedKey
                     )
                 }
             }
@@ -121,10 +125,8 @@ fun AetherNavPill(
 private fun AetherNavSlot(
     item: AetherNavItem,
     selected: Boolean,
-    frostState: AetherFrostState?,
     modifier: Modifier = Modifier
 ) {
-    val atmosphere = LocalAtmosphere.current
     val colors = LocalAetherColors.current
     val reducedMotion = LocalReducedMotion.current
     val duration = aetherDuration(AetherMotion.ControlMillis)
@@ -138,8 +140,8 @@ private fun AetherNavSlot(
     )
     val lensEmphasis by animateFloatAsState(
         targetValue = when {
-            selected && pressed -> 0.52f
-            selected -> 0.34f
+            selected && pressed -> 0.60f
+            selected -> 0.42f
             else -> 0f
         },
         animationSpec = if (reducedMotion) snap() else AetherMotion.Stiff,
@@ -149,17 +151,18 @@ private fun AetherNavSlot(
         targetValue = when {
             selected && colors.isDark -> Color.White
             selected -> colors.textPrimary
-            pressed -> atmosphere.accent
-            else -> colors.textSecondary
+            pressed -> colors.textPrimary
+            else -> colors.textSecondary.copy(alpha = 0.65f)
         },
         animationSpec = spec,
         label = "nav_tint"
     )
 
+    val pillShape = RoundedCornerShape(percent = 50)
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .clip(AetherEmber.Shapes.Pill)
+            .clip(pillShape)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
@@ -193,15 +196,41 @@ private fun AetherNavSlot(
                     animationSpec = AetherMotion.Stiff
                 )
             ) {
-                AetherFrostedGlass(
-                    frostState = frostState,
+                Box(
                     modifier = Modifier
                         .size(AetherNavPillDefaults.SelectionLensSize)
-                        .testTag("nav_lens_${item.key}"),
-                    shape = AetherEmber.Shapes.Pill,
-                    elevation = 0.dp,
-                    emphasis = lensEmphasis
-                ) {}
+                        .clip(CircleShape)
+                        .background(
+                            if (colors.isDark) Color.White.copy(alpha = 0.10f + lensEmphasis * 0.06f)
+                            else Color.White.copy(alpha = 0.40f + lensEmphasis * 0.15f)
+                        )
+                        .drawWithCache {
+                            val specular = Brush.verticalGradient(
+                                colorStops = arrayOf(
+                                    0f to Color.White.copy(alpha = if (colors.isDark) 0.18f else 0.40f),
+                                    0.45f to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = if (colors.isDark) 0.08f else 0.05f)
+                                )
+                            )
+                            onDrawWithContent {
+                                drawContent()
+                                drawRect(specular)
+                            }
+                        }
+                        .border(
+                            width = 1.dp,
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = if (colors.isDark) 0.35f else 0.60f),
+                                    Color.White.copy(alpha = if (colors.isDark) 0.15f else 0.25f),
+                                    if (colors.isDark) Color.White.copy(alpha = 0.08f)
+                                    else Color.Black.copy(alpha = 0.10f)
+                                )
+                            ),
+                            shape = CircleShape
+                        )
+                        .testTag("nav_lens_${item.key}")
+                )
             }
             AetherNavIcon(item = item, tint = iconTint)
         }

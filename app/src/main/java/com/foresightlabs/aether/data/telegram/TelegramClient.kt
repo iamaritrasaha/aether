@@ -3,8 +3,15 @@ package com.foresightlabs.aether.data.telegram
 import android.app.Application
 import android.os.Build
 import com.foresightlabs.aether.BuildConfig
+import com.foresightlabs.aether.domain.calls.MediaConnectionState
+import com.foresightlabs.aether.domain.messages.MessageCapabilities
+import com.foresightlabs.aether.domain.messages.SendOptions
+import com.foresightlabs.aether.domain.messages.SendSchedule
+import com.foresightlabs.aether.domain.text.ReplyQuote
 import com.foresightlabs.aether.domain.model.AuthUiState
 import com.foresightlabs.aether.domain.model.Chat
+import com.foresightlabs.aether.domain.model.ChatFolder
+import com.foresightlabs.aether.domain.model.ForumTopicSummary
 import com.foresightlabs.aether.domain.model.ConnectionStatus
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.User
@@ -68,6 +75,11 @@ class TelegramClient(private val application: Application) {
 
     private val _isLoadingChats = MutableStateFlow(false)
     val isLoadingChats: StateFlow<Boolean> = _isLoadingChats.asStateFlow()
+
+    private val _activeCallState = MutableStateFlow<com.foresightlabs.aether.domain.model.ActiveCall?>(null)
+    val activeCallState: StateFlow<com.foresightlabs.aether.domain.model.ActiveCall?> = _activeCallState.asStateFlow()
+
+    val latestRawCallState = MutableStateFlow<TdApi.Call?>(null)
 
     @Volatile private var myUserId: Long = 0L
     @Volatile private var chatsFullyLoaded = false
@@ -147,7 +159,7 @@ class TelegramClient(private val application: Application) {
     }
 
     fun chat(chatId: Long): Chat? = _chatList.value.firstOrNull { it.id == chatId.toString() }
-        ?: chats[chatId]?.let { TelegramMappers.mapChat(it, myUserId, users, photoPathForChat(it), typing[chatId]) }
+        ?: chats[chatId]?.let { mapUiChat(it) }
 
     suspend fun ensureChatLoaded(chatId: Long): Chat? {
         chats[chatId]?.let { return mapUiChat(it) }
@@ -176,22 +188,32 @@ class TelegramClient(private val application: Application) {
         }
     }
 
+    /**
+     * History for one forum topic.
+     *
+     * A forum topic has its own history endpoint. Reading the chat's history instead
+     * returns every topic's messages interleaved, which is what "flattening a forum"
+     * looks like from the user's side.
+     */
+    suspend fun loadTopicHistory(
+        chatId: Long,
+        forumTopicId: Int,
+        fromMessageId: Long,
+        limit: Int = 40
+    ): List<Message> {
+        val result = send(
+            TdApi.GetForumTopicHistory(chatId, forumTopicId, fromMessageId, 0, limit)
+        )
+        val messages = (result as? TdApi.Messages)?.messages ?: return emptyList()
+        return messages.mapNotNull { td -> td?.let(::mapUiMessage) }.reversed()
+    }
+
     suspend fun loadHistory(chatId: Long, fromMessageId: Long, limit: Int = 40): List<Message> {
         val result = send(TdApi.GetChatHistory(chatId, fromMessageId, 0, limit, false))
         val messages = (result as? TdApi.Messages)?.messages ?: return emptyList()
         val chat = chats[chatId]
         val lastReadOut = chat?.lastReadOutboxMessageId ?: 0L
-        return messages.mapNotNull { td ->
-            td ?: return@mapNotNull null
-            TelegramMappers.mapMessage(
-                message = td,
-                users = users,
-                chats = chats,
-                myUserId = myUserId,
-                lastReadOutboxMessageId = lastReadOut,
-                reply = replyPreview(td)
-            )
-        }.reversed()
+        return messages.mapNotNull { td -> td?.let(::mapUiMessage) }.reversed()
     }
 
     suspend fun openChat(chatId: Long) {
@@ -211,26 +233,31 @@ class TelegramClient(private val application: Application) {
         send(TdApi.ViewMessages(chatId, messageIds, null, true))
     }
 
-    suspend fun sendText(chatId: Long, text: String, replyToMessageId: Long?): Result<TdApi.Message> {
-        val reply = replyToMessageId?.takeIf { it != 0L }?.let {
-            TdApi.InputMessageReplyToMessage(it, null, 0, "")
-        }
+    suspend fun sendText(
+        chatId: Long,
+        text: String,
+        replyToMessageId: Long?,
+        entities: Array<TdApi.TextEntity> = emptyArray(),
+        forumTopicId: Int? = null,
+        options: TdApi.MessageSendOptions? = null,
+        quote: ReplyQuote? = null
+    ): Result<TdApi.Message> {
         val content = TdApi.InputMessageText(
-            TdApi.FormattedText(text, emptyArray()),
+            TdApi.FormattedText(text, entities),
             null,
+            // Sending clears the draft this text came from.
             true
         )
-        return when (val result = send(TdApi.SendMessage(chatId, null, reply, null, null, content))) {
-            is TdApi.Message -> Result.success(result)
-            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
-            else -> Result.failure(IllegalStateException("Unexpected send result"))
-        }
+        return sendContent(chatId, content, replyToMessageId, forumTopicId, options, quote)
     }
 
-    suspend fun sendPhoto(chatId: Long, photoPath: String, caption: String, replyToMessageId: Long?): Result<TdApi.Message> {
-        val reply = replyToMessageId?.takeIf { it != 0L }?.let {
-            TdApi.InputMessageReplyToMessage(it, null, 0, "")
-        }
+    suspend fun sendPhoto(
+        chatId: Long,
+        photoPath: String,
+        caption: String,
+        replyToMessageId: Long?,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
         val content = TdApi.InputMessagePhoto(
             TdApi.InputFileLocal(photoPath),
             null,
@@ -243,12 +270,193 @@ class TelegramClient(private val application: Application) {
             null,
             false
         )
-        return when (val result = send(TdApi.SendMessage(chatId, null, reply, null, null, content))) {
-            is TdApi.Message -> Result.success(result)
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
+    }
+
+    /**
+     * Sends several photos as one Telegram album.
+     *
+     * A single [TdApi.SendMessageAlbum] rather than a burst of separate sends, so the
+     * recipient sees one grouped cluster. Telegram captions the group from its first
+     * member, which is why only that one carries [caption].
+     */
+    suspend fun sendPhotoAlbum(
+        chatId: Long,
+        photoPaths: List<String>,
+        caption: String = "",
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<List<TdApi.Message>> {
+        if (photoPaths.isEmpty()) return Result.success(emptyList())
+        if (photoPaths.size == 1) {
+            return sendPhoto(chatId, photoPaths.single(), caption, replyToMessageId, forumTopicId)
+                .map { listOf(it) }
+        }
+        val contents: Array<TdApi.InputMessageContent> = photoPaths
+            .take(ALBUM_LIMIT)
+            .mapIndexed { index, path ->
+                TdApi.InputMessagePhoto(
+                    TdApi.InputFileLocal(path),
+                    null,
+                    null,
+                    intArrayOf(),
+                    0,
+                    0,
+                    TdApi.FormattedText(if (index == 0) caption else "", emptyArray()),
+                    false,
+                    null,
+                    false
+                ) as TdApi.InputMessageContent
+            }
+            .toTypedArray()
+
+        return when (
+            val result = send(
+                TdApi.SendMessageAlbum(
+                    chatId,
+                    topicOf(forumTopicId),
+                    replyTo(replyToMessageId),
+                    null,
+                    contents
+                )
+            )
+        ) {
+            is TdApi.Messages -> Result.success(result.messages?.filterNotNull().orEmpty())
             is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
-            else -> Result.failure(IllegalStateException("Unexpected send photo result"))
+            else -> Result.failure(IllegalStateException("Album could not be sent"))
         }
     }
+
+    /**
+     * Sends a contact card.
+     *
+     * The contact is whatever the caller passed — either typed by the user or picked
+     * from the device address book after an explicit permission grant. Aether never
+     * uploads the address book, and nothing is sent that the user did not choose.
+     */
+    suspend fun sendContact(
+        chatId: Long,
+        phoneNumber: String,
+        firstName: String,
+        lastName: String = "",
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val contact = TdApi.Contact(phoneNumber, firstName, lastName, "", 0L)
+        return sendContent(
+            chatId,
+            TdApi.InputMessageContact(contact),
+            replyToMessageId,
+            forumTopicId
+        )
+    }
+
+    /**
+     * Sends a static point on the map.
+     *
+     * `livePeriod` is zero: this is a one-off location, not a live share. Live
+     * location is a different feature with its own lifecycle, and sending a
+     * zero-period message is the honest way to say "here, now".
+     */
+    suspend fun sendLocation(
+        chatId: Long,
+        latitude: Double,
+        longitude: Double,
+        accuracyMetres: Double = 0.0,
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val location = TdApi.Location(latitude, longitude, accuracyMetres)
+        return sendContent(
+            chatId,
+            // A zero live period is Telegram's own way of saying "a point, now".
+            TdApi.InputMessageLocation(location, 0, 0, 0),
+            replyToMessageId,
+            forumTopicId
+        )
+    }
+
+    /**
+     * The single path every outgoing message takes.
+     *
+     * Consolidated deliberately. When each send built its own `SendMessage` there
+     * were six places that had to remember to pass the forum topic, and every one of
+     * them passed null — which silently posted into a forum's root chat instead of
+     * the topic the user was looking at.
+     *
+     * @param forumTopicId the forum topic to post into, or null for the chat itself
+     */
+    private suspend fun sendContent(
+        chatId: Long,
+        content: TdApi.InputMessageContent,
+        replyToMessageId: Long?,
+        forumTopicId: Int? = null,
+        options: TdApi.MessageSendOptions? = null,
+        quote: ReplyQuote? = null
+    ): Result<TdApi.Message> {
+        val function = TdApi.SendMessage(
+            chatId,
+            topicOf(forumTopicId),
+            replyTo(replyToMessageId, quote),
+            options,
+            null,
+            content
+        )
+        return when (val result = send(function)) {
+            is TdApi.Message -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Message could not be sent"))
+        }
+    }
+
+    /**
+     * Translates Aether's delivery options into TDLib's.
+     *
+     * Returns null for the default, so the overwhelmingly common case sends exactly
+     * the request it did before this existed.
+     */
+    fun sendOptionsOf(options: SendOptions): TdApi.MessageSendOptions? {
+        if (options.isDefault) return null
+        val scheduling: TdApi.MessageSchedulingState? = when (val schedule = options.schedule) {
+            SendSchedule.Now -> null
+            is SendSchedule.At -> TdApi.MessageSchedulingStateSendAtDate(schedule.epochSeconds, 0)
+            SendSchedule.WhenOnline -> TdApi.MessageSchedulingStateSendWhenOnline()
+        }
+        return TdApi.MessageSendOptions().apply {
+            disableNotification = options.silent
+            schedulingState = scheduling
+        }
+    }
+
+    /**
+     * Wraps a forum topic id in the pinned [TdApi.MessageTopic] shape.
+     *
+     * Null means the chat itself, which is what every non-forum chat wants and what
+     * TDLib expects there.
+     */
+    /**
+     * Builds the reply, carrying a quote when the user selected one.
+     *
+     * A quote is a real TDLib structure with the quoted text *and its position in the
+     * original*. Telegram needs the position to keep the quote attached when the
+     * original is edited; a quote reconstructed from text alone would detach.
+     */
+    private fun replyTo(
+        replyToMessageId: Long?,
+        quote: ReplyQuote? = null
+    ): TdApi.InputMessageReplyToMessage? {
+        val messageId = replyToMessageId?.takeIf { it != 0L } ?: return null
+        val inputQuote = quote?.let {
+            TdApi.InputTextQuote(
+                TdApi.FormattedText(it.text, TelegramMappers.toTdEntities(it.formatted)),
+                it.position
+            )
+        }
+        return TdApi.InputMessageReplyToMessage(messageId, inputQuote, 0, null)
+    }
+
+    private fun topicOf(forumTopicId: Int?): TdApi.MessageTopic? =
+        forumTopicId?.takeIf { it != 0 }?.let { TdApi.MessageTopicForum(it) }
 
     suspend fun sendVideo(
         chatId: Long,
@@ -257,11 +465,9 @@ class TelegramClient(private val application: Application) {
         duration: Int = 0,
         width: Int = 0,
         height: Int = 0,
-        replyToMessageId: Long? = null
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
     ): Result<TdApi.Message> {
-        val reply = replyToMessageId?.takeIf { it != 0L }?.let {
-            TdApi.InputMessageReplyToMessage(it, null, 0, "")
-        }
         val content = TdApi.InputMessageVideo(
             TdApi.InputFileLocal(videoPath),
             null,
@@ -277,11 +483,7 @@ class TelegramClient(private val application: Application) {
             null,
             false
         )
-        return when (val result = send(TdApi.SendMessage(chatId, null, reply, null, null, content))) {
-            is TdApi.Message -> Result.success(result)
-            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
-            else -> Result.failure(IllegalStateException("Unexpected send video result"))
-        }
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
     }
 
     suspend fun sendVoiceNote(
@@ -289,11 +491,9 @@ class TelegramClient(private val application: Application) {
         voicePath: String,
         duration: Int,
         waveform: ByteArray = ByteArray(0),
-        replyToMessageId: Long? = null
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
     ): Result<TdApi.Message> {
-        val reply = replyToMessageId?.takeIf { it != 0L }?.let {
-            TdApi.InputMessageReplyToMessage(it, null, 0, "")
-        }
         val content = TdApi.InputMessageVoiceNote(
             TdApi.InputFileLocal(voicePath),
             duration,
@@ -301,33 +501,23 @@ class TelegramClient(private val application: Application) {
             TdApi.FormattedText("", emptyArray()),
             null
         )
-        return when (val result = send(TdApi.SendMessage(chatId, null, reply, null, null, content))) {
-            is TdApi.Message -> Result.success(result)
-            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
-            else -> Result.failure(IllegalStateException("Unexpected send voice note result"))
-        }
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
     }
 
     suspend fun sendDocument(
         chatId: Long,
         docPath: String,
         caption: String = "",
-        replyToMessageId: Long? = null
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
     ): Result<TdApi.Message> {
-        val reply = replyToMessageId?.takeIf { it != 0L }?.let {
-            TdApi.InputMessageReplyToMessage(it, null, 0, "")
-        }
         val content = TdApi.InputMessageDocument(
             TdApi.InputFileLocal(docPath),
             null,
             false,
             TdApi.FormattedText(caption, emptyArray())
         )
-        return when (val result = send(TdApi.SendMessage(chatId, null, reply, null, null, content))) {
-            is TdApi.Message -> Result.success(result)
-            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
-            else -> Result.failure(IllegalStateException("Unexpected send document result"))
-        }
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
     }
 
     suspend fun editMessage(chatId: Long, messageId: Long, newText: String): Result<TdApi.Message> {
@@ -343,6 +533,31 @@ class TelegramClient(private val application: Application) {
         }
     }
 
+    /**
+     * Toggles this account's reaction.
+     *
+     * Telegram has no single toggle, so the direction is decided from the state the
+     * server last reported — never from an optimistic local flag, which is how a
+     * double-tap ends up adding a reaction the user meant to remove.
+     */
+    suspend fun toggleReaction(
+        chatId: Long,
+        messageId: Long,
+        emoji: String,
+        isCurrentlyChosen: Boolean
+    ): Result<Unit> {
+        return if (isCurrentlyChosen) {
+            removeReaction(chatId, messageId, emoji)
+        } else {
+            addReaction(chatId, messageId, emoji)
+        }
+    }
+
+    suspend fun removeReaction(chatId: Long, messageId: Long, emoji: String): Result<Unit> {
+        val reaction = TdApi.ReactionTypeEmoji(emoji)
+        return sendExpectOk(TdApi.RemoveMessageReaction(chatId, messageId, reaction))
+    }
+
     suspend fun addReaction(chatId: Long, messageId: Long, emoji: String): Result<Unit> {
         val reaction = TdApi.ReactionTypeEmoji(emoji)
         return sendExpectOk(TdApi.AddMessageReaction(chatId, messageId, reaction, false, true))
@@ -352,13 +567,304 @@ class TelegramClient(private val application: Application) {
         return sendExpectOk(TdApi.PinChatMessage(chatId, messageId, false, onlyForSelf))
     }
 
-    suspend fun forwardMessages(toChatId: Long, fromChatId: Long, messageIds: LongArray): Result<Unit> {
-        return when (send(TdApi.ForwardMessages(toChatId, null, fromChatId, messageIds, null, false, false))) {
-            is TdApi.Messages -> Result.success(Unit)
-            is TdApi.Error -> Result.failure(IllegalStateException("Failed to forward"))
-            else -> Result.failure(IllegalStateException("Unexpected forward result"))
+    suspend fun unpinMessage(chatId: Long, messageId: Long): Result<Unit> {
+        return sendExpectOk(TdApi.UnpinChatMessage(chatId, messageId))
+    }
+
+    suspend fun createVoiceCall(userId: Long): Result<Int> {
+        val protocol = TdApi.CallProtocol(true, true, 65, 92, arrayOf("1.0.0"))
+        return when (val result = send(TdApi.CreateCall(userId, protocol, false))) {
+            is TdApi.CallId -> {
+                val targetUser = getUser(userId)
+                _activeCallState.value = com.foresightlabs.aether.domain.model.ActiveCall(
+                    callId = result.id,
+                    userId = userId,
+                    user = targetUser,
+                    isOutgoing = true,
+                    isVideo = false,
+                    state = com.foresightlabs.aether.domain.model.CallStateEnum.PENDING,
+                    isMuted = false,
+                    isSpeakerOn = false,
+                    isMinimized = false
+                )
+                Result.success(result.id)
+            }
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to initiate voice call"))
         }
     }
+
+    suspend fun acceptCall(callId: Int): Result<Unit> {
+        val protocol = TdApi.CallProtocol(true, true, 65, 92, arrayOf("1.0.0"))
+        return sendExpectOk(TdApi.AcceptCall(callId, protocol))
+    }
+
+    suspend fun discardCall(callId: Int): Result<Unit> {
+        return sendExpectOk(TdApi.DiscardCall(callId, false, "", 0, false, 0))
+    }
+
+    fun toggleCallMute() {
+        val current = _activeCallState.value ?: return
+        val updatedMute = !current.isMuted
+        _activeCallState.value = current.copy(isMuted = updatedMute)
+        updateAudioHardware(isMuted = updatedMute, isSpeakerOn = current.isSpeakerOn)
+    }
+
+    fun toggleCallSpeaker() {
+        val current = _activeCallState.value ?: return
+        val updatedSpeaker = !current.isSpeakerOn
+        _activeCallState.value = current.copy(isSpeakerOn = updatedSpeaker)
+        updateAudioHardware(isMuted = current.isMuted, isSpeakerOn = updatedSpeaker)
+    }
+
+    fun setCallMinimized(minimized: Boolean) {
+        val current = _activeCallState.value ?: return
+        _activeCallState.value = current.copy(isMinimized = minimized)
+    }
+
+    /**
+     * Records that the call could not carry audio, so the call screen can say so
+     * instead of showing a connected call the user cannot hear.
+     */
+    fun reportCallMediaUnavailable(reason: String) {
+        val current = _activeCallState.value ?: return
+        _activeCallState.value = current.copy(
+            mediaState = MediaConnectionState.UNAVAILABLE,
+            errorMessage = reason
+        )
+    }
+
+    fun updateCallDuration(durationSec: Int) {
+        val current = _activeCallState.value ?: return
+        _activeCallState.value = current.copy(durationSec = durationSec)
+    }
+
+    suspend fun getUser(userId: Long): User? {
+        val cached = users[userId]
+        if (cached != null) return TelegramMappers.mapUser(cached)
+        return when (val result = send(TdApi.GetUser(userId))) {
+            is TdApi.User -> {
+                users[userId] = result
+                TelegramMappers.mapUser(result)
+            }
+            else -> null
+        }
+    }
+
+    suspend fun searchCallMessages(offset: String = "", limit: Int = 50, onlyMissed: Boolean = false): Result<TdApi.FoundMessages> {
+        return when (val result = send(TdApi.SearchCallMessages(offset, limit, onlyMissed))) {
+            is TdApi.FoundMessages -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to search call messages"))
+        }
+    }
+
+    private fun handleCallUpdate(call: TdApi.Call) {
+        latestRawCallState.value = call
+        val (stateEnum, errorMsg) = when (val state = call.state) {
+            is TdApi.CallStatePending -> com.foresightlabs.aether.domain.model.CallStateEnum.PENDING to null
+            is TdApi.CallStateExchangingKeys -> com.foresightlabs.aether.domain.model.CallStateEnum.EXCHANGING_KEYS to null
+            is TdApi.CallStateReady -> com.foresightlabs.aether.domain.model.CallStateEnum.READY to null
+            is TdApi.CallStateHangingUp -> com.foresightlabs.aether.domain.model.CallStateEnum.HANGING_UP to null
+            is TdApi.CallStateDiscarded -> com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED to null
+            is TdApi.CallStateError -> com.foresightlabs.aether.domain.model.CallStateEnum.ERROR to TdErrors.userMessage(state.error)
+            else -> com.foresightlabs.aether.domain.model.CallStateEnum.PENDING to null
+        }
+
+        if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.READY) {
+            updateAudioHardware(
+                isMuted = _activeCallState.value?.isMuted ?: false,
+                isSpeakerOn = _activeCallState.value?.isSpeakerOn ?: false
+            )
+        } else if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED ||
+            stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.ERROR
+        ) {
+            resetAudioHardware()
+        }
+
+        val currentCall = _activeCallState.value
+        val cachedUser = users[call.userId]?.let { TelegramMappers.mapUser(it) }
+
+        val updated = com.foresightlabs.aether.domain.model.ActiveCall(
+            callId = call.id,
+            userId = call.userId,
+            user = cachedUser ?: currentCall?.user,
+            isOutgoing = call.isOutgoing,
+            isVideo = call.isVideo,
+            state = stateEnum,
+            isMuted = currentCall?.isMuted ?: false,
+            isSpeakerOn = currentCall?.isSpeakerOn ?: false,
+            durationSec = if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.READY) (currentCall?.durationSec ?: 0) else 0,
+            isMinimized = currentCall?.isMinimized ?: false,
+            errorMessage = errorMsg
+        )
+        _activeCallState.value = updated
+
+        if (cachedUser == null && currentCall?.user == null) {
+            scope.launch {
+                val fetchedUser = getUser(call.userId)
+                if (fetchedUser != null && _activeCallState.value?.callId == call.id) {
+                    _activeCallState.value = _activeCallState.value?.copy(user = fetchedUser)
+                }
+            }
+        }
+
+        if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED ||
+            stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.ERROR
+        ) {
+            scope.launch {
+                delay(2000)
+                if (_activeCallState.value?.callId == call.id) {
+                    _activeCallState.value = null
+                }
+            }
+        }
+    }
+
+    private fun resetAudioHardware() {
+        try {
+            val audioManager = application.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
+            audioManager?.mode = android.media.AudioManager.MODE_NORMAL
+            audioManager?.isMicrophoneMute = false
+            audioManager?.isSpeakerphoneOn = false
+        } catch (_: Exception) {}
+    }
+
+    private fun updateAudioHardware(isMuted: Boolean, isSpeakerOn: Boolean) {
+        try {
+            val audioManager = application.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
+            audioManager?.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+            audioManager?.isMicrophoneMute = isMuted
+            audioManager?.isSpeakerphoneOn = isSpeakerOn
+        } catch (_: Exception) {}
+    }
+
+
+
+    /**
+     * Forwards one or more messages.
+     *
+     * [sendCopy] forwards without attribution — the message appears as though the
+     * forwarder wrote it. [removeCaption] drops media captions and is only meaningful
+     * alongside a copy, since an attributed forward keeps the original intact.
+     *
+     * Both are real TDLib options rather than client-side rewriting: Aether never
+     * re-sends content as a new message to imitate a forward.
+     */
+    suspend fun forwardMessages(
+        toChatId: Long,
+        fromChatId: Long,
+        messageIds: LongArray,
+        sendCopy: Boolean = false,
+        removeCaption: Boolean = false,
+        toForumTopicId: Int? = null
+    ): Result<Unit> {
+        val function = TdApi.ForwardMessages(
+            toChatId,
+            topicOf(toForumTopicId),
+            fromChatId,
+            messageIds,
+            null,
+            sendCopy,
+            removeCaption && sendCopy
+        )
+        return when (val result = send(function)) {
+            is TdApi.Messages -> Result.success(Unit)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Messages could not be forwarded"))
+        }
+    }
+
+    // --- chat folders -----------------------------------------------------------
+
+    private val _chatFolders = MutableStateFlow<List<ChatFolder>>(listOf(ChatFolder.Main))
+
+    /**
+     * The account's Telegram folders, with the main list in its server-defined
+     * position among them.
+     */
+    val chatFolders: StateFlow<List<ChatFolder>> = _chatFolders.asStateFlow()
+
+    /**
+     * The chats belonging to [folder], in that folder's own order.
+     *
+     * Ordering comes from the folder's [TdApi.ChatPosition], not from re-sorting the
+     * main list, because a folder's order is server state other clients agree on.
+     */
+    fun chatsInFolder(folder: ChatFolder): List<Chat> {
+        if (folder.isMainList) return _chatList.value
+        return chats.values
+            .mapNotNull { raw ->
+                val position = ChatOrdering.folderPosition(raw.positions, folder.id)
+                    ?: return@mapNotNull null
+                mapUiChat(raw).copy(
+                    order = position.order,
+                    isPinned = position.isPinned
+                )
+            }
+            .sortedWith(
+                compareByDescending<Chat> { it.isPinned }
+                    .thenByDescending { it.order }
+            )
+    }
+
+    // --- forum topics -----------------------------------------------------------
+
+    /** Whether this chat is a forum supergroup, per Telegram. */
+    fun isForum(chatId: Long): Boolean {
+        val type = chats[chatId]?.type as? TdApi.ChatTypeSupergroup ?: return false
+        return supergroups[type.supergroupId]?.isForum == true
+    }
+
+    /** The topics of a forum supergroup, in Telegram's own order. */
+    suspend fun forumTopics(chatId: Long, limit: Int = 50): List<ForumTopicSummary> {
+        val result = send(TdApi.GetForumTopics(chatId, "", 0, 0L, 0, limit))
+        val topics = (result as? TdApi.ForumTopics)?.topics ?: return emptyList()
+        return topics.filterNotNull().map { topic -> mapForumTopic(chatId, topic) }
+    }
+
+    private fun mapForumTopic(chatId: Long, topic: TdApi.ForumTopic): ForumTopicSummary {
+        val info = topic.info
+        return ForumTopicSummary(
+            chatId = chatId,
+            topicId = info?.forumTopicId ?: 0,
+            name = info?.name.orEmpty().ifBlank { "General" },
+            isGeneral = info?.isGeneral == true,
+            isClosed = info?.isClosed == true,
+            isHidden = info?.isHidden == true,
+            isPinned = topic.isPinned,
+            unreadCount = topic.unreadCount,
+            unreadMentionCount = topic.unreadMentionCount,
+            order = topic.order,
+            lastMessagePreview = topic.lastMessage
+                ?.let { TelegramMappers.mapContent(it.content).first }
+                .orEmpty(),
+            draftText = TelegramMappers.draftText(topic.draftMessage),
+            isMuted = topic.notificationSettings?.let {
+                !it.useDefaultMuteFor && it.muteFor > 0
+            } == true
+        )
+    }
+
+    suspend fun createForumTopic(chatId: Long, name: String): Result<Int> {
+        return when (val result = send(TdApi.CreateForumTopic(chatId, name, false, null))) {
+            is TdApi.ForumTopicInfo -> Result.success(result.forumTopicId)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Topic could not be created"))
+        }
+    }
+
+    suspend fun renameForumTopic(chatId: Long, topicId: Int, name: String): Result<Unit> =
+        sendExpectOk(TdApi.EditForumTopic(chatId, topicId, name, false, 0L))
+
+    suspend fun setForumTopicClosed(chatId: Long, topicId: Int, closed: Boolean): Result<Unit> =
+        sendExpectOk(TdApi.ToggleForumTopicIsClosed(chatId, topicId, closed))
+
+    suspend fun setForumTopicPinned(chatId: Long, topicId: Int, pinned: Boolean): Result<Unit> =
+        sendExpectOk(TdApi.ToggleForumTopicIsPinned(chatId, topicId, pinned))
+
+    suspend fun deleteForumTopic(chatId: Long, topicId: Int): Result<Unit> =
+        sendExpectOk(TdApi.DeleteForumTopic(chatId, topicId))
 
     suspend fun getContacts(): List<User> {
         return when (val result = send(TdApi.GetContacts())) {
@@ -373,6 +879,18 @@ class TelegramClient(private val application: Application) {
                 list
             }
             else -> emptyList()
+        }
+    }
+
+    /**
+     * Contacts matching [query], presented as conversations so they can be opened
+     * directly. A contact with no chat yet still resolves — a private chat is created
+     * on open, which is what tapping the row means.
+     */
+    suspend fun searchContactChats(query: String, limit: Int = 30): List<Chat> {
+        return searchContacts(query, limit).mapNotNull { user ->
+            val userId = user.id.toLongOrNull() ?: return@mapNotNull null
+            chat(userId) ?: chats[userId]?.let { mapUiChat(it) } ?: TelegramMappers.chatForUser(user)
         }
     }
 
@@ -403,13 +921,373 @@ class TelegramClient(private val application: Application) {
         return sendExpectOk(TdApi.ResendMessages(chatId, longArrayOf(messageId), null, 0))
     }
 
-    suspend fun deleteMessages(chatId: Long, messageIds: LongArray): Result<Unit> {
-        return sendExpectOk(TdApi.DeleteMessages(chatId, messageIds, true))
+    /**
+     * Deletes messages at the scope the caller asked for.
+     *
+     * [revoke] is the difference between removing a message from this account's copy
+     * of the chat and removing it from everybody's, so it is never defaulted — the
+     * caller must have resolved which one the user chose.
+     */
+    suspend fun deleteMessages(
+        chatId: Long,
+        messageIds: LongArray,
+        revoke: Boolean
+    ): Result<Unit> {
+        return sendExpectOk(TdApi.DeleteMessages(chatId, messageIds, revoke))
+    }
+
+    /**
+     * Asks Telegram what the current account may actually do with a message.
+     *
+     * Aether never infers this. The server's answer already accounts for the edit
+     * window, content protection, the account's rights in the chat and the message's
+     * age — none of which can be derived from the message alone.
+     */
+    suspend fun messageCapabilities(chatId: Long, messageId: Long): MessageCapabilities {
+        val result = send(TdApi.GetMessageProperties(chatId, messageId))
+        val properties = result as? TdApi.MessageProperties ?: return MessageCapabilities.Unknown
+        return MessageCapabilities(
+            canBeEdited = properties.canBeEdited,
+            canEditMedia = properties.canEditMedia,
+            canBeDeletedOnlyForSelf = properties.canBeDeletedOnlyForSelf,
+            canBeDeletedForAllUsers = properties.canBeDeletedForAllUsers,
+            canBeForwarded = properties.canBeForwarded,
+            canBeReplied = properties.canBeReplied,
+            canBePinned = properties.canBePinned,
+            canBeCopied = properties.canBeCopied,
+            canBeSaved = properties.canBeSaved,
+            canGetLink = properties.canGetLink,
+            canGetReadDate = properties.canGetReadDate,
+            canGetViewers = properties.canGetViewers,
+            canDeleteReactions = properties.canDeleteReactions
+        )
+    }
+
+    // --- chat-list operations ------------------------------------------------
+    //
+    // Every one of these is a real TDLib call whose result Telegram then reports
+    // back through the update stream. None of them touch Aether's local chat list
+    // directly: the list is redrawn from the update, so what Aether shows is what
+    // Telegram actually did.
+
+    /**
+     * Pins or unpins a chat in a chat list. This is chat-list pinning, and has
+     * nothing to do with pinning a message inside a chat — see [pinMessage].
+     */
+    suspend fun setChatPinned(chatId: Long, pinned: Boolean, archived: Boolean = false): Result<Unit> {
+        val list: TdApi.ChatList =
+            if (archived) TdApi.ChatListArchive() else TdApi.ChatListMain()
+        return sendExpectOk(TdApi.ToggleChatIsPinned(list, chatId, pinned))
+    }
+
+    /** Marks a chat unread, or clears that mark, on the server. */
+    suspend fun setChatMarkedAsUnread(chatId: Long, markedAsUnread: Boolean): Result<Unit> {
+        return sendExpectOk(TdApi.ToggleChatIsMarkedAsUnread(chatId, markedAsUnread))
+    }
+
+    /** Reads the chat up to and including [upToMessageId] on the server. */
+    suspend fun readChat(chatId: Long, upToMessageId: Long): Result<Unit> {
+        if (upToMessageId == 0L) return Result.success(Unit)
+        return sendExpectOk(TdApi.ViewMessages(chatId, longArrayOf(upToMessageId), null, true))
+    }
+
+    /**
+     * Mutes or unmutes a chat through its Telegram notification settings.
+     *
+     * [muteForSeconds] of zero unmutes. Anything else mutes for that long, which is
+     * how Telegram itself expresses both "mute" and "mute for an hour".
+     */
+    suspend fun setChatMuted(chatId: Long, muteForSeconds: Int): Result<Unit> {
+        val existing = chats[chatId]?.notificationSettings
+        val settings = TdApi.ChatNotificationSettings().apply {
+            useDefaultMuteFor = false
+            muteFor = muteForSeconds
+            useDefaultSound = existing?.useDefaultSound ?: true
+            soundId = existing?.soundId ?: 0L
+            useDefaultShowPreview = existing?.useDefaultShowPreview ?: true
+            showPreview = existing?.showPreview ?: true
+            useDefaultMuteStories = existing?.useDefaultMuteStories ?: true
+            muteStories = existing?.muteStories ?: false
+            useDefaultStorySound = existing?.useDefaultStorySound ?: true
+            storySoundId = existing?.storySoundId ?: 0L
+            useDefaultShowStoryPoster = existing?.useDefaultShowStoryPoster ?: true
+            showStoryPoster = existing?.showStoryPoster ?: false
+            useDefaultDisablePinnedMessageNotifications =
+                existing?.useDefaultDisablePinnedMessageNotifications ?: true
+            disablePinnedMessageNotifications =
+                existing?.disablePinnedMessageNotifications ?: false
+            useDefaultDisableMentionNotifications =
+                existing?.useDefaultDisableMentionNotifications ?: true
+            disableMentionNotifications = existing?.disableMentionNotifications ?: false
+        }
+        return sendExpectOk(TdApi.SetChatNotificationSettings(chatId, settings))
+    }
+
+    /** Moves a chat between the main and archive chat lists on the server. */
+    suspend fun setChatArchived(chatId: Long, archived: Boolean): Result<Unit> {
+        val list: TdApi.ChatList =
+            if (archived) TdApi.ChatListArchive() else TdApi.ChatListMain()
+        return sendExpectOk(TdApi.AddChatToList(chatId, list))
+    }
+
+    /**
+     * Clears a chat's history.
+     *
+     * [removeFromChatList] decides whether the conversation also leaves the list, and
+     * [revoke] whether the history is cleared for the other side too. Both are the
+     * caller's explicit choice because they are three different user-facing
+     * operations wearing one TDLib function.
+     */
+    suspend fun deleteChatHistory(
+        chatId: Long,
+        removeFromChatList: Boolean,
+        revoke: Boolean
+    ): Result<Unit> {
+        return sendExpectOk(TdApi.DeleteChatHistory(chatId, removeFromChatList, revoke))
+    }
+
+    /** Leaves a group, supergroup or channel. */
+    suspend fun leaveChat(chatId: Long): Result<Unit> {
+        return sendExpectOk(TdApi.LeaveChat(chatId))
+    }
+
+    /** Blocks or unblocks a user. */
+    suspend fun setUserBlocked(userId: Long, blocked: Boolean): Result<Unit> {
+        val sender: TdApi.MessageSender = TdApi.MessageSenderUser(userId)
+        val blockList: TdApi.BlockList? = if (blocked) TdApi.BlockListMain() else null
+        return sendExpectOk(TdApi.SetMessageSenderBlockList(sender, blockList))
+    }
+
+    /**
+     * Stores a draft on the server so it follows the account to other clients.
+     *
+     * A blank draft clears it rather than storing an empty one.
+     */
+    suspend fun setChatDraft(
+        chatId: Long,
+        text: String,
+        replyToMessageId: Long?,
+        forumTopicId: Int? = null
+    ): Result<Unit> {
+        val draft = if (text.isBlank()) {
+            null
+        } else {
+            TdApi.DraftMessage().apply {
+                replyTo = replyToMessageId?.takeIf { it != 0L }?.let {
+                    TdApi.InputMessageReplyToMessage(it, null, 0, null)
+                }
+                date = (System.currentTimeMillis() / 1000).toInt()
+                inputMessageText = TdApi.InputMessageText(
+                    TdApi.FormattedText(text, emptyArray()),
+                    null,
+                    false
+                )
+            }
+        }
+        return sendExpectOk(
+            TdApi.SetChatDraftMessage(chatId, topicOf(forumTopicId), draft)
+        )
+    }
+
+    /** Telegram's own ceiling on how many items one album may hold. */
+    private val ALBUM_LIMIT = 10
+
+    /** Fire-and-forget draft store, for teardown paths that cannot suspend. */
+    fun setChatDraftAsync(
+        chatId: Long,
+        text: String,
+        replyToMessageId: Long?,
+        forumTopicId: Int? = null
+    ) {
+        scope.launch { setChatDraft(chatId, text, replyToMessageId, forumTopicId) }
+    }
+
+    // --- polls ------------------------------------------------------------------
+
+    /**
+     * Casts or changes this account's vote.
+     *
+     * An empty [optionIndices] retracts the vote, which Telegram permits only when
+     * the poll allows revoting — the policy that decides whether to offer it lives
+     * in [PollPresentation].
+     */
+    suspend fun setPollAnswer(
+        chatId: Long,
+        messageId: Long,
+        optionIndices: IntArray
+    ): Result<Unit> {
+        return sendExpectOk(TdApi.SetPollAnswer(chatId, messageId, optionIndices))
+    }
+
+    /** Stops a poll, so no further votes are accepted. */
+    suspend fun stopPoll(chatId: Long, messageId: Long): Result<Unit> {
+        return sendExpectOk(TdApi.StopPoll(chatId, messageId, null))
+    }
+
+    /**
+     * What Aether is currently doing in a chat, as Telegram models it.
+     *
+     * The distinction matters to the other side: "recording a voice message" and
+     * "typing" are different pieces of information, and sending the latter while
+     * doing the former is a small lie the recipient acts on.
+     */
+    enum class OutgoingChatAction {
+        TYPING,
+        RECORDING_VOICE,
+        RECORDING_VIDEO,
+        UPLOADING_PHOTO,
+        UPLOADING_VIDEO,
+        UPLOADING_DOCUMENT,
+        UPLOADING_VOICE,
+        CHOOSING_STICKER,
+        CHOOSING_CONTACT,
+        CHOOSING_LOCATION,
+
+        /** Clears whatever action was showing. */
+        CANCEL
+    }
+
+    /**
+     * Tells the chat what this account is doing.
+     *
+     * Telegram expires an action after a few seconds on its own, so this is repeated
+     * by the caller while the activity continues and sent once as [OutgoingChatAction.CANCEL]
+     * when it stops — leaving a stale "typing…" on someone else's screen is worse
+     * than showing nothing.
+     */
+    suspend fun sendChatAction(chatId: Long, action: OutgoingChatAction) {
+        val td: TdApi.ChatAction = when (action) {
+            OutgoingChatAction.TYPING -> TdApi.ChatActionTyping()
+            OutgoingChatAction.RECORDING_VOICE -> TdApi.ChatActionRecordingVoiceNote()
+            OutgoingChatAction.RECORDING_VIDEO -> TdApi.ChatActionRecordingVideo()
+            OutgoingChatAction.UPLOADING_PHOTO -> TdApi.ChatActionUploadingPhoto(0)
+            OutgoingChatAction.UPLOADING_VIDEO -> TdApi.ChatActionUploadingVideo(0)
+            OutgoingChatAction.UPLOADING_DOCUMENT -> TdApi.ChatActionUploadingDocument(0)
+            OutgoingChatAction.UPLOADING_VOICE -> TdApi.ChatActionUploadingVoiceNote(0)
+            OutgoingChatAction.CHOOSING_STICKER -> TdApi.ChatActionChoosingSticker()
+            OutgoingChatAction.CHOOSING_CONTACT -> TdApi.ChatActionChoosingContact()
+            OutgoingChatAction.CHOOSING_LOCATION -> TdApi.ChatActionChoosingLocation()
+            OutgoingChatAction.CANCEL -> TdApi.ChatActionCancel()
+        }
+        send(TdApi.SendChatAction(chatId, null, null, td))
     }
 
     suspend fun sendTyping(chatId: Long) {
-        send(TdApi.SendChatAction(chatId, null, null, TdApi.ChatActionTyping()))
+        sendChatAction(chatId, OutgoingChatAction.TYPING)
     }
+
+    // --- search ---------------------------------------------------------------
+
+    /**
+     * Searches one conversation on the server.
+     *
+     * Server-backed rather than a filter over whatever the list happens to have
+     * loaded, so a match a thousand messages back is found. [fromMessageId] of zero
+     * starts from the newest message; the returned [FoundChatMessages.nextFromMessageId]
+     * continues the search.
+     */
+    suspend fun searchChatMessages(
+        chatId: Long,
+        query: String,
+        fromMessageId: Long = 0L,
+        limit: Int = 50,
+        forumTopicId: Int? = null
+    ): Result<TdApi.FoundChatMessages> {
+        if (query.isBlank()) return Result.failure(IllegalArgumentException("Empty query"))
+        val function = TdApi.SearchChatMessages(
+            chatId,
+            // Scoped to the open topic, so a forum search answers about what the
+            // user is actually reading.
+            topicOf(forumTopicId),
+            query,
+            null,
+            fromMessageId,
+            0,
+            limit,
+            null
+        )
+        return when (val result = send(function)) {
+            is TdApi.FoundChatMessages -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Search failed"))
+        }
+    }
+
+    /**
+     * Searches messages across every chat the account can see.
+     *
+     * Paginated through TDLib's own opaque offset — Aether never invents one.
+     */
+    suspend fun searchMessagesGlobally(
+        query: String,
+        offset: String = "",
+        limit: Int = 40
+    ): Result<TdApi.FoundMessages> {
+        if (query.isBlank()) return Result.failure(IllegalArgumentException("Empty query"))
+        val function = TdApi.SearchMessages(
+            TdApi.ChatListMain(),
+            query,
+            offset,
+            limit,
+            null,
+            null,
+            0,
+            0
+        )
+        return when (val result = send(function)) {
+            is TdApi.FoundMessages -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Search failed"))
+        }
+    }
+
+    /**
+     * Loads the window of history around [messageId] so a search or reply target can
+     * be scrolled to even when it was never loaded.
+     *
+     * TDLib's negative offset returns messages newer than the anchor as well as
+     * older ones, which is what makes the target land mid-viewport rather than at
+     * the very top.
+     */
+    suspend fun loadHistoryAround(
+        chatId: Long,
+        messageId: Long,
+        limit: Int = 40
+    ): List<Message> {
+        val result = send(
+            TdApi.GetChatHistory(chatId, messageId, -limit / 2, limit, false)
+        )
+        val messages = (result as? TdApi.Messages)?.messages ?: return emptyList()
+        return messages.mapNotNull { td -> td?.let(::mapUiMessage) }.reversed()
+    }
+
+    /**
+     * Every pinned message in a chat, newest first.
+     *
+     * Uses Telegram's own pinned filter rather than scanning loaded history, so a
+     * message pinned long ago is found even when it is thousands of messages back.
+     */
+    suspend fun pinnedMessages(
+        chatId: Long,
+        limit: Int = 20,
+        forumTopicId: Int? = null
+    ): List<Message> {
+        val function = TdApi.SearchChatMessages(
+            chatId,
+            topicOf(forumTopicId),
+            "",
+            null,
+            0L,
+            0,
+            limit,
+            TdApi.SearchMessagesFilterPinned()
+        )
+        val found = send(function) as? TdApi.FoundChatMessages ?: return emptyList()
+        return found.messages.filterNotNull().map(::mapUiMessage)
+    }
+
+    /** Maps a TDLib message found by search into Aether's model. */
+    fun mapFoundMessage(message: TdApi.Message): Message = mapUiMessage(message)
 
     suspend fun searchChats(query: String): List<Chat> {
         if (query.isBlank()) return _chatList.value
@@ -456,10 +1334,119 @@ class TelegramClient(private val application: Application) {
 
     private val conversationFlows = ConcurrentHashMap<Long, MutableStateFlow<List<Message>>>()
 
+    /**
+     * The TDLib messages behind the mapped ones, so a bubble can be re-mapped when
+     * its media finishes downloading without another round trip.
+     */
+    private val rawMessages = ConcurrentHashMap<Long, TdApi.Message>()
+
+    /** Supergroup records, which carry the forum flag and member counts. */
+    private val supergroups = ConcurrentHashMap<Long, TdApi.Supergroup>()
+    private val basicGroups = ConcurrentHashMap<Long, TdApi.BasicGroup>()
+    private val secretChats = ConcurrentHashMap<Int, TdApi.SecretChat>()
+
+    private val _forumTopicRevision = MutableStateFlow(0)
+
+    /**
+     * Bumped whenever Telegram reports a forum topic change.
+     *
+     * An open topic list observes this and re-reads, so a topic created, renamed or
+     * closed elsewhere appears without the user pulling to refresh.
+     */
+    val forumTopicRevision: StateFlow<Int> = _forumTopicRevision.asStateFlow()
+
     private suspend fun handleUpdate(update: TdApi.Object) {
         when (update) {
+            is TdApi.UpdateCall -> handleCallUpdate(update.call)
             is TdApi.UpdateAuthorizationState -> onAuth(update.authorizationState)
             is TdApi.UpdateConnectionState -> _connection.value = TelegramMappers.mapConnection(update.state)
+            is TdApi.UpdateChatFolders -> {
+                // Telegram decides where the main list sits among the folders; it is
+                // inserted at that index rather than assumed to come first.
+                val folders = update.chatFolders.orEmpty().filterNotNull().map { info ->
+                    ChatFolder(
+                        id = info.id,
+                        title = info.name?.text?.text.orEmpty().ifBlank { "Folder" }
+                    )
+                }
+                val position = update.mainChatListPosition.coerceIn(0, folders.size)
+                _chatFolders.value = folders.toMutableList().apply {
+                    add(position, ChatFolder.Main)
+                }
+            }
+            // --- chat state that Aether's own actions change ----------------
+            // Each of these is the server's confirmation of an action the user just
+            // took. Without them the row keeps showing the state it had before, and
+            // the action looks as though it silently failed.
+            is TdApi.UpdateChatIsMarkedAsUnread -> {
+                chats[update.chatId]?.isMarkedAsUnread = update.isMarkedAsUnread
+                publishChats()
+            }
+            is TdApi.UpdateChatBlockList -> {
+                chats[update.chatId]?.blockList = update.blockList
+                publishChats()
+            }
+            is TdApi.UpdateChatPermissions -> {
+                chats[update.chatId]?.permissions = update.permissions
+                publishChats()
+            }
+            is TdApi.UpdateChatUnreadMentionCount -> {
+                chats[update.chatId]?.unreadMentionCount = update.unreadMentionCount
+                publishChats()
+            }
+            is TdApi.UpdateChatUnreadReactionCount -> {
+                chats[update.chatId]?.unreadReactionCount = update.unreadReactionCount
+                publishChats()
+            }
+            is TdApi.UpdateChatAddedToList, is TdApi.UpdateChatRemovedFromList -> {
+                // Archive and folder membership are carried by chat positions, which
+                // arrive separately; this simply refreshes what is already held.
+                publishChats()
+            }
+            is TdApi.UpdateChatHasProtectedContent -> {
+                chats[update.chatId]?.hasProtectedContent = update.hasProtectedContent
+                publishChats()
+            }
+            is TdApi.UpdateChatMessageAutoDeleteTime -> {
+                chats[update.chatId]?.messageAutoDeleteTime = update.messageAutoDeleteTime
+                publishChats()
+            }
+            is TdApi.UpdateBasicGroup -> {
+                basicGroups[update.basicGroup.id] = update.basicGroup
+                publishChats()
+            }
+            is TdApi.UpdateSecretChat -> {
+                secretChats[update.secretChat.id] = update.secretChat
+                publishChats()
+            }
+            is TdApi.UpdateForumTopicInfo -> {
+                // A topic was created or renamed; the open topic list re-reads it.
+                _forumTopicRevision.value = _forumTopicRevision.value + 1
+            }
+            is TdApi.UpdateForumTopic -> {
+                _forumTopicRevision.value = _forumTopicRevision.value + 1
+            }
+            is TdApi.UpdateMessageMentionRead -> {
+                chats[update.chatId]?.unreadMentionCount = update.unreadMentionCount
+                publishChats()
+            }
+            is TdApi.UpdateMessageUnreadReactions -> {
+                chats[update.chatId]?.unreadReactionCount = update.unreadReactionCount
+                publishChats()
+            }
+            is TdApi.UpdateMessageContentOpened -> {
+                // Self-destructing media has been viewed; its content will follow in
+                // an UpdateMessageContent, so nothing is guessed here.
+                rawMessages[update.messageId]?.let { raw ->
+                    replaceMessage(update.chatId, update.messageId.toString(), mapUiMessage(raw))
+                }
+            }
+            is TdApi.UpdateSupergroup -> {
+                // Carries the forum flag, which decides whether a chat opens as a
+                // topic list or as a single conversation.
+                supergroups[update.supergroup.id] = update.supergroup
+                publishChats()
+            }
             is TdApi.UpdateUser -> {
                 users[update.user.id] = update.user
                 requestUserPhoto(update.user)
@@ -536,11 +1523,43 @@ class TelegramClient(private val application: Application) {
                 publishChats()
             }
             is TdApi.UpdateMessageContent -> {
+                // Re-map through the full presentation path. Mapping only the preview
+                // text here used to flatten a photo, poll or formatted message into a
+                // plain text bubble the moment anything about it changed — which a
+                // poll vote does on every single vote.
+                val cached = rawMessages[update.messageId]
+                if (cached != null && cached.chatId == update.chatId) {
+                    cached.content = update.newContent
+                    replaceMessage(update.chatId, update.messageId.toString(), mapUiMessage(cached))
+                } else {
+                    conversationFlows[update.chatId]?.update { list ->
+                        list.map { current ->
+                            if (current.id == update.messageId.toString()) {
+                                val (text, type) = TelegramMappers.mapContent(update.newContent)
+                                current.copy(text = text, type = type)
+                            } else current
+                        }
+                    }
+                }
+            }
+            is TdApi.UpdateMessageInteractionInfo -> {
+                // Reaction counts and the "you reacted" flag, straight from Telegram.
+                val reactions = TelegramMappers.mapReactions(update.interactionInfo)
+                rawMessages[update.messageId]?.interactionInfo = update.interactionInfo
                 conversationFlows[update.chatId]?.update { list ->
                     list.map { current ->
                         if (current.id == update.messageId.toString()) {
-                            val (text, type) = TelegramMappers.mapContent(update.newContent)
-                            current.copy(text = text, type = type, isEdited = true)
+                            current.copy(reactions = reactions)
+                        } else current
+                    }
+                }
+            }
+            is TdApi.UpdateMessageIsPinned -> {
+                rawMessages[update.messageId]?.isPinned = update.isPinned
+                conversationFlows[update.chatId]?.update { list ->
+                    list.map { current ->
+                        if (current.id == update.messageId.toString()) {
+                            current.copy(isPinned = update.isPinned)
                         } else current
                     }
                 }
@@ -716,6 +1735,32 @@ class TelegramClient(private val application: Application) {
         photoPaths["file:${file.id}"] = path
         users.values.filter { it.profilePhoto?.small?.id == file.id }.forEach { publishMe() }
         publishChats()
+        // A message waiting on this file now has something real to show.
+        republishConversationsAwaitingMedia()
+    }
+
+    /**
+     * Re-maps loaded conversations so bubbles blocked on a just-downloaded file pick
+     * it up. Only messages still missing their media are re-mapped.
+     */
+    private fun republishConversationsAwaitingMedia() {
+        conversationFlows.forEach { (chatId, flow) ->
+            val pending = flow.value.any { it.needsMedia() }
+            if (!pending) return@forEach
+            val remapped = flow.value.map { existing ->
+                if (!existing.needsMedia()) return@map existing
+                val raw = rawMessages[existing.id.toLongOrNull() ?: return@map existing]
+                    ?: return@map existing
+                mapUiMessage(raw)
+            }
+            flow.value = remapped
+        }
+    }
+
+    private fun Message.needsMedia(): Boolean = when (type) {
+        com.foresightlabs.aether.domain.model.MessageType.IMAGE,
+        com.foresightlabs.aether.domain.model.MessageType.ALBUM -> mediaItems.isEmpty()
+        else -> false
     }
 
     private fun requestChatPhoto(chat: TdApi.Chat) {
@@ -767,7 +1812,15 @@ class TelegramClient(private val application: Application) {
         val hasUnseen = activeStories[chat.id]?.let { stories ->
             stories.stories.any { it.storyId > stories.maxReadStoryId }
         } ?: false
-        return TelegramMappers.mapChat(chat, myUserId, users, photoPathForChat(chat), typing[chat.id], hasUnseenPulse = hasUnseen)
+        return TelegramMappers.mapChat(
+            chat,
+            myUserId,
+            users,
+            photoPathForChat(chat),
+            typing[chat.id],
+            hasUnseenPulse = hasUnseen,
+            isForum = isForum(chat.id)
+        )
     }
 
     private suspend fun fetchStoriesFor(active: TdApi.ChatActiveStories) {
@@ -923,22 +1976,54 @@ class TelegramClient(private val application: Application) {
     }
 
     private fun mapUiMessage(message: TdApi.Message): Message {
+        rawMessages[message.id] = message
         val lastRead = chats[message.chatId]?.lastReadOutboxMessageId ?: 0L
-        return TelegramMappers.mapMessage(message, users, chats, myUserId, lastRead, replyPreview(message))
+        return TelegramMappers.mapMessage(
+            message = message,
+            users = users,
+            chats = chats,
+            myUserId = myUserId,
+            lastReadOutboxMessageId = lastRead,
+            reply = replyPreview(message),
+            resolvePath = ::resolveMediaPath
+        )
+    }
+
+    /**
+     * Local path for a message's media, requesting the download if it is missing.
+     *
+     * Returning null is the honest answer while a file is still arriving — the
+     * bubble shows its own pending state rather than a placeholder pretending to be
+     * the content.
+     */
+    private fun resolveMediaPath(file: TdApi.File?): String? {
+        if (file == null) return null
+        TelegramMappers.localPath(file)?.let { return it }
+        photoPaths["file:${file.id}"]?.let { return it }
+        if (file.local?.canBeDownloaded == true && file.local?.isDownloadingActive != true) {
+            scope.launch { downloadFile(file.id) }
+        }
+        return null
     }
 
     private fun replyPreview(message: TdApi.Message): Message? {
         val reply = message.replyTo as? TdApi.MessageReplyToMessage ?: return null
         val (text, type) = TelegramMappers.mapContent(reply.content)
+        // A quote replaces the preview text: the point of quoting is that the reply
+        // is about that span, not about the whole message.
+        val quote = reply.quote
+        val quoted = quote?.text?.text?.takeIf { it.isNotBlank() }
         return Message(
             id = reply.messageId.toString(),
             chatId = reply.chatId.toString(),
             senderId = "",
             senderName = "Message",
-            text = text.ifBlank { "Message" },
+            text = quoted ?: text.ifBlank { "Message" },
             timestamp = "",
             isOutgoing = false,
-            type = type
+            type = type,
+            formatted = quote?.let { TelegramMappers.mapFormattedText(it.text) },
+            isQuotedExcerpt = quoted != null
         )
     }
 

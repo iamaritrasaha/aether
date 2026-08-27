@@ -59,6 +59,33 @@ class TelegramMappingTest {
   }
 
   @Test
+  fun messageCallMapsToServiceEvent() {
+    val callEnded = TdApi.MessageCall(12345L, false, TdApi.CallDiscardReasonHungUp(), 135)
+    val (text, type) = TelegramMappers.mapContent(callEnded, isOutgoing = true)
+    assertEquals(MessageType.CALL, type)
+    assertTrue(text.contains("Outgoing voice call"))
+    assertTrue(text.contains("2 min 15 sec"))
+
+    val missedCall = TdApi.MessageCall(12346L, false, TdApi.CallDiscardReasonMissed(), 0)
+    val (missedText, missedType) = TelegramMappers.mapContent(missedCall, isOutgoing = false)
+    assertEquals(MessageType.CALL, missedType)
+    assertTrue(missedText.contains("Missed voice call"))
+  }
+
+  @Test
+  fun serviceMessagesMapToServiceType() {
+    val pin = TdApi.MessagePinMessage()
+    val (pinText, pinType) = TelegramMappers.mapContent(pin)
+    assertEquals(MessageType.SERVICE, pinType)
+    assertEquals("pinned a message", pinText)
+
+    val join = TdApi.MessageChatAddMembers()
+    val (joinText, joinType) = TelegramMappers.mapContent(join)
+    assertEquals(MessageType.SERVICE, joinType)
+    assertEquals("joined the chat", joinText)
+  }
+
+  @Test
   fun errorMessagesAreReadable() {
     val message = com.foresightlabs.aether.data.telegram.TdErrors.userMessage(
       TdApi.Error(400, "PHONE_CODE_INVALID")

@@ -73,7 +73,6 @@ import com.foresightlabs.aether.ui.design.AetherFloatingHeader
 import com.foresightlabs.aether.ui.design.AetherIconButton
 import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
 import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFraction
-import com.foresightlabs.aether.ui.design.aetherFrostSource
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAtmosphere
@@ -95,6 +94,8 @@ fun ProfileScreen(
     chat: Chat,
     onBack: () -> Unit,
     onNavigateToConversation: () -> Unit,
+    onStartVoiceCall: () -> Unit = {},
+    onStartVideoCall: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colors = LocalAetherColors.current
@@ -110,14 +111,14 @@ fun ProfileScreen(
     val headerScrollFraction = rememberAetherFloatingHeaderScrollFraction(listState)
     val frostState = rememberAetherFrostState()
 
-    AetherAtmosphericScreen(
-        modifier = modifier.fillMaxSize(),
-        frostState = frostState
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize()) {
+        AetherAtmosphericScreen(
+            modifier = Modifier.fillMaxSize(),
+            frostState = frostState
+        ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize().aetherFrostSource(frostState),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = aetherFloatingHeaderContentTopPadding())
             ) {
                 // --- HERO IDENTITY SECTION ---
@@ -223,12 +224,12 @@ fun ProfileScreen(
                             QuickActionButton(
                                 icon = Icons.Default.Call,
                                 label = "Audio",
-                                onClick = { /* simulated audio call */ }
+                                onClick = onStartVoiceCall
                             )
                             QuickActionButton(
                                 icon = Icons.Default.Videocam,
                                 label = "Video",
-                                onClick = { /* simulated video call */ }
+                                onClick = onStartVideoCall
                             )
                             QuickActionButton(
                                 icon = Icons.Default.Search,
@@ -488,27 +489,27 @@ fun ProfileScreen(
                     Spacer(modifier = Modifier.height(40.dp))
                 }
             }
-
-            AetherFloatingHeader(
-                title = "Profile Info",
-                modifier = Modifier.align(Alignment.TopCenter),
-                scrollFraction = headerScrollFraction,
-                frostState = frostState,
-                navigation = {
-                    AetherBackButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("profile_back_button")
-                    )
-                },
-                actions = {
-                    AetherIconButton(
-                        icon = Icons.Default.MoreVert,
-                        contentDescription = "More",
-                        onClick = { /* more options */ }
-                    )
-                }
-            )
         }
+
+        AetherFloatingHeader(
+            title = "Profile Info",
+            modifier = Modifier.align(Alignment.TopCenter),
+            scrollFraction = headerScrollFraction,
+            frostState = frostState,
+            navigation = {
+                AetherBackButton(
+                    onClick = onBack,
+                    modifier = Modifier.testTag("profile_back_button")
+                )
+            },
+            actions = {
+                AetherIconButton(
+                    icon = Icons.Default.MoreVert,
+                    contentDescription = "More",
+                    onClick = { /* more options */ }
+                )
+            }
+        )
 
         // Media Viewer Overlay
         MediaViewer(

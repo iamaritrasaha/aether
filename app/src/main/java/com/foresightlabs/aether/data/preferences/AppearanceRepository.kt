@@ -29,6 +29,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.IOException
 
+import androidx.datastore.preferences.core.doublePreferencesKey
+import com.foresightlabs.aether.data.preferences.ManualWeatherLocation
+import com.foresightlabs.aether.data.preferences.WeatherLocationMode
+
 private val Context.appearanceDataStore: DataStore<Preferences> by preferencesDataStore(name = "aether_appearance_prefs")
 
 /**
@@ -47,6 +51,14 @@ class AppearanceRepository(
         val ACCENT_CHOICE = stringPreferencesKey("accent_choice")
         val MESSAGE_DENSITY = stringPreferencesKey("message_density")
         val FONT_SCALE = floatPreferencesKey("font_scale")
+
+        val WEATHER_LOCATION_MODE = stringPreferencesKey("weather_location_mode")
+        val WEATHER_MANUAL_NAME = stringPreferencesKey("weather_manual_name")
+        val WEATHER_MANUAL_ADMIN1 = stringPreferencesKey("weather_manual_admin1")
+        val WEATHER_MANUAL_COUNTRY = stringPreferencesKey("weather_manual_country")
+        val WEATHER_MANUAL_LAT = doublePreferencesKey("weather_manual_lat")
+        val WEATHER_MANUAL_LON = doublePreferencesKey("weather_manual_lon")
+        val WEATHER_MANUAL_TIMEZONE = stringPreferencesKey("weather_manual_timezone")
 
         fun chatKey(chatId: Long) = stringPreferencesKey("chat_appearance_$chatId")
     }
@@ -81,9 +93,20 @@ class AppearanceRepository(
 
         val useAtmosphereAccent = prefs[PreferencesKeys.USE_ATMOSPHERE_ACCENT] ?: true
 
-        val accentChoice = runCatching {
-            prefs[PreferencesKeys.ACCENT_CHOICE]?.let { AccentColorChoice.valueOf(it) }
-        }.getOrNull() ?: AccentColorChoice.EMBER
+        val accentChoice = prefs[PreferencesKeys.ACCENT_CHOICE]?.let { savedId ->
+            AccentColorChoice.fromId(savedId)
+        } ?: AccentColorChoice.MIST_BLUE
+
+        // If the saved choice is null but we had a value, it means the old accent is deprecated.
+        // Fallback to atmosphere accent in that case.
+        val resolvedUseAtmosphereAccent = if (useAtmosphereAccent) {
+            true
+        } else {
+            // If they had a fixed accent, but it's not in the new palette (deprecated),
+            // reset to following the atmosphere.
+            val choice = prefs[PreferencesKeys.ACCENT_CHOICE]?.let { AccentColorChoice.fromId(it) }
+            choice == null
+        }
 
         val messageDensity = runCatching {
             prefs[PreferencesKeys.MESSAGE_DENSITY]?.let { MessageDensity.valueOf(it) }
@@ -91,14 +114,34 @@ class AppearanceRepository(
 
         val fontScale = prefs[PreferencesKeys.FONT_SCALE] ?: 1.0f
 
+        val weatherLocationMode = runCatching {
+            prefs[PreferencesKeys.WEATHER_LOCATION_MODE]?.let { WeatherLocationMode.valueOf(it) }
+        }.getOrNull() ?: WeatherLocationMode.AUTOMATIC
+
+        val manualName = prefs[PreferencesKeys.WEATHER_MANUAL_NAME]
+        val manualLat = prefs[PreferencesKeys.WEATHER_MANUAL_LAT]
+        val manualLon = prefs[PreferencesKeys.WEATHER_MANUAL_LON]
+        val manualLocation = if (!manualName.isNullOrBlank() && manualLat != null && manualLon != null) {
+            ManualWeatherLocation(
+                name = manualName,
+                admin1 = prefs[PreferencesKeys.WEATHER_MANUAL_ADMIN1],
+                country = prefs[PreferencesKeys.WEATHER_MANUAL_COUNTRY],
+                latitude = manualLat,
+                longitude = manualLon,
+                timezone = prefs[PreferencesKeys.WEATHER_MANUAL_TIMEZONE]
+            )
+        } else null
+
         return AetherAppearancePreferences(
             themeMode = themeMode,
             atmosphereMode = atmosphereMode,
             manualAtmosphere = manualAtmosphere,
-            useAtmosphereAccent = useAtmosphereAccent,
+            useAtmosphereAccent = resolvedUseAtmosphereAccent,
             accentChoice = accentChoice,
             messageDensity = messageDensity,
-            fontScale = fontScale
+            fontScale = fontScale,
+            weatherLocationMode = weatherLocationMode,
+            manualWeatherLocation = manualLocation
         )
     }
 
@@ -128,7 +171,7 @@ class AppearanceRepository(
 
     suspend fun updateAccentChoice(choice: AccentColorChoice) {
         dataStore.edit { prefs ->
-            prefs[PreferencesKeys.ACCENT_CHOICE] = choice.name
+            prefs[PreferencesKeys.ACCENT_CHOICE] = choice.id
         }
     }
 
@@ -144,6 +187,48 @@ class AppearanceRepository(
         }
     }
 
+    suspend fun updateWeatherLocationMode(mode: WeatherLocationMode) {
+        dataStore.edit { prefs ->
+            prefs[PreferencesKeys.WEATHER_LOCATION_MODE] = mode.name
+        }
+    }
+
+    suspend fun setManualWeatherLocation(location: ManualWeatherLocation) {
+        dataStore.edit { prefs ->
+            prefs[PreferencesKeys.WEATHER_LOCATION_MODE] = WeatherLocationMode.MANUAL.name
+            prefs[PreferencesKeys.WEATHER_MANUAL_NAME] = location.name
+            if (location.admin1 != null) {
+                prefs[PreferencesKeys.WEATHER_MANUAL_ADMIN1] = location.admin1
+            } else {
+                prefs.remove(PreferencesKeys.WEATHER_MANUAL_ADMIN1)
+            }
+            if (location.country != null) {
+                prefs[PreferencesKeys.WEATHER_MANUAL_COUNTRY] = location.country
+            } else {
+                prefs.remove(PreferencesKeys.WEATHER_MANUAL_COUNTRY)
+            }
+            prefs[PreferencesKeys.WEATHER_MANUAL_LAT] = location.latitude
+            prefs[PreferencesKeys.WEATHER_MANUAL_LON] = location.longitude
+            if (location.timezone != null) {
+                prefs[PreferencesKeys.WEATHER_MANUAL_TIMEZONE] = location.timezone
+            } else {
+                prefs.remove(PreferencesKeys.WEATHER_MANUAL_TIMEZONE)
+            }
+        }
+    }
+
+    suspend fun clearManualWeatherLocation() {
+        dataStore.edit { prefs ->
+            prefs[PreferencesKeys.WEATHER_LOCATION_MODE] = WeatherLocationMode.AUTOMATIC.name
+            prefs.remove(PreferencesKeys.WEATHER_MANUAL_NAME)
+            prefs.remove(PreferencesKeys.WEATHER_MANUAL_ADMIN1)
+            prefs.remove(PreferencesKeys.WEATHER_MANUAL_COUNTRY)
+            prefs.remove(PreferencesKeys.WEATHER_MANUAL_LAT)
+            prefs.remove(PreferencesKeys.WEATHER_MANUAL_LON)
+            prefs.remove(PreferencesKeys.WEATHER_MANUAL_TIMEZONE)
+        }
+    }
+
     suspend fun updateGlobalPreferences(transform: (AetherAppearancePreferences) -> AetherAppearancePreferences) {
         val current = globalPreferences.value
         val updated = transform(current)
@@ -155,6 +240,28 @@ class AppearanceRepository(
             prefs[PreferencesKeys.ACCENT_CHOICE] = updated.accentChoice.name
             prefs[PreferencesKeys.MESSAGE_DENSITY] = updated.messageDensity.name
             prefs[PreferencesKeys.FONT_SCALE] = updated.fontScale
+            prefs[PreferencesKeys.WEATHER_LOCATION_MODE] = updated.weatherLocationMode.name
+            if (updated.manualWeatherLocation != null) {
+                prefs[PreferencesKeys.WEATHER_MANUAL_NAME] = updated.manualWeatherLocation.name
+                if (updated.manualWeatherLocation.admin1 != null) {
+                    prefs[PreferencesKeys.WEATHER_MANUAL_ADMIN1] = updated.manualWeatherLocation.admin1
+                }
+                if (updated.manualWeatherLocation.country != null) {
+                    prefs[PreferencesKeys.WEATHER_MANUAL_COUNTRY] = updated.manualWeatherLocation.country
+                }
+                prefs[PreferencesKeys.WEATHER_MANUAL_LAT] = updated.manualWeatherLocation.latitude
+                prefs[PreferencesKeys.WEATHER_MANUAL_LON] = updated.manualWeatherLocation.longitude
+                if (updated.manualWeatherLocation.timezone != null) {
+                    prefs[PreferencesKeys.WEATHER_MANUAL_TIMEZONE] = updated.manualWeatherLocation.timezone
+                }
+            } else {
+                prefs.remove(PreferencesKeys.WEATHER_MANUAL_NAME)
+                prefs.remove(PreferencesKeys.WEATHER_MANUAL_ADMIN1)
+                prefs.remove(PreferencesKeys.WEATHER_MANUAL_COUNTRY)
+                prefs.remove(PreferencesKeys.WEATHER_MANUAL_LAT)
+                prefs.remove(PreferencesKeys.WEATHER_MANUAL_LON)
+                prefs.remove(PreferencesKeys.WEATHER_MANUAL_TIMEZONE)
+            }
         }
     }
 

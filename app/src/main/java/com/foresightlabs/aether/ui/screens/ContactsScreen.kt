@@ -63,7 +63,6 @@ import com.foresightlabs.aether.ui.design.AetherElevation
 import com.foresightlabs.aether.ui.design.AetherEmptyState
 import com.foresightlabs.aether.ui.design.AetherBackButton
 import com.foresightlabs.aether.ui.design.AetherFloatingHeader
-import com.foresightlabs.aether.ui.design.aetherFrostSource
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.design.AetherIconButton
 import com.foresightlabs.aether.ui.design.AetherSurface
@@ -134,7 +133,7 @@ fun ContactsScreen(
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
               Column(
-                modifier = Modifier.fillMaxSize().aetherFrostSource(frostState)
+                modifier = Modifier.fillMaxSize()
                     .padding(top = aetherFloatingHeaderContentTopPadding())
               ) {
                 // Search Bar
@@ -263,31 +262,31 @@ fun ContactsScreen(
                     }
                 }
               }
-
-              AetherFloatingHeader(
-                  title = "Contacts",
-                  subtitle = "${contacts.size} people in your orbit",
-                  modifier = Modifier.align(Alignment.TopCenter),
-                  frostState = frostState,
-                  navigation = {
-                      AetherBackButton(
-                          onClick = onBack,
-                          modifier = Modifier.testTag("contacts_back_button")
-                      )
-                  },
-                  actions = {
-                      if (!hasDeviceContactsLoaded) {
-                          AetherIconButton(
-                              icon = Icons.Default.PersonAdd,
-                              contentDescription = "Find people you know",
-                              onClick = { showRationaleDialog = true },
-                              modifier = Modifier.testTag("find_device_contacts_button")
-                          )
-                      }
-                  }
-              )
             }
         }
+
+        AetherFloatingHeader(
+            title = "Contacts",
+                subtitle = "${contacts.size} people in your orbit",
+                modifier = Modifier.align(Alignment.TopCenter),
+                frostState = frostState,
+                navigation = {
+                    AetherBackButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag("contacts_back_button")
+                    )
+                },
+                actions = {
+                    if (!hasDeviceContactsLoaded) {
+                        AetherIconButton(
+                            icon = Icons.Default.PersonAdd,
+                            contentDescription = "Find people you know",
+                            onClick = { showRationaleDialog = true },
+                            modifier = Modifier.testTag("find_device_contacts_button")
+                        )
+                    }
+                }
+            )
 
         // Explicit Contact Import Rationale Dialog
         if (showRationaleDialog) {
