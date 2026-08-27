@@ -151,6 +151,170 @@ fun LocationShareSheet(
     }
 }
 
+/**
+ * Shares live location with configurable duration.
+ */
+@Composable
+fun LiveLocationShareSheet(
+    latitude: Double?,
+    longitude: Double?,
+    isResolving: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSendLive: (latitude: Double, longitude: Double, durationSec: Int) -> Unit
+) {
+    val colors = LocalAetherColors.current
+    var selectedDuration by remember { mutableStateOf(900) } // 15 mins default
+
+    val durations = listOf(
+        900 to "15 min",
+        3600 to "1 hour",
+        28800 to "8 hours"
+    )
+
+    ShareSheetScaffold(onDismiss = onDismiss, title = "Share live location", testTag = "live_location_share_sheet") {
+        Text(
+            text = when {
+                error != null -> error
+                isResolving -> "Finding your location…"
+                latitude != null && longitude != null ->
+                    "Your location will update live in this chat for the chosen duration. " +
+                        "You can stop sharing at any time."
+                else -> "No location is available yet."
+            },
+            fontFamily = ManropeFontFamily,
+            fontSize = 12.5.sp,
+            color = if (error != null) Color(0xFFEF4444) else colors.textSecondary,
+            modifier = Modifier.testTag("live_location_status")
+        )
+
+        if (latitude != null && longitude != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Share for:",
+                fontFamily = ManropeFontFamily,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.textPrimary
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                durations.forEach { (sec, label) ->
+                    val isSelected = selectedDuration == sec
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(AetherEmber.Shapes.Pill)
+                            .background(
+                                if (isSelected) colors.accent.copy(alpha = 0.35f) else colors.surfaceHighlight
+                            )
+                            .border(
+                                1.dp,
+                                if (isSelected) colors.accent else colors.border,
+                                AetherEmber.Shapes.Pill
+                            )
+                            .clickable { selectedDuration = sec }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 13.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) colors.textPrimary else colors.textSecondary
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        SheetPrimaryAction(
+            label = "Start sharing live location",
+            enabled = latitude != null && longitude != null && !isResolving,
+            testTag = "live_location_send",
+            onClick = {
+                onSendLive(
+                    latitude ?: return@SheetPrimaryAction,
+                    longitude ?: return@SheetPrimaryAction,
+                    selectedDuration
+                )
+            }
+        )
+    }
+}
+
+/**
+ * Manually enters and sends a venue.
+ */
+@Composable
+fun VenueShareSheet(
+    latitude: Double?,
+    longitude: Double?,
+    isResolving: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSendVenue: (latitude: Double, longitude: Double, title: String, address: String) -> Unit
+) {
+    val colors = LocalAetherColors.current
+    var title by remember { mutableStateOf("") }
+    var address by remember { mutableStateOf("") }
+    val canSend = title.isNotBlank() && latitude != null && longitude != null
+
+    ShareSheetScaffold(onDismiss = onDismiss, title = "Send venue", testTag = "venue_share_sheet") {
+        Text(
+            text = "Enter the place name and address to attach to your current location.",
+            fontFamily = ManropeFontFamily,
+            fontSize = 12.5.sp,
+            color = colors.textSecondary
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SheetField(
+            value = title,
+            onValueChange = { title = it },
+            label = "Venue name (e.g. Blue Bottle Coffee)",
+            testTag = "venue_title"
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        SheetField(
+            value = address,
+            onValueChange = { address = it },
+            label = "Address (e.g. 66 Mint St)",
+            testTag = "venue_address"
+        )
+
+        if (latitude != null && longitude != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = String.format(java.util.Locale.US, "Location: %.5f, %.5f", latitude, longitude),
+                fontFamily = SpaceGroteskFontFamily,
+                fontSize = 12.sp,
+                color = colors.textTertiary
+            )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+        SheetPrimaryAction(
+            label = "Send venue",
+            enabled = canSend,
+            testTag = "venue_send",
+            onClick = {
+                onSendVenue(
+                    latitude ?: return@SheetPrimaryAction,
+                    longitude ?: return@SheetPrimaryAction,
+                    title.trim(),
+                    address.trim()
+                )
+            }
+        )
+    }
+}
+
 @Composable
 private fun ShareSheetScaffold(
     onDismiss: () -> Unit,

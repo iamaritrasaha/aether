@@ -124,6 +124,37 @@ class ChatsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun createChatFolder(title: String) {
+        viewModelScope.launch {
+            val result = telegram.createChatFolder(title)
+            result.exceptionOrNull()?.message?.let { _actionError.value = it }
+        }
+    }
+
+    fun editChatFolder(folderId: Int, title: String) {
+        viewModelScope.launch {
+            val result = telegram.editChatFolder(folderId, title)
+            result.exceptionOrNull()?.message?.let { _actionError.value = it }
+        }
+    }
+
+    fun deleteChatFolder(folderId: Int) {
+        viewModelScope.launch {
+            val result = telegram.deleteChatFolder(folderId)
+            result.exceptionOrNull()?.message?.let { _actionError.value = it }
+            if (_selectedFolder.value.id == folderId) {
+                _selectedFolder.value = ChatFolder.Main
+            }
+        }
+    }
+
+    fun reorderChatFolders(folderIds: List<Int>) {
+        viewModelScope.launch {
+            val result = telegram.reorderChatFolders(folderIds.toIntArray())
+            result.exceptionOrNull()?.message?.let { _actionError.value = it }
+        }
+    }
+
     private companion object {
         /**
          * Telegram's own sentinel for an indefinite mute; anything smaller is a

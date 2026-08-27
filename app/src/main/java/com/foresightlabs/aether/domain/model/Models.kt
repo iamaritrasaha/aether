@@ -35,6 +35,8 @@ enum class MessageType {
     IMAGE,
     ALBUM,
     VOICE,
+    AUDIO,
+    VIDEO_NOTE,
     FILE,
     FORWARDED,
     LINK_PREVIEW,
@@ -43,6 +45,7 @@ enum class MessageType {
     POLL,
     CONTACT,
     LOCATION,
+    VENUE,
     SERVICE,
     CALL,
     UNSUPPORTED
@@ -54,6 +57,27 @@ enum class MessageStatus {
     READ,
     FAILED
 }
+
+@Immutable
+data class StickerItem(
+    val fileId: Int,
+    val emoji: String = "",
+    val width: Int = 512,
+    val height: Int = 512,
+    val isAnimated: Boolean = false,
+    val isVideo: Boolean = false,
+    val localPath: String? = null,
+    val setId: Long = 0L
+)
+
+@Immutable
+data class StickerSetInfo(
+    val id: Long,
+    val title: String,
+    val name: String,
+    val thumbnailPath: String? = null,
+    val stickers: List<StickerItem> = emptyList()
+)
 
 /**
  * Truthful presence, mapped one-to-one from TDLib's own user status.
@@ -153,6 +177,13 @@ data class Message(
     val reactions: List<Reaction> = emptyList(),
     val isPinned: Boolean = false,
     val canRetry: Boolean = false,
+    val autoDeleteIn: Double = 0.0,
+    val selfDestructIn: Double = 0.0,
+    val liveLocationExpiresIn: Int = 0,
+    val isLiveLocation: Boolean = false,
+    val venueTitle: String? = null,
+    val venueAddress: String? = null,
+    val stickerFormat: String? = null,
     /** Present only for poll messages; every count in it is Telegram's. */
     val poll: PollPresentation? = null,
     /**

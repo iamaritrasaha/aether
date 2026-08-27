@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -28,6 +29,19 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.NearMe
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.PlayArrow
+import com.airbnb.lottie.compose.LottieAnimation
+import com.airbnb.lottie.compose.LottieCompositionSpec
+import com.airbnb.lottie.compose.LottieConstants
+import com.airbnb.lottie.compose.rememberLottieComposition
+import com.foresightlabs.aether.data.media.TgsDecompressor
+import java.io.File
 import com.foresightlabs.aether.ui.theme.OnlineGreen
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Schedule
@@ -87,7 +101,8 @@ fun MessageBubble(
     onPollVote: (Message, List<Int>) -> Unit = { _, _ -> },
     isSelected: Boolean = false,
     /** Non-null only while a multi-selection is running. */
-    onSelectToggle: (() -> Unit)? = null
+    onSelectToggle: (() -> Unit)? = null,
+    onStopLiveLocation: ((Message) -> Unit)? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
     val colors = LocalAetherColors.current
@@ -347,6 +362,14 @@ fun MessageBubble(
                                     isOutgoing = isOutgoing
                                 )
                             }
+                            MessageType.AUDIO -> {
+                                AudioAttachmentContent(
+                                    title = message.fileName ?: message.text.ifBlank { "Audio" },
+                                    fileSize = message.fileSize ?: "",
+                                    durationSec = message.voiceDurationSec,
+                                    isOutgoing = isOutgoing
+                                )
+                            }
                             MessageType.FILE -> {
                                 FileAttachmentContent(
                                     fileName = message.fileName ?: "Document",
@@ -365,6 +388,59 @@ fun MessageBubble(
                                         isOutgoing = isOutgoing
                                     )
                                 }
+                            }
+                            MessageType.STICKER -> {
+                                val stickerMedia = message.mediaItems.firstOrNull()
+                                StickerContent(
+                                    media = stickerMedia,
+                                    emoji = message.text,
+                                    stickerFormat = message.stickerFormat,
+                                    onMediaClick = onMediaClick,
+                                    isOutgoing = isOutgoing
+                                )
+                            }
+                            MessageType.VIDEO_NOTE -> {
+                                val videoMedia = message.mediaItems.firstOrNull()
+                                VideoNoteContent(
+                                    media = videoMedia,
+                                    durationSec = message.voiceDurationSec,
+                                    isOutgoing = isOutgoing,
+                                    onMediaClick = onMediaClick
+                                )
+                            }
+                            MessageType.ANIMATION -> {
+                                val animMedia = message.mediaItems.firstOrNull()
+                                AnimationAttachmentContent(
+                                    media = animMedia,
+                                    caption = message.text,
+                                    durationSec = message.voiceDurationSec,
+                                    onMediaClick = onMediaClick,
+                                    isOutgoing = isOutgoing
+                                )
+                            }
+                            MessageType.CONTACT -> {
+                                ContactAttachmentContent(
+                                    name = message.text,
+                                    phone = message.fileName.orEmpty(),
+                                    isOutgoing = isOutgoing
+                                )
+                            }
+                            MessageType.LOCATION -> {
+                                LocationAttachmentContent(
+                                    label = message.text,
+                                    coordinates = message.fileName.orEmpty(),
+                                    isLive = message.isLiveLocation,
+                                    expiresIn = message.liveLocationExpiresIn,
+                                    isOutgoing = isOutgoing,
+                                    onStopLive = { onStopLiveLocation?.invoke(message) }
+                                )
+                            }
+                            MessageType.VENUE -> {
+                                VenueAttachmentContent(
+                                    title = message.venueTitle ?: message.text,
+                                    address = message.venueAddress ?: message.fileName.orEmpty(),
+                                    isOutgoing = isOutgoing
+                                )
                             }
                             MessageType.POLL -> {
                                 message.poll?.let { poll ->
@@ -757,3 +833,489 @@ private fun ReactionBadge(
         }
     }
 }
+
+@Composable
+private fun AudioAttachmentContent(
+    title: String,
+    fileSize: String,
+    durationSec: Int,
+    isOutgoing: Boolean
+) {
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+
+    Row(
+        modifier = Modifier
+            .widthIn(max = 240.dp)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (isOutgoing) contentColor.copy(alpha = 0.20f) else colors.accent),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Headphones,
+                contentDescription = "Audio",
+                tint = if (isOutgoing) contentColor else colors.surface,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(
+                text = title,
+                fontFamily = ManropeFontFamily,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = contentColor
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            val durationLabel = if (durationSec > 0) formatDuration(durationSec) else ""
+            val meta = listOfNotNull(durationLabel.takeIf { it.isNotBlank() }, fileSize.takeIf { it.isNotBlank() }).joinToString(" • ")
+            Text(
+                text = meta.ifBlank { "Audio" },
+                fontFamily = ManropeFontFamily,
+                fontSize = 11.sp,
+                color = contentColor.copy(alpha = 0.72f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun StickerContent(
+    media: MediaItem?,
+    emoji: String,
+    stickerFormat: String?,
+    onMediaClick: (MediaItem) -> Unit,
+    isOutgoing: Boolean
+) {
+    val path = media?.url
+    if (!path.isNullOrBlank()) {
+        val isTgs = stickerFormat.equals("tgs", ignoreCase = true) || path.endsWith(".tgs", ignoreCase = true)
+        val isWebm = stickerFormat.equals("webm", ignoreCase = true) || path.endsWith(".webm", ignoreCase = true)
+
+        if (isTgs) {
+            val file = remember(path) { File(path) }
+            val lottieJson = remember(path) {
+                TgsDecompressor.decompressFile(file)
+            }
+            if (lottieJson != null) {
+                val composition by rememberLottieComposition(LottieCompositionSpec.JsonString(lottieJson))
+                Box(
+                    modifier = Modifier
+                        .size(150.dp)
+                        .clickable { onMediaClick(media) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    LottieAnimation(
+                        composition = composition,
+                        iterations = LottieConstants.IterateForever,
+                        modifier = Modifier.size(150.dp)
+                    )
+                }
+                return
+            }
+        }
+
+        if (isWebm) {
+            Box(
+                modifier = Modifier
+                    .size(150.dp)
+                    .clickable { onMediaClick(media) },
+                contentAlignment = Alignment.Center
+            ) {
+                LoopingVideoSticker(
+                    filePath = path,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            }
+            return
+        }
+
+        Box(
+            modifier = Modifier
+                .size(150.dp)
+                .clickable { onMediaClick(media) },
+            contentAlignment = Alignment.Center
+        ) {
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(path)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = emoji.ifBlank { "Sticker" },
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+                loading = {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(text = emoji.ifBlank { "🎨" }, fontSize = 42.sp)
+                    }
+                }
+            )
+        }
+    } else {
+        Text(
+            text = emoji.ifBlank { "🎨" },
+            fontSize = 48.sp,
+            modifier = Modifier.padding(8.dp)
+        )
+    }
+}
+
+@Composable
+private fun VideoNoteContent(
+    media: MediaItem?,
+    durationSec: Int,
+    isOutgoing: Boolean,
+    onMediaClick: (MediaItem) -> Unit
+) {
+    val colors = LocalAetherColors.current
+
+    Box(
+        modifier = Modifier
+            .size(180.dp)
+            .clip(CircleShape)
+            .border(2.dp, colors.accent.copy(alpha = 0.6f), CircleShape)
+            .background(colors.surfaceElevated),
+        contentAlignment = Alignment.Center
+    ) {
+        if (media?.url?.isNotBlank() == true) {
+            VideoNotePlayer(
+                filePath = media.url,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            CircularProgressIndicator(
+                modifier = Modifier.size(32.dp),
+                color = colors.accent,
+                strokeWidth = 2.dp
+            )
+        }
+
+        if (durationSec > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 8.dp)
+                    .clip(AetherEmber.Shapes.Pill)
+                    .background(Color(0x80000000))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = formatDuration(durationSec),
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnimationAttachmentContent(
+    media: MediaItem?,
+    caption: String,
+    durationSec: Int,
+    onMediaClick: (MediaItem) -> Unit,
+    isOutgoing: Boolean
+) {
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+
+    Column(
+        modifier = Modifier
+            .width(230.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .then(if (media != null) Modifier.clickable { onMediaClick(media) } else Modifier)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(180.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(colors.surfaceElevated),
+            contentAlignment = Alignment.Center
+        ) {
+            val url = media?.url
+            if (!url.isNullOrBlank()) {
+                val isVideoFormat = url.endsWith(".mp4", ignoreCase = true) || url.endsWith(".webm", ignoreCase = true)
+                if (isVideoFormat) {
+                    LoopingVideoSticker(
+                        filePath = url,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    SubcomposeAsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(url)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "GIF",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            } else {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(28.dp),
+                    color = colors.accent,
+                    strokeWidth = 2.dp
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(8.dp)
+                    .clip(AetherEmber.Shapes.Pill)
+                    .background(Color(0x80000000))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "GIF" + if (durationSec > 0) " · ${formatDuration(durationSec)}" else "",
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+        }
+
+        if (caption.isNotBlank()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = caption,
+                fontFamily = ManropeFontFamily,
+                color = contentColor,
+                fontSize = 14.sp,
+                lineHeight = 19.sp,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContactAttachmentContent(
+    name: String,
+    phone: String,
+    isOutgoing: Boolean
+) {
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+
+    Row(
+        modifier = Modifier
+            .widthIn(max = 240.dp)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (isOutgoing) contentColor.copy(alpha = 0.20f) else colors.accent),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Person,
+                contentDescription = "Contact",
+                tint = if (isOutgoing) contentColor else colors.surface,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(
+                text = name.ifBlank { "Contact" },
+                fontFamily = ManropeFontFamily,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = contentColor
+            )
+            if (phone.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = phone,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 12.sp,
+                    color = contentColor.copy(alpha = 0.72f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocationAttachmentContent(
+    label: String,
+    coordinates: String,
+    isLive: Boolean,
+    expiresIn: Int,
+    isOutgoing: Boolean,
+    onStopLive: () -> Unit = {}
+) {
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+
+    Column(
+        modifier = Modifier
+            .widthIn(max = 260.dp)
+            .padding(vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(if (isLive) OnlineGreen.copy(alpha = 0.25f) else (if (isOutgoing) contentColor.copy(alpha = 0.20f) else colors.accent)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isLive) Icons.Default.NearMe else Icons.Default.LocationOn,
+                    contentDescription = if (isLive) "Live Location" else "Location",
+                    tint = if (isLive) OnlineGreen else (if (isOutgoing) contentColor else colors.surface),
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Column(modifier = Modifier.weight(1f, fill = false)) {
+                Text(
+                    text = if (isLive) "Live Location" else label.ifBlank { "Location" },
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = contentColor
+                )
+                if (isLive && expiresIn > 0) {
+                    val mins = expiresIn / 60
+                    val timeLabel = if (mins > 0) "$mins min left" else "$expiresIn sec left"
+                    Text(
+                        text = "Active · $timeLabel",
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 11.sp,
+                        color = OnlineGreen,
+                        fontWeight = FontWeight.Medium
+                    )
+                } else if (coordinates.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = coordinates,
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 11.sp,
+                        color = contentColor.copy(alpha = 0.72f)
+                    )
+                }
+            }
+        }
+
+        if (isLive && isOutgoing) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(AetherEmber.Shapes.Pill)
+                    .background(Color(0xFFEF4444).copy(alpha = 0.18f))
+                    .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.4f), AetherEmber.Shapes.Pill)
+                    .clickable { onStopLive() }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Stop Sharing",
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFEF4444)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VenueAttachmentContent(
+    title: String,
+    address: String,
+    isOutgoing: Boolean
+) {
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+
+    Row(
+        modifier = Modifier
+            .widthIn(max = 260.dp)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (isOutgoing) contentColor.copy(alpha = 0.20f) else colors.accent),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Place,
+                contentDescription = "Venue",
+                tint = if (isOutgoing) contentColor else colors.surface,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(
+                text = title.ifBlank { "Venue" },
+                fontFamily = ManropeFontFamily,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = contentColor
+            )
+            if (address.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = address,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 12.sp,
+                    color = contentColor.copy(alpha = 0.72f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+private fun formatDuration(seconds: Int): String =
+    "%d:%02d".format(seconds / 60, seconds % 60)

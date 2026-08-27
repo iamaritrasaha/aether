@@ -118,6 +118,9 @@ fun AetherApp(
     val currentUser by chatsViewModel.currentUser.collectAsStateWithLifecycle()
     val connection by chatsViewModel.connection.collectAsStateWithLifecycle()
     val loadingChats by chatsViewModel.isLoading.collectAsStateWithLifecycle()
+    val folders by chatsViewModel.folders.collectAsStateWithLifecycle()
+    val selectedFolder by chatsViewModel.selectedFolder.collectAsStateWithLifecycle()
+    val folderChats by chatsViewModel.folderChats.collectAsStateWithLifecycle()
     val colors = LocalAetherColors.current
     val application = LocalContext.current.applicationContext as Application
 
@@ -125,15 +128,22 @@ fun AetherApp(
         val isTablet = maxWidth >= 720.dp
 
         if (isTablet) {
-            var selectedChatId by remember { mutableStateOf(chats.firstOrNull()?.id) }
-            val activeChat = chats.firstOrNull { it.id == selectedChatId } ?: chats.firstOrNull()
+            var selectedChatId by remember { mutableStateOf(folderChats.firstOrNull()?.id) }
+            val activeChat = folderChats.firstOrNull { it.id == selectedChatId } ?: folderChats.firstOrNull()
             Row(modifier = Modifier.fillMaxSize()) {
                 Box(modifier = Modifier.width(360.dp).fillMaxHeight()) {
                     HomeScreen(
-                        chats = chats,
+                        chats = folderChats,
                         currentUser = currentUser,
                         connection = connection,
                         isLoading = loadingChats,
+                        folders = folders,
+                        selectedFolder = selectedFolder,
+                        onSelectFolder = chatsViewModel::selectFolder,
+                        onCreateFolder = chatsViewModel::createChatFolder,
+                        onEditFolder = chatsViewModel::editChatFolder,
+                        onDeleteFolder = chatsViewModel::deleteChatFolder,
+                        onReorderFolders = chatsViewModel::reorderChatFolders,
                         onChatClick = { chat ->
                             // A forum opens as its topic list; only a plain chat
                             // opens straight into a conversation.
@@ -175,10 +185,17 @@ fun AetherApp(
                     exitTransition = { fadeOut(animationSpec = tween(180)) }
                 ) {
                     HomeScreen(
-                        chats = chats,
+                        chats = folderChats,
                         currentUser = currentUser,
                         connection = connection,
                         isLoading = loadingChats,
+                        folders = folders,
+                        selectedFolder = selectedFolder,
+                        onSelectFolder = chatsViewModel::selectFolder,
+                        onCreateFolder = chatsViewModel::createChatFolder,
+                        onEditFolder = chatsViewModel::editChatFolder,
+                        onDeleteFolder = chatsViewModel::deleteChatFolder,
+                        onReorderFolders = chatsViewModel::reorderChatFolders,
                         onChatClick = { chat -> navController.navigate(destinationFor(chat)) },
                         onNavigateToCalls = { navController.navigate(Destinations.CALLS) },
                         onNavigateToSettings = { navController.navigate(Destinations.SETTINGS) },
@@ -585,6 +602,9 @@ private fun ConversationRoute(
     val searchState by viewModel.search.collectAsStateWithLifecycle()
     val jumpTarget by viewModel.jumpTarget.collectAsStateWithLifecycle()
     val pinnedMessages by viewModel.pinnedMessages.collectAsStateWithLifecycle()
+    val installedStickerSets by viewModel.installedStickerSets.collectAsStateWithLifecycle()
+    val recentStickers by viewModel.recentStickers.collectAsStateWithLifecycle()
+    val favoriteStickers by viewModel.favoriteStickers.collectAsStateWithLifecycle()
     val repository = LocalAppearanceRepository.current
     val chatId = header?.id?.toLongOrNull()
     val resolvedAppearance by (chatId?.let(repository::getResolvedChatAppearanceFlow)
@@ -645,6 +665,30 @@ private fun ConversationRoute(
                 viewModel.sendContact(phone, first, last, reply?.id)
             },
             onSendLocation = { lat, lon, reply -> viewModel.sendLocation(lat, lon, reply?.id) },
+            onSendLiveLocation = { lat, lon, dur, reply ->
+                viewModel.sendLiveLocation(lat, lon, dur, heading = 0, replyToId = reply?.id)
+            },
+            onStopLiveLocation = viewModel::stopLiveLocation,
+            onSendVenue = { lat, lon, title, address, reply ->
+                viewModel.sendVenue(lat, lon, title, address, reply?.id)
+            },
+            onSendVideoNote = { path, dur, len, reply ->
+                viewModel.sendVideoNote(path, dur, len, reply?.id)
+            },
+            onSendSticker = { fileId, emoji ->
+                viewModel.sendStickerFile(fileId, emoji)
+            },
+            onReplaceMedia = { message, mediaPath, type ->
+                viewModel.replaceMedia(message, mediaPath, type)
+            },
+            installedStickerSets = installedStickerSets,
+            recentStickers = recentStickers,
+            favoriteStickers = favoriteStickers,
+            onLoadStickers = viewModel::loadStickers,
+            onLoadStickerSetDetails = viewModel::loadStickerSetDetails,
+            onLoadScheduled = viewModel::getScheduledMessages,
+            onSendScheduledNow = { msg -> viewModel.sendScheduledMessageNow(msg) },
+            onRescheduleMessage = { msg, secs -> viewModel.rescheduleMessage(msg, secs) },
             onPollVote = viewModel::voteOnPoll,
             pinnedFromServer = pinnedMessages,
             onJumpToMessage = viewModel::jumpTo,

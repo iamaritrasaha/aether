@@ -1,27 +1,28 @@
 package com.foresightlabs.aether.data.calls.media
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
-import android.os.Build
-import android.util.Log
-import com.foresightlabs.aether.BuildConfig
+import com.foresightlabs.aether.calls.media.AudioRoute as NativeAudioRoute
+import com.foresightlabs.aether.calls.media.DefaultTelegramCallMediaEngine
+import com.foresightlabs.aether.calls.media.MediaConnectionState as NativeMediaConnectionState
 import com.foresightlabs.aether.data.calls.TgCallsAdapter
 import com.foresightlabs.aether.domain.calls.AudioRoute
 import com.foresightlabs.aether.domain.calls.MediaConnectionState
 import com.foresightlabs.aether.domain.calls.TelegramCallMediaEngine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.drinkless.tdlib.TdApi
 
 class TgCallsMediaEngine(
-    context: Context
+    context: Context,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 ) : TelegramCallMediaEngine {
 
-    private val appContext = context.applicationContext
-    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val delegate = DefaultTelegramCallMediaEngine(context)
 
     private val _state = MutableStateFlow(MediaConnectionState.IDLE)
     override val state: StateFlow<MediaConnectionState> = _state.asStateFlow()
@@ -32,144 +33,72 @@ class TgCallsMediaEngine(
     private val _isMuted = MutableStateFlow(false)
     override val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
 
-    private val nativeEngine = NativeTelegramCallEngine()
-
     override val isMediaTransportAvailable: Boolean
-        get() = nativeEngine.isMediaTransportAvailable
-    private var focusRequest: AudioFocusRequest? = null
+        get() = delegate.isMediaTransportAvailable
 
     init {
-        nativeEngine.init(object : NativeCallEngineCallback {
-            override fun onConnectionStateChanged(state: MediaConnectionState) {
-                _state.value = state
+        scope.launch {
+            delegate.state.collect { nativeState ->
+                _state.value = mapNativeState(nativeState)
             }
+        }
+        scope.launch {
+            delegate.audioRoute.collect { nativeRoute ->
+                _audioRoute.value = mapNativeRoute(nativeRoute)
+            }
+        }
+        scope.launch {
+            delegate.isMuted.collect { muted ->
+                _isMuted.value = muted
+            }
+        }
+    }
 
-            override fun onSignalBarsChanged(bars: Int) {
-                if (BuildConfig.DEBUG) {
-                    Log.d("TgCallsMediaEngine", "Signal bars: $bars")
-                }
-            }
+    private fun mapNativeState(nativeState: NativeMediaConnectionState): MediaConnectionState {
+        return when (nativeState) {
+            NativeMediaConnectionState.IDLE -> MediaConnectionState.IDLE
+            NativeMediaConnectionState.INITIALIZING -> MediaConnectionState.INITIALIZING
+            NativeMediaConnectionState.CONNECTING -> MediaConnectionState.CONNECTING
+            NativeMediaConnectionState.CONNECTED -> MediaConnectionState.CONNECTED
+            NativeMediaConnectionState.RECONNECTING -> MediaConnectionState.RECONNECTING
+            NativeMediaConnectionState.FAILED -> MediaConnectionState.FAILED
+            NativeMediaConnectionState.UNAVAILABLE -> MediaConnectionState.UNAVAILABLE
+            NativeMediaConnectionState.STOPPED -> MediaConnectionState.STOPPED
+        }
+    }
 
-            override fun onError(error: String) {
-                if (BuildConfig.DEBUG) {
-                    Log.e("TgCallsMediaEngine", "TgCalls media error: $error")
-                }
-                _state.value = MediaConnectionState.FAILED
-            }
-        })
+    private fun mapDomainRoute(route: AudioRoute): NativeAudioRoute {
+        return when (route) {
+            AudioRoute.EARPIECE -> NativeAudioRoute.EARPIECE
+            AudioRoute.SPEAKER -> NativeAudioRoute.SPEAKER
+            AudioRoute.BLUETOOTH -> NativeAudioRoute.BLUETOOTH
+            AudioRoute.WIRED_HEADSET -> NativeAudioRoute.WIRED_HEADSET
+        }
+    }
+
+    private fun mapNativeRoute(nativeRoute: NativeAudioRoute): AudioRoute {
+        return when (nativeRoute) {
+            NativeAudioRoute.EARPIECE -> AudioRoute.EARPIECE
+            NativeAudioRoute.SPEAKER -> AudioRoute.SPEAKER
+            NativeAudioRoute.BLUETOOTH -> AudioRoute.BLUETOOTH
+            NativeAudioRoute.WIRED_HEADSET -> AudioRoute.WIRED_HEADSET
+        }
     }
 
     override suspend fun start(call: TdApi.Call, ready: TdApi.CallStateReady) {
-        requestAudioFocus()
-        setupAudioHardware()
-
-        _state.value = MediaConnectionState.INITIALIZING
-        val config = TgCallsAdapter.buildConfig(call, ready)
-
-        if (BuildConfig.DEBUG) {
-            Log.d("TgCallsMediaEngine", "Starting TgCalls Media Engine for call ${call.id}")
-        }
-
-        nativeEngine.startCall(config)
+        val config = TgCallsAdapter.buildMediaConfig(call, ready)
+        delegate.start(config)
     }
 
     override fun setMicrophoneMuted(muted: Boolean) {
-        _isMuted.value = muted
-        nativeEngine.setMuted(muted)
-        try {
-            audioManager.isMicrophoneMute = muted
-        } catch (_: Exception) {}
+        delegate.setMicrophoneMuted(muted)
     }
 
     override fun setAudioOutput(route: AudioRoute) {
-        _audioRoute.value = route
-        try {
-            when (route) {
-                AudioRoute.SPEAKER -> {
-                    audioManager.isSpeakerphoneOn = true
-                }
-                AudioRoute.EARPIECE -> {
-                    audioManager.isSpeakerphoneOn = false
-                }
-                AudioRoute.BLUETOOTH -> {
-                    audioManager.isSpeakerphoneOn = false
-                    if (!audioManager.isBluetoothScoOn) {
-                        audioManager.startBluetoothSco()
-                        audioManager.isBluetoothScoOn = true
-                    }
-                }
-                AudioRoute.WIRED_HEADSET -> {
-                    audioManager.isSpeakerphoneOn = false
-                }
-            }
-        } catch (_: Exception) {}
+        delegate.setAudioOutput(mapDomainRoute(route))
     }
 
     override fun stop() {
-        nativeEngine.stopCall()
-        abandonAudioFocus()
-        resetAudioHardware()
-        _state.value = MediaConnectionState.STOPPED
-    }
-
-    private fun requestAudioFocus() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val attributes = AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-
-                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
-                    .setAudioAttributes(attributes)
-                    .setOnAudioFocusChangeListener { focusChange ->
-                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-                            stop()
-                        }
-                    }
-                    .build()
-
-                focusRequest = request
-                audioManager.requestAudioFocus(request)
-            } else {
-                @Suppress("DEPRECATION")
-                audioManager.requestAudioFocus(
-                    { focusChange -> if (focusChange == AudioManager.AUDIOFOCUS_LOSS) stop() },
-                    AudioManager.STREAM_VOICE_CALL,
-                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
-                )
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun abandonAudioFocus() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-            } else {
-                @Suppress("DEPRECATION")
-                audioManager.abandonAudioFocus(null)
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun setupAudioHardware() {
-        try {
-            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            audioManager.isSpeakerphoneOn = (_audioRoute.value == AudioRoute.SPEAKER)
-            audioManager.isMicrophoneMute = _isMuted.value
-        } catch (_: Exception) {}
-    }
-
-    private fun resetAudioHardware() {
-        try {
-            audioManager.mode = AudioManager.MODE_NORMAL
-            audioManager.isMicrophoneMute = false
-            audioManager.isSpeakerphoneOn = false
-            if (audioManager.isBluetoothScoOn) {
-                audioManager.stopBluetoothSco()
-                audioManager.isBluetoothScoOn = false
-            }
-        } catch (_: Exception) {}
+        delegate.stop()
     }
 }

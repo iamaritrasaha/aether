@@ -9,10 +9,15 @@ import com.foresightlabs.aether.data.permissions.PermissionCoordinator
 import com.foresightlabs.aether.data.telegram.TelegramClient
 import com.foresightlabs.aether.domain.contacts.ContactsRepository
 
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
+import coil.decode.VideoFrameDecoder
 import com.foresightlabs.aether.data.calls.DefaultCallsRepository
 import com.foresightlabs.aether.domain.calls.CallsRepository
 
-class AetherApplication : Application() {
+class AetherApplication : Application(), ImageLoaderFactory {
     lateinit var telegram: TelegramClient
         private set
 
@@ -24,6 +29,25 @@ class AetherApplication : Application() {
 
     lateinit var callsRepository: CallsRepository
         private set
+
+    lateinit var liveLocationCoordinator: com.foresightlabs.aether.data.location.LiveLocationCoordinator
+        private set
+
+    private val applicationScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+
+    override fun newImageLoader(): ImageLoader {
+        return ImageLoader.Builder(this)
+            .components {
+                if (Build.VERSION.SDK_INT >= 28) {
+                    add(ImageDecoderDecoder.Factory())
+                } else {
+                    add(GifDecoder.Factory())
+                }
+                add(VideoFrameDecoder.Factory())
+            }
+            .crossfade(true)
+            .build()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -39,6 +63,12 @@ class AetherApplication : Application() {
             telegram = telegram,
             application = this,
             permissionCoordinator = permissionCoordinator
+        )
+        liveLocationCoordinator = com.foresightlabs.aether.data.location.LiveLocationCoordinator(
+            context = this,
+            locationProvider = com.foresightlabs.aether.data.location.SystemLocationProvider(this),
+            gateway = com.foresightlabs.aether.data.location.TelegramLiveLocationGateway(telegram),
+            scope = applicationScope
         )
     }
 

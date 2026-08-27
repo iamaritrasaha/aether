@@ -77,6 +77,14 @@ import com.foresightlabs.aether.domain.messages.MessageGrouping
 import com.foresightlabs.aether.ui.components.AlbumBubble
 import com.foresightlabs.aether.ui.components.ContactShareSheet
 import com.foresightlabs.aether.ui.components.MessageInfoSheet
+import com.foresightlabs.aether.domain.model.StickerItem
+import com.foresightlabs.aether.domain.model.StickerSetInfo
+import com.foresightlabs.aether.ui.components.LiveLocationShareSheet
+import com.foresightlabs.aether.ui.components.VenueShareSheet
+import com.foresightlabs.aether.ui.components.StickerPickerSheet
+import com.foresightlabs.aether.ui.components.ScheduledMessagesSheet
+import com.foresightlabs.aether.ui.components.VideoNoteRecorderSheet
+import androidx.compose.material.icons.filled.Schedule
 import com.foresightlabs.aether.ui.components.LocationShareSheet
 import android.content.Intent
 import androidx.compose.material.icons.filled.Close
@@ -168,6 +176,20 @@ fun ConversationScreen(
     onSearchNewer: () -> Unit = {},
     onSendContact: (String, String, String, Message?) -> Unit = { _, _, _, _ -> },
     onSendLocation: (Double, Double, Message?) -> Unit = { _, _, _ -> },
+    onSendLiveLocation: (Double, Double, Int, Message?) -> Unit = { _, _, _, _ -> },
+    onStopLiveLocation: (Message) -> Unit = {},
+    onSendVenue: (Double, Double, String, String, Message?) -> Unit = { _, _, _, _, _ -> },
+    onSendVideoNote: (String, Int, Int, Message?) -> Unit = { _, _, _, _ -> },
+    onSendSticker: (Int, String) -> Unit = { _, _ -> },
+    onReplaceMedia: (Message, String, MessageType) -> Unit = { _, _, _ -> },
+    installedStickerSets: List<StickerSetInfo> = emptyList(),
+    recentStickers: List<StickerItem> = emptyList(),
+    favoriteStickers: List<StickerItem> = emptyList(),
+    onLoadStickers: () -> Unit = {},
+    onLoadStickerSetDetails: (Long, (StickerSetInfo) -> Unit) -> Unit = { _, _ -> },
+    onLoadScheduled: suspend () -> List<Message> = { emptyList() },
+    onSendScheduledNow: (Message) -> Unit = {},
+    onRescheduleMessage: (Message, Int) -> Unit = { _, _ -> },
     onPollVote: (Message, List<Int>) -> Unit = { _, _ -> },
     /** Pinned messages Telegram reports for this chat, beyond those loaded. */
     pinnedFromServer: List<Message> = emptyList(),
@@ -189,7 +211,7 @@ fun ConversationScreen(
     var replyingToMessage by remember { mutableStateOf<Message?>(null) }
     var editingMessage by remember { mutableStateOf<Message?>(null) }
     var selectedContextMenuMessage by remember { mutableStateOf<Message?>(null) }
-    var forwardingMessage by remember { mutableStateOf<Message?>(null) }
+    var forwardingMessages by remember { mutableStateOf<List<Message>>(emptyList()) }
     var replyQuote by remember { mutableStateOf<ReplyQuote?>(null) }
     var infoMessage by remember { mutableStateOf<Message?>(null) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
@@ -198,6 +220,11 @@ fun ConversationScreen(
     val entries = remember(messages) { MessageGrouping.group(messages) }
     var showContactSheet by remember { mutableStateOf(false) }
     var showLocationSheet by remember { mutableStateOf(false) }
+    var showLiveLocationSheet by remember { mutableStateOf(false) }
+    var showVenueSheet by remember { mutableStateOf(false) }
+    var showStickerPicker by remember { mutableStateOf(false) }
+    var showScheduledSheet by remember { mutableStateOf(false) }
+    var replacingMediaMessage by remember { mutableStateOf<Message?>(null) }
     var resolvedLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var locationError by remember { mutableStateOf<String?>(null) }
     var isResolvingLocation by remember { mutableStateOf(false) }
@@ -230,6 +257,7 @@ fun ConversationScreen(
     var isMediaViewerVisible by remember { mutableStateOf(false) }
 
     var isAttachmentSheetVisible by remember { mutableStateOf(false) }
+    var showVideoNoteRecorder by remember { mutableStateOf(false) }
 
     var cameraTempFile by remember { mutableStateOf<File?>(null) }
     val cameraLauncher = rememberLauncherForActivityResult(
@@ -306,6 +334,25 @@ fun ConversationScreen(
             if (file != null) {
                 onSendDocument(file.absolutePath, "", replyingToMessage)
                 replyingToMessage = null
+            }
+        }
+    }
+
+    val replaceMediaLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val file = copyUriToTempFile(context, uri, "replace_")
+            if (file != null && replacingMediaMessage != null) {
+                val mediaType = when (replacingMediaMessage!!.type) {
+                    MessageType.IMAGE -> MessageType.IMAGE
+                    MessageType.ANIMATION -> MessageType.ANIMATION
+                    MessageType.AUDIO -> MessageType.AUDIO
+                    MessageType.FILE -> MessageType.FILE
+                    else -> MessageType.IMAGE
+                }
+                onReplaceMedia(replacingMediaMessage!!, file.absolutePath, mediaType)
+                replacingMediaMessage = null
             }
         }
     }
@@ -612,7 +659,8 @@ fun ConversationScreen(
                         },
                         onEntityAction = { action -> handleEntityAction(context, action, onOpenUsername) },
                         isHighlighted = msg.id == highlightedMessageId,
-                        onPollVote = onPollVote
+                        onPollVote = onPollVote,
+                        onStopLiveLocation = onStopLiveLocation
                     )
                 }
             }
@@ -701,6 +749,12 @@ fun ConversationScreen(
                     icon = Icons.Default.Call,
                     contentDescription = "Audio Call",
                     onClick = onStartVoiceCall
+                )
+                AetherIconButton(
+                    icon = Icons.Default.Schedule,
+                    contentDescription = "Scheduled Messages",
+                    onClick = { showScheduledSheet = true },
+                    modifier = Modifier.testTag("conversation_scheduled_button")
                 )
                 AetherIconButton(
                     icon = Icons.Default.Info,
@@ -800,6 +854,10 @@ fun ConversationScreen(
                 onOpenAttachmentSheet = {
                     isAttachmentSheetVisible = true
                 },
+                onOpenStickerPicker = {
+                    onLoadStickers()
+                    showStickerPicker = true
+                },
                 onVoiceNoteRecorded = {
                     if (isRecordingAudio) {
                         val recordResult = audioRecorder.stopRecording()
@@ -820,6 +878,7 @@ fun ConversationScreen(
                         }
                     }
                 },
+                onOpenVideoNote = { showVideoNoteRecorder = true },
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
 
@@ -841,6 +900,7 @@ fun ConversationScreen(
                             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                         }
                     }
+                    "Video Message" -> showVideoNoteRecorder = true
                     "File", "Audio" -> docPickerLauncher.launch(arrayOf("*/*"))
                     "Contact" -> showContactSheet = true
                     "Location" -> {
@@ -850,6 +910,28 @@ fun ConversationScreen(
                         ) == PackageManager.PERMISSION_GRANTED
                         if (granted) {
                             showLocationSheet = true
+                        } else {
+                            locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                        }
+                    }
+                    "Live Location" -> {
+                        val granted = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (granted) {
+                            showLiveLocationSheet = true
+                        } else {
+                            locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                        }
+                    }
+                    "Venue" -> {
+                        val granted = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (granted) {
+                            showVenueSheet = true
                         } else {
                             locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
                         }
@@ -907,6 +989,83 @@ fun ConversationScreen(
             )
         }
 
+        if (showLiveLocationSheet) {
+            LaunchedEffect(Unit) {
+                isResolvingLocation = true
+                locationError = null
+                val fix = lastKnownCoarseLocation(context)
+                resolvedLocation = fix
+                locationError = if (fix == null) "No recent location fix is available on this device yet." else null
+                isResolvingLocation = false
+            }
+            LiveLocationShareSheet(
+                latitude = resolvedLocation?.first,
+                longitude = resolvedLocation?.second,
+                isResolving = isResolvingLocation,
+                error = locationError,
+                onDismiss = { showLiveLocationSheet = false },
+                onSendLive = { lat, lon, dur ->
+                    onSendLiveLocation(lat, lon, dur, replyingToMessage)
+                    replyingToMessage = null
+                    showLiveLocationSheet = false
+                }
+            )
+        }
+
+        if (showVenueSheet) {
+            LaunchedEffect(Unit) {
+                isResolvingLocation = true
+                locationError = null
+                val fix = lastKnownCoarseLocation(context)
+                resolvedLocation = fix
+                locationError = if (fix == null) "No recent location fix is available on this device yet." else null
+                isResolvingLocation = false
+            }
+            VenueShareSheet(
+                latitude = resolvedLocation?.first,
+                longitude = resolvedLocation?.second,
+                isResolving = isResolvingLocation,
+                error = locationError,
+                onDismiss = { showVenueSheet = false },
+                onSendVenue = { lat, lon, title, address ->
+                    onSendVenue(lat, lon, title, address, replyingToMessage)
+                    replyingToMessage = null
+                    showVenueSheet = false
+                }
+            )
+        }
+
+        StickerPickerSheet(
+            isVisible = showStickerPicker,
+            installedSets = installedStickerSets,
+            recentStickers = recentStickers,
+            favoriteStickers = favoriteStickers,
+            onLoadSetDetails = onLoadStickerSetDetails,
+            onDismiss = { showStickerPicker = false },
+            onSendSticker = { fileId, emoji ->
+                onSendSticker(fileId, emoji)
+            }
+        )
+
+        ScheduledMessagesSheet(
+            isVisible = showScheduledSheet,
+            onDismiss = { showScheduledSheet = false },
+            onLoadScheduled = onLoadScheduled,
+            onSendNow = onSendScheduledNow,
+            onReschedule = onRescheduleMessage,
+            onDelete = { msg -> onDeleteMessage(msg, false) }
+        )
+
+        VideoNoteRecorderSheet(
+            isVisible = showVideoNoteRecorder,
+            onDismiss = { showVideoNoteRecorder = false },
+            onSendVideoNote = { filePath, duration, length ->
+                onSendVideoNote(filePath, duration, length, replyingToMessage)
+                replyingToMessage = null
+                showVideoNoteRecorder = false
+            }
+        )
+
         if (isSelecting) {
             // Back leaves selection before it leaves the conversation.
             BackHandler { selectedIds = emptySet() }
@@ -921,7 +1080,7 @@ fun ConversationScreen(
                         MessageAction.COPY -> clipboardManager.setText(
                             AnnotatedString(chosen.joinToString("\n\n") { it.text })
                         )
-                        MessageAction.FORWARD -> forwardingMessage = chosen.firstOrNull()
+                        MessageAction.FORWARD -> forwardingMessages = chosen
                         MessageAction.DELETE_FOR_ME -> chosen.forEach { onDeleteMessage(it, false) }
                         MessageAction.DELETE_FOR_EVERYONE -> chosen.forEach { onDeleteMessage(it, true) }
                         else -> Unit
@@ -975,8 +1134,18 @@ fun ConversationScreen(
                         replyQuote = ReplyQuote.from(target.richText, 0, target.text.length)
                     }
                     MessageAction.COPY -> clipboardManager.setText(AnnotatedString(target.text))
-                    MessageAction.FORWARD -> forwardingMessage = target
+                    MessageAction.FORWARD -> forwardingMessages = listOf(target)
                     MessageAction.EDIT -> editingMessage = target
+                    MessageAction.REPLACE_MEDIA -> {
+                        replacingMediaMessage = target
+                        val mime = when (target.type) {
+                            MessageType.IMAGE -> "image/*"
+                            MessageType.ANIMATION -> "image/gif"
+                            MessageType.AUDIO -> "audio/*"
+                            else -> "*/*"
+                        }
+                        replaceMediaLauncher.launch(mime)
+                    }
                     MessageAction.PIN, MessageAction.UNPIN -> onPinMessage(target)
                     MessageAction.DELETE_FOR_ME -> onDeleteMessage(target, false)
                     MessageAction.DELETE_FOR_EVERYONE -> onDeleteMessage(target, true)
@@ -992,24 +1161,26 @@ fun ConversationScreen(
         )
 
         // Forward target picker
-        if (forwardingMessage != null) {
+        if (forwardingMessages.isNotEmpty()) {
             ForwardTargetSheet(
                 targets = forwardTargets,
                 // Only offered where Telegram permits it: an attributed forward of
                 // protected content is allowed, an unattributed copy is not.
-                canSendCopy = forwardingMessage
-                    ?.let { messageCapabilities[it.id]?.canBeSaved } ?: false,
-                hasCaption = forwardingMessage?.let {
+                canSendCopy = forwardingMessages.all {
+                    messageCapabilities[it.id]?.canBeSaved ?: false
+                },
+                hasCaption = forwardingMessages.any {
                     it.text.isNotBlank() && it.type != MessageType.TEXT
-                } ?: false,
-                onDismiss = { forwardingMessage = null },
+                },
+                onDismiss = { forwardingMessages = emptyList() },
                 onPick = { targetChat, sendCopy, removeCaption ->
-                    val message = forwardingMessage
                     val destination = targetChat.id.toLongOrNull()
-                    if (message != null && destination != null) {
-                        onForwardMessage(message, destination, sendCopy, removeCaption)
+                    if (destination != null) {
+                        forwardingMessages.forEach { msg ->
+                            onForwardMessage(msg, destination, sendCopy, removeCaption)
+                        }
                     }
-                    forwardingMessage = null
+                    forwardingMessages = emptyList()
                 }
             )
         }
