@@ -17,6 +17,9 @@ import com.foresightlabs.aether.domain.messages.SendOptions
 import com.foresightlabs.aether.domain.search.ConversationSearchState
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.Message
+import com.foresightlabs.aether.domain.model.MessageType
+import com.foresightlabs.aether.domain.model.StickerItem
+import com.foresightlabs.aether.domain.model.StickerSetInfo
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,6 +89,14 @@ class ConversationViewModel(
 
     private val _composerEnabled = MutableStateFlow(true)
     val composerEnabled: StateFlow<Boolean> = _composerEnabled.asStateFlow()
+
+    private val liveLocationCoordinator = (application as? com.foresightlabs.aether.AetherApplication)?.liveLocationCoordinator
+        ?: com.foresightlabs.aether.data.location.LiveLocationCoordinator(
+            context = application,
+            locationProvider = com.foresightlabs.aether.data.location.SystemLocationProvider(application),
+            gateway = com.foresightlabs.aether.data.location.TelegramLiveLocationGateway(telegram),
+            scope = viewModelScope
+        )
 
     private val _sendError = MutableStateFlow<String?>(null)
     val sendError: StateFlow<String?> = _sendError.asStateFlow()
@@ -305,6 +316,83 @@ class ConversationViewModel(
         }
     }
 
+    fun sendAnimation(animationPath: String, caption: String = "", replyToId: String? = null) {
+        viewModelScope.launch {
+            val result = telegram.sendAnimation(
+                chatId = activeChatId,
+                animationPath = animationPath,
+                caption = caption,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun sendSticker(stickerPath: String, emoji: String = "", replyToId: String? = null) {
+        viewModelScope.launch {
+            val result = telegram.sendSticker(
+                chatId = activeChatId,
+                stickerPath = stickerPath,
+                emoji = emoji,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun sendStickerFile(fileId: Int, emoji: String = "", replyToId: String? = null) {
+        viewModelScope.launch {
+            val result = telegram.sendStickerFile(
+                chatId = activeChatId,
+                fileId = fileId,
+                emoji = emoji,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun sendVideoNote(
+        videoPath: String,
+        duration: Int = 0,
+        length: Int = 240,
+        replyToId: String? = null
+    ) {
+        viewModelScope.launch {
+            val result = telegram.sendVideoNote(
+                chatId = activeChatId,
+                videoPath = videoPath,
+                duration = duration,
+                length = length,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun replaceMedia(
+        message: Message,
+        mediaPath: String,
+        type: MessageType,
+        caption: String = ""
+    ) {
+        viewModelScope.launch {
+            val messageId = message.id.toLongOrNull() ?: return@launch
+            val result = telegram.replaceMedia(
+                chatId = activeChatId,
+                messageId = messageId,
+                mediaPath = mediaPath,
+                type = type,
+                caption = caption
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
     fun editMessage(message: Message, newText: String) {
         viewModelScope.launch {
             val messageId = message.id.toLongOrNull() ?: return@launch
@@ -381,21 +469,69 @@ class ConversationViewModel(
      * applies to a copy. Both are real TDLib flags — Aether never re-sends content
      * as a new message to imitate a forward.
      */
+    fun unpinAllMessages() {
+        viewModelScope.launch {
+            val result = telegram.unpinAllMessages(activeChatId)
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+            refreshPinned()
+        }
+    }
+
+    /**
+     * Forwards a message, with the options Telegram actually supports.
+     *
+     * [sendCopy] drops attribution; [removeCaption] drops a media caption and only
+     * applies to a copy. Both are real TDLib flags — Aether never re-sends content
+     * as a new message to imitate a forward.
+     */
     fun forwardMessage(
         message: Message,
         toChatId: Long,
         sendCopy: Boolean = false,
         removeCaption: Boolean = false
     ) {
+        forwardMessages(listOf(message), toChatId, sendCopy, removeCaption)
+    }
+
+    /**
+     * Forwards multiple messages together, preserving the server order.
+     */
+    fun forwardMessages(
+        messages: List<Message>,
+        toChatId: Long,
+        sendCopy: Boolean = false,
+        removeCaption: Boolean = false
+    ) {
         viewModelScope.launch {
-            val messageId = message.id.toLongOrNull() ?: return@launch
+            val messageIds = messages.mapNotNull { it.id.toLongOrNull() }.toLongArray()
+            if (messageIds.isEmpty()) return@launch
             val result = telegram.forwardMessages(
                 toChatId = toChatId,
                 fromChatId = activeChatId,
-                messageIds = longArrayOf(messageId),
+                messageIds = messageIds,
                 sendCopy = sendCopy,
                 removeCaption = removeCaption
             )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    suspend fun getScheduledMessages(): List<Message> {
+        return telegram.getScheduledMessages(activeChatId)
+    }
+
+    fun sendScheduledMessageNow(message: Message) {
+        viewModelScope.launch {
+            val messageId = message.id.toLongOrNull() ?: return@launch
+            val result = telegram.sendScheduledMessageNow(activeChatId, messageId)
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun rescheduleMessage(message: Message, dateSeconds: Int) {
+        viewModelScope.launch {
+            val messageId = message.id.toLongOrNull() ?: return@launch
+            val result = telegram.rescheduleMessage(activeChatId, messageId, dateSeconds)
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
@@ -538,6 +674,105 @@ class ConversationViewModel(
                 forumTopicId = forumTopicId
             )
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun sendLiveLocation(
+        latitude: Double,
+        longitude: Double,
+        livePeriod: Int,
+        heading: Int = 0,
+        replyToId: String? = null
+    ) {
+        viewModelScope.launch {
+            val result = telegram.sendLiveLocation(
+                chatId = activeChatId,
+                latitude = latitude,
+                longitude = longitude,
+                livePeriod = livePeriod,
+                heading = heading,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.onSuccess { msg ->
+                liveLocationCoordinator.startLiveSharing(activeChatId, msg.id, livePeriod)
+            }.onFailure {
+                _sendError.value = it.message
+            }
+        }
+    }
+
+    fun editLiveLocation(
+        message: Message,
+        latitude: Double,
+        longitude: Double,
+        livePeriod: Int = 0,
+        heading: Int = 0
+    ) {
+        viewModelScope.launch {
+            val messageId = message.id.toLongOrNull() ?: return@launch
+            val result = telegram.editLiveLocation(
+                chatId = activeChatId,
+                messageId = messageId,
+                latitude = latitude,
+                longitude = longitude,
+                livePeriod = livePeriod,
+                heading = heading
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun stopLiveLocation(message: Message) {
+        val messageId = message.id.toLongOrNull() ?: return
+        liveLocationCoordinator.stopLiveSharing(activeChatId, messageId)
+    }
+
+    fun sendVenue(
+        latitude: Double,
+        longitude: Double,
+        title: String,
+        address: String,
+        replyToId: String? = null
+    ) {
+        viewModelScope.launch {
+            val result = telegram.sendVenue(
+                chatId = activeChatId,
+                latitude = latitude,
+                longitude = longitude,
+                title = title,
+                address = address,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    // --- Stickers browser ----------------------------------------------------
+
+    private val _installedStickerSets = MutableStateFlow<List<StickerSetInfo>>(emptyList())
+    val installedStickerSets: StateFlow<List<StickerSetInfo>> = _installedStickerSets.asStateFlow()
+
+    private val _recentStickers = MutableStateFlow<List<StickerItem>>(emptyList())
+    val recentStickers: StateFlow<List<StickerItem>> = _recentStickers.asStateFlow()
+
+    private val _favoriteStickers = MutableStateFlow<List<StickerItem>>(emptyList())
+    val favoriteStickers: StateFlow<List<StickerItem>> = _favoriteStickers.asStateFlow()
+
+    fun loadStickers() {
+        viewModelScope.launch {
+            telegram.getInstalledStickerSets().onSuccess { _installedStickerSets.value = it }
+            telegram.getRecentStickers().onSuccess { _recentStickers.value = it }
+            telegram.getFavoriteStickers().onSuccess { _favoriteStickers.value = it }
+        }
+    }
+
+    fun loadStickerSetDetails(setId: Long, onLoaded: (StickerSetInfo) -> Unit) {
+        viewModelScope.launch {
+            telegram.getStickerSet(setId).onSuccess { set ->
+                onLoaded(set)
+            }
         }
     }
 

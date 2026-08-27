@@ -26,3 +26,4 @@ rootProject.name = "Aether"
 
 include(":app")
 include(":tdlib")
+include(":call-media")

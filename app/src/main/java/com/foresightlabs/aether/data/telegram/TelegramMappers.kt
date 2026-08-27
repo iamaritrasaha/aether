@@ -288,7 +288,18 @@ object TelegramMappers {
             mediaAlbumId = message.mediaAlbumId,
             reactions = mapReactions(message.interactionInfo),
             isPinned = message.isPinned,
-            canRetry = message.sendingState is TdApi.MessageSendingStateFailed
+            canRetry = message.sendingState is TdApi.MessageSendingStateFailed,
+            autoDeleteIn = message.autoDeleteIn,
+            selfDestructIn = message.selfDestructIn,
+            liveLocationExpiresIn = (message.content as? TdApi.MessageLocation)?.expiresIn ?: 0,
+            isLiveLocation = (message.content as? TdApi.MessageLocation)?.livePeriod?.let { it > 0 } ?: false,
+            venueTitle = (message.content as? TdApi.MessageVenue)?.venue?.title,
+            venueAddress = (message.content as? TdApi.MessageVenue)?.venue?.address,
+            stickerFormat = when ((message.content as? TdApi.MessageSticker)?.sticker?.format) {
+                is TdApi.StickerFormatTgs -> "tgs"
+                is TdApi.StickerFormatWebm -> "webm"
+                else -> "webp"
+            }
         )
     }
 
@@ -402,12 +413,21 @@ object TelegramMappers {
                     audio?.performer?.takeIf { it.isNotBlank() },
                     audio?.title?.takeIf { it.isNotBlank() }
                 ).joinToString(" — ").ifBlank { audio?.fileName ?: "Audio" }
+                val captionText = mapFormattedText(content.caption)
                 MediaPresentation(
-                    text = content.caption?.text.orEmpty(),
-                    type = MessageType.FILE,
+                    text = captionText.text.ifBlank { name },
+                    type = MessageType.AUDIO,
+                    formatted = captionText,
                     fileName = name,
                     fileSize = formatFileSize(audio?.audio?.size ?: 0L),
-                    fileExtension = "AUDIO"
+                    fileExtension = "AUDIO",
+                    voiceDurationSec = audio?.duration ?: 0,
+                    mediaItems = mediaItem(
+                        audio?.albumCoverThumbnail?.file ?: audio?.audio,
+                        name,
+                        audio?.albumCoverThumbnail?.width ?: 0,
+                        audio?.albumCoverThumbnail?.height ?: 0
+                    )
                 )
             }
             is TdApi.MessageVoiceNote -> {
@@ -434,8 +454,9 @@ object TelegramMappers {
             }
             is TdApi.MessageLocation -> {
                 val location = content.location
+                val isLive = content.livePeriod > 0
                 MediaPresentation(
-                    text = "Location",
+                    text = if (isLive) "Live Location" else "Location",
                     type = MessageType.LOCATION,
                     fileName = location?.let { formatCoordinates(it.latitude, it.longitude) }
                 )
@@ -444,10 +465,26 @@ object TelegramMappers {
                 val venue = content.venue
                 MediaPresentation(
                     text = venue?.title.orEmpty().ifBlank { "Venue" },
-                    type = MessageType.LOCATION,
+                    type = MessageType.VENUE,
                     fileName = venue?.address.orEmpty().ifBlank {
                         venue?.location?.let { formatCoordinates(it.latitude, it.longitude) }
                     }
+                )
+            }
+            is TdApi.MessageVideoNote -> {
+                val videoNote = content.videoNote
+                MediaPresentation(
+                    text = "",
+                    type = MessageType.VIDEO_NOTE,
+                    voiceDurationSec = videoNote?.duration ?: 0,
+                    voiceWaveform = decodeWaveform(videoNote?.waveform),
+                    mediaItems = mediaItem(
+                        videoNote?.video ?: videoNote?.thumbnail?.file,
+                        "",
+                        videoNote?.length ?: 240,
+                        videoNote?.length ?: 240
+                    ),
+                    fileName = "Video message"
                 )
             }
             is TdApi.MessageAnimatedEmoji -> {
@@ -496,41 +533,32 @@ object TelegramMappers {
             }
             is TdApi.MessageSticker -> {
                 val sticker = content.sticker
-                // Only a static WebP sticker can actually be drawn with the image
-                // pipeline Aether ships. A .tgs or .webm sticker is presented as its
-                // emoji rather than as a blank bubble claiming to be an image.
-                val isStatic = sticker?.format is TdApi.StickerFormatWebp
+                val format = when (sticker?.format) {
+                    is TdApi.StickerFormatTgs -> "TGS"
+                    is TdApi.StickerFormatWebm -> "WEBM"
+                    else -> "WEBP"
+                }
                 MediaPresentation(
                     text = sticker?.emoji.orEmpty(),
                     type = MessageType.STICKER,
-                    mediaItems = if (isStatic) {
-                        mediaItem(
-                            sticker?.sticker,
-                            sticker?.emoji.orEmpty(),
-                            sticker?.width ?: 0,
-                            sticker?.height ?: 0
-                        )
-                    } else {
-                        emptyList()
-                    },
-                    fileExtension = when (sticker?.format) {
-                        is TdApi.StickerFormatTgs -> "TGS"
-                        is TdApi.StickerFormatWebm -> "WEBM"
-                        else -> "WEBP"
-                    }
+                    mediaItems = mediaItem(
+                        sticker?.sticker ?: sticker?.thumbnail?.file,
+                        sticker?.emoji.orEmpty(),
+                        sticker?.width ?: 0,
+                        sticker?.height ?: 0
+                    ),
+                    fileExtension = format
                 )
             }
             is TdApi.MessageAnimation -> {
                 val animation = content.animation
                 val captionText = mapFormattedText(content.caption)
-                // The still thumbnail is what Aether can render; the animation file
-                // itself is not played, so nothing claims to be playing.
                 MediaPresentation(
                     text = captionText.text,
                     type = MessageType.ANIMATION,
                     formatted = captionText,
                     mediaItems = mediaItem(
-                        animation?.thumbnail?.file ?: animation?.animation,
+                        animation?.animation ?: animation?.thumbnail?.file,
                         captionText.text,
                         animation?.width ?: 0,
                         animation?.height ?: 0

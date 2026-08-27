@@ -51,6 +51,7 @@ enum class MessageAction {
     COPY,
     FORWARD,
     EDIT,
+    REPLACE_MEDIA,
     PIN,
     UNPIN,
     SAVE,
@@ -99,6 +100,7 @@ object MessageActionPolicy {
         if (capabilities.canBeCopied && hasCopyableText(message)) add(MessageAction.COPY)
         if (capabilities.canBeForwarded) add(MessageAction.FORWARD)
         if (capabilities.canBeEdited) add(MessageAction.EDIT)
+        if (capabilities.canEditMedia && isSaveableMedia(message)) add(MessageAction.REPLACE_MEDIA)
         if (capabilities.canBePinned) {
             add(if (message.isPinned) MessageAction.UNPIN else MessageAction.PIN)
         }
@@ -141,6 +143,7 @@ object MessageActionPolicy {
         MessageAction.REPLY,
         MessageAction.QUOTE_REPLY,
         MessageAction.EDIT,
+        MessageAction.REPLACE_MEDIA,
         MessageAction.PIN,
         MessageAction.UNPIN,
         MessageAction.COPY_LINK,
@@ -162,7 +165,11 @@ object MessageActionPolicy {
         MessageType.IMAGE,
         MessageType.ALBUM,
         MessageType.FILE,
-        MessageType.VOICE -> true
+        MessageType.VOICE,
+        MessageType.AUDIO,
+        MessageType.VIDEO_NOTE,
+        MessageType.ANIMATION,
+        MessageType.STICKER -> true
         else -> false
     }
 }

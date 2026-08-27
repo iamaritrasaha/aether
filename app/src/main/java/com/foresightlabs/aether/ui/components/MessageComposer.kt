@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -91,6 +92,8 @@ fun MessageComposer(
     replyQuote: ReplyQuote? = null,
     onOpenAttachmentSheet: () -> Unit,
     onVoiceNoteRecorded: () -> Unit,
+    onOpenVideoNote: () -> Unit = {},
+    onOpenStickerPicker: () -> Unit = {},
     enabled: Boolean = true,
     onTextChanged: (String) -> Unit = {},
     modifier: Modifier = Modifier
@@ -220,6 +223,26 @@ fun MessageComposer(
                     )
                 }
 
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Sticker / Emoji Button
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(colors.input)
+                        .clickable(enabled = enabled) { onOpenStickerPicker() }
+                        .testTag("sticker_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Stickers",
+                        tint = colors.textPrimary,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+
                 Spacer(modifier = Modifier.width(8.dp))
 
                 // Text Input Area
@@ -335,19 +358,26 @@ fun MessageComposer(
                             )
                         }
                     } else {
-                        // Voice Note Action Button
+                        // Voice Note / Video Note Action Button
+                        var isVideoNoteMode by remember { mutableStateOf(false) }
                         Box(
                             modifier = Modifier
                                 .size(38.dp)
                                 .clip(CircleShape)
                                 .background(colors.input)
-                                .clickable(enabled = enabled) { onVoiceNoteRecorded() }
-                                .testTag("voice_record_button"),
+                                .clickable(enabled = enabled) {
+                                    if (isVideoNoteMode) {
+                                        onOpenVideoNote()
+                                    } else {
+                                        onVoiceNoteRecorded()
+                                    }
+                                }
+                                .testTag(if (isVideoNoteMode) "video_note_button" else "voice_record_button"),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Mic,
-                                contentDescription = "Record Voice Note",
+                                imageVector = if (isVideoNoteMode) Icons.Default.Videocam else Icons.Default.Mic,
+                                contentDescription = if (isVideoNoteMode) "Record Video Message" else "Record Voice Note",
                                 tint = colors.textPrimary,
                                 modifier = Modifier.size(19.dp)
                             )

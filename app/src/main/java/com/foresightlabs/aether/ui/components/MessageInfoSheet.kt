@@ -163,8 +163,14 @@ internal fun infoRows(
     message.fileName?.takeIf { it.isNotBlank() }?.let { add("File" to it) }
     message.fileSize?.takeIf { it.isNotBlank() }?.let { add("Size" to it) }
 
-    if (message.type == MessageType.VOICE && message.voiceDurationSec > 0) {
+    if ((message.type == MessageType.VOICE || message.type == MessageType.AUDIO) && message.voiceDurationSec > 0) {
         add("Duration" to formatDuration(message.voiceDurationSec))
+    }
+
+    if (message.selfDestructIn > 0.0) {
+        add("Self-destruct in" to formatDuration(message.selfDestructIn.toInt()))
+    } else if (message.autoDeleteIn > 0.0) {
+        add("Auto-delete in" to formatDuration(message.autoDeleteIn.toInt()))
     }
 
     if (message.reactions.isNotEmpty()) {

@@ -144,14 +144,22 @@ class DefaultCallsRepository(
         lastMediaState = mediaState
     }
 
+    private var elapsedCallSeconds = 0
+
     private fun startTimer() {
-        timerJob?.cancel()
+        if (timerJob?.isActive == true) return
         timerJob = scope.launch {
-            var elapsed = 0
-            while (mediaEngine.state.value == MediaConnectionState.CONNECTED) {
+            while (true) {
                 delay(1000)
-                elapsed++
-                telegram.updateCallDuration(elapsed)
+                val state = mediaEngine.state.value
+                if (state == MediaConnectionState.CONNECTED) {
+                    elapsedCallSeconds++
+                    telegram.updateCallDuration(elapsedCallSeconds)
+                } else if (state == MediaConnectionState.RECONNECTING) {
+                    // Media temporarily reconnecting: preserve elapsed duration
+                } else {
+                    break
+                }
             }
         }
     }
@@ -159,6 +167,7 @@ class DefaultCallsRepository(
     private fun stopTimer() {
         timerJob?.cancel()
         timerJob = null
+        elapsedCallSeconds = 0
     }
 
     private companion object {

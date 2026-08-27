@@ -164,4 +164,120 @@ class MediaPresentationTest {
         assertNotNull(presentation.voiceWaveform)
         assertEquals(3, presentation.voiceWaveform.size)
     }
+
+    @Test
+    fun anAudioMessageIsPresentedAsAudioWithPerformerTitleAndDuration() {
+        val content = TdApi.MessageAudio().apply {
+            audio = TdApi.Audio().apply {
+                duration = 180
+                performer = "The Performer"
+                title = "Song Title"
+                fileName = "song.mp3"
+                mimeType = "audio/mpeg"
+                audio = downloadedFile(10, "/data/song.mp3", size = 4_194_304L)
+            }
+            caption = TdApi.FormattedText("Listen to this", emptyArray())
+        }
+
+        val presentation = TelegramMappers.mapPresentation(content, 61L, ::resolve)
+
+        assertEquals(MessageType.AUDIO, presentation.type)
+        assertEquals("Listen to this", presentation.text)
+        assertEquals("The Performer — Song Title", presentation.fileName)
+        assertEquals(180, presentation.voiceDurationSec)
+        assertEquals("4.0 MB", presentation.fileSize)
+    }
+
+    @Test
+    fun anAnimationMessageIsPresentedAsAnimation() {
+        val content = TdApi.MessageAnimation().apply {
+            animation = TdApi.Animation().apply {
+                duration = 5
+                width = 320
+                height = 240
+                fileName = "cat.gif"
+                mimeType = "image/gif"
+                animation = downloadedFile(11, "/data/cat.gif")
+            }
+            caption = TdApi.FormattedText("funny cat", emptyArray())
+        }
+
+        val presentation = TelegramMappers.mapPresentation(content, 62L, ::resolve)
+
+        assertEquals(MessageType.ANIMATION, presentation.type)
+        assertEquals("funny cat", presentation.text)
+    }
+
+    @Test
+    fun aContactMessageIsPresentedAsContact() {
+        val content = TdApi.MessageContact().apply {
+            contact = TdApi.Contact("+1234567890", "Jane", "Doe", "", 0)
+        }
+
+        val presentation = TelegramMappers.mapPresentation(content, 63L, ::resolve)
+
+        assertEquals(MessageType.CONTACT, presentation.type)
+        assertEquals("Jane Doe", presentation.text)
+    }
+
+    @Test
+    fun aLocationMessageIsPresentedAsLocation() {
+        val content = TdApi.MessageLocation().apply {
+            location = TdApi.Location(37.7749, -122.4194, 0.0)
+        }
+
+        val presentation = TelegramMappers.mapPresentation(content, 64L, ::resolve)
+
+        assertEquals(MessageType.LOCATION, presentation.type)
+        assertEquals("Location", presentation.text)
+    }
+
+    @Test
+    fun autoDeleteInAndSelfDestructInArePassedThroughToDomainMessage() {
+        val tdMessage = TdApi.Message().apply {
+            id = 12345L
+            chatId = 67890L
+            senderId = TdApi.MessageSenderUser(1L)
+            date = 1700000000
+            content = TdApi.MessageText(TdApi.FormattedText("Secret", emptyArray()), null, null)
+            autoDeleteIn = 3600.0
+            selfDestructIn = 30.0
+        }
+
+        val message = TelegramMappers.mapMessage(
+            message = tdMessage,
+            users = emptyMap(),
+            chats = emptyMap(),
+            myUserId = 1L,
+            lastReadOutboxMessageId = 0L,
+            resolvePath = { null }
+        )
+
+        assertEquals(3600.0, message.autoDeleteIn, 0.001)
+        assertEquals(30.0, message.selfDestructIn, 0.001)
+    }
+
+    @Test
+    fun messageInfoSheetShowsAutoDeleteAndDurationRows() {
+        val message = com.foresightlabs.aether.domain.model.Message(
+            id = "1",
+            chatId = "100",
+            senderId = "1",
+            senderName = "Alice",
+            text = "Track",
+            timestamp = "12:00",
+            type = MessageType.AUDIO,
+            voiceDurationSec = 125,
+            autoDeleteIn = 300.0,
+            isOutgoing = true
+        )
+
+        val rows = com.foresightlabs.aether.ui.components.infoRows(
+            message = message,
+            capabilities = com.foresightlabs.aether.domain.messages.MessageCapabilities.Unknown
+        )
+
+        assertTrue(rows.any { it.first == "Duration" && it.second == "2:05" })
+        assertTrue(rows.any { it.first == "Auto-delete in" && it.second == "5:00" })
+    }
 }

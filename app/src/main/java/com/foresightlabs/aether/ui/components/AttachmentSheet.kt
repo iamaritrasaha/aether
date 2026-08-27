@@ -27,8 +27,11 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -70,10 +73,13 @@ fun AttachmentSheet(
     val options = listOf(
         AttachmentOption("Gallery", Icons.Default.PhotoLibrary, rampPair(0)),
         AttachmentOption("Camera", Icons.Default.CameraAlt, rampPair(1)),
-        AttachmentOption("File", Icons.Default.Description, rampPair(2)),
-        AttachmentOption("Audio", Icons.Default.Headphones, rampPair(3)),
-        AttachmentOption("Location", Icons.Default.LocationOn, rampPair(0)),
-        AttachmentOption("Contact", Icons.Default.Person, rampPair(2))
+        AttachmentOption("Video Message", Icons.Default.Videocam, rampPair(2)),
+        AttachmentOption("File", Icons.Default.Description, rampPair(3)),
+        AttachmentOption("Audio", Icons.Default.Headphones, rampPair(0)),
+        AttachmentOption("Location", Icons.Default.LocationOn, rampPair(1)),
+        AttachmentOption("Live Location", Icons.Default.NearMe, rampPair(2)),
+        AttachmentOption("Venue", Icons.Default.Place, rampPair(3)),
+        AttachmentOption("Contact", Icons.Default.Person, rampPair(0))
     )
 
     if (isVisible) {

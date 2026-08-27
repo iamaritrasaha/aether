@@ -138,6 +138,13 @@ fun HomeScreen(
     onNavigateToSettings: () -> Unit,
     onNewMessageClick: () -> Unit,
     onNavigateToPulse: () -> Unit = {},
+    folders: List<com.foresightlabs.aether.domain.model.ChatFolder> = listOf(com.foresightlabs.aether.domain.model.ChatFolder.Main),
+    selectedFolder: com.foresightlabs.aether.domain.model.ChatFolder = com.foresightlabs.aether.domain.model.ChatFolder.Main,
+    onSelectFolder: (com.foresightlabs.aether.domain.model.ChatFolder) -> Unit = {},
+    onCreateFolder: (String) -> Unit = {},
+    onEditFolder: (Int, String) -> Unit = { _, _ -> },
+    onDeleteFolder: (Int) -> Unit = {},
+    onReorderFolders: (List<Int>) -> Unit = {},
     dockSelectedKey: String = HOME_KEY,
     modifier: Modifier = Modifier
 ) {
@@ -151,6 +158,7 @@ fun HomeScreen(
     var heroCoreHeightPx by remember { mutableIntStateOf(0) }
     var requestSearchFocus by remember { mutableStateOf(false) }
     var showLocationPicker by remember { mutableStateOf(false) }
+    var showFolderManagement by remember { mutableStateOf(false) }
     var actionSheetChat by remember { mutableStateOf<Chat?>(null) }
 
     val themeState = com.foresightlabs.aether.ui.theme.LocalAppThemeState.current
@@ -348,6 +356,36 @@ fun HomeScreen(
                         )
                     )
 
+                    if (folders.size > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(
+                                    start = AetherEmber.Spacing.Space16,
+                                    end = AetherEmber.Spacing.Space16,
+                                    top = AetherEmber.Spacing.Space4,
+                                    bottom = AetherEmber.Spacing.Space4
+                                ),
+                            horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
+                        ) {
+                            folders.forEach { folder ->
+                                AetherChip(
+                                    label = folder.title,
+                                    selected = selectedFolder.id == folder.id,
+                                    onClick = { onSelectFolder(folder) },
+                                    modifier = Modifier.testTag("folder_${folder.id}")
+                                )
+                            }
+                            AetherChip(
+                                label = "Edit",
+                                selected = false,
+                                onClick = { showFolderManagement = true },
+                                modifier = Modifier.testTag("folder_manage_btn")
+                            )
+                        }
+                    }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -496,6 +534,16 @@ fun HomeScreen(
                 )
             }
         }
+
+        com.foresightlabs.aether.ui.components.FolderManagementSheet(
+            isVisible = showFolderManagement,
+            folders = folders,
+            onDismiss = { showFolderManagement = false },
+            onCreateFolder = onCreateFolder,
+            onEditFolder = onEditFolder,
+            onDeleteFolder = onDeleteFolder,
+            onReorderFolders = onReorderFolders
+        )
     }
 }
 

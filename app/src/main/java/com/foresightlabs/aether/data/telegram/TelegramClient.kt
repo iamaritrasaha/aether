@@ -14,6 +14,9 @@ import com.foresightlabs.aether.domain.model.ChatFolder
 import com.foresightlabs.aether.domain.model.ForumTopicSummary
 import com.foresightlabs.aether.domain.model.ConnectionStatus
 import com.foresightlabs.aether.domain.model.Message
+import com.foresightlabs.aether.domain.model.MessageType
+import com.foresightlabs.aether.domain.model.StickerItem
+import com.foresightlabs.aether.domain.model.StickerSetInfo
 import com.foresightlabs.aether.domain.model.User
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -520,13 +523,380 @@ class TelegramClient(private val application: Application) {
         return sendContent(chatId, content, replyToMessageId, forumTopicId)
     }
 
-    suspend fun editMessage(chatId: Long, messageId: Long, newText: String): Result<TdApi.Message> {
-        val content = TdApi.InputMessageText(
-            TdApi.FormattedText(newText, emptyArray()),
+    suspend fun sendAnimation(
+        chatId: Long,
+        animationPath: String,
+        caption: String = "",
+        duration: Int = 0,
+        width: Int = 0,
+        height: Int = 0,
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val content = TdApi.InputMessageAnimation(
+            TdApi.InputFileLocal(animationPath),
             null,
-            true
+            intArrayOf(),
+            duration,
+            width,
+            height,
+            TdApi.FormattedText(caption, emptyArray()),
+            false,
+            false
         )
-        return when (val result = send(TdApi.EditMessageText(chatId, messageId, null, content))) {
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
+    }
+
+    suspend fun sendSticker(
+        chatId: Long,
+        stickerPath: String,
+        emoji: String = "",
+        width: Int = 0,
+        height: Int = 0,
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val content = TdApi.InputMessageSticker(
+            TdApi.InputFileLocal(stickerPath),
+            null,
+            width,
+            height,
+            emoji
+        )
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
+    }
+
+    suspend fun sendStickerFile(
+        chatId: Long,
+        fileId: Int,
+        emoji: String = "",
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val content = TdApi.InputMessageSticker(
+            TdApi.InputFileId(fileId),
+            null,
+            0,
+            0,
+            emoji
+        )
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
+    }
+
+    suspend fun sendVideoNote(
+        chatId: Long,
+        videoPath: String,
+        duration: Int = 0,
+        length: Int = 240,
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val content = TdApi.InputMessageVideoNote(
+            TdApi.InputFileLocal(videoPath),
+            null,
+            duration,
+            length,
+            null
+        )
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
+    }
+
+    suspend fun sendLiveLocation(
+        chatId: Long,
+        latitude: Double,
+        longitude: Double,
+        livePeriod: Int,
+        heading: Int = 0,
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val location = TdApi.Location(latitude, longitude, 0.0)
+        val content = TdApi.InputMessageLocation(location, livePeriod, heading, 0)
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
+    }
+
+    suspend fun editLiveLocation(
+        chatId: Long,
+        messageId: Long,
+        latitude: Double,
+        longitude: Double,
+        livePeriod: Int = 0,
+        heading: Int = 0
+    ): Result<TdApi.Message> {
+        val function = TdApi.EditMessageLiveLocation(
+            chatId,
+            messageId,
+            null,
+            TdApi.Location(latitude, longitude, 0.0),
+            livePeriod,
+            heading,
+            0
+        )
+        return when (val result = send(function)) {
+            is TdApi.Message -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to edit live location"))
+        }
+    }
+
+    suspend fun stopLiveLocation(chatId: Long, messageId: Long): Result<TdApi.Message> {
+        val function = TdApi.EditMessageLiveLocation(
+            chatId,
+            messageId,
+            null,
+            null,
+            0,
+            0,
+            0
+        )
+        return when (val result = send(function)) {
+            is TdApi.Message -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to stop live location"))
+        }
+    }
+
+    suspend fun sendVenue(
+        chatId: Long,
+        latitude: Double,
+        longitude: Double,
+        title: String,
+        address: String,
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val venue = TdApi.Venue(
+            TdApi.Location(latitude, longitude, 0.0),
+            title,
+            address,
+            "",
+            "",
+            ""
+        )
+        return sendContent(chatId, TdApi.InputMessageVenue(venue), replyToMessageId, forumTopicId)
+    }
+
+    suspend fun replaceMedia(
+        chatId: Long,
+        messageId: Long,
+        mediaPath: String,
+        type: MessageType,
+        caption: String = ""
+    ): Result<TdApi.Message> {
+        val inputContent: TdApi.InputMessageContent = when (type) {
+            MessageType.IMAGE -> TdApi.InputMessagePhoto(
+                TdApi.InputFileLocal(mediaPath),
+                null, null, intArrayOf(), 0, 0,
+                TdApi.FormattedText(caption, emptyArray()),
+                false, null, false
+            )
+            MessageType.VIDEO_NOTE -> TdApi.InputMessageVideoNote(
+                TdApi.InputFileLocal(mediaPath),
+                null, 0, 240, null
+            )
+            MessageType.ANIMATION -> TdApi.InputMessageAnimation(
+                TdApi.InputFileLocal(mediaPath),
+                null, intArrayOf(), 0, 0, 0,
+                TdApi.FormattedText(caption, emptyArray()),
+                false, false
+            )
+            MessageType.AUDIO -> TdApi.InputMessageAudio(
+                TdApi.InputFileLocal(mediaPath),
+                null, 0, "", "",
+                TdApi.FormattedText(caption, emptyArray())
+            )
+            else -> TdApi.InputMessageDocument(
+                TdApi.InputFileLocal(mediaPath),
+                null, false,
+                TdApi.FormattedText(caption, emptyArray())
+            )
+        }
+        val function = TdApi.EditMessageMedia(chatId, messageId, null, inputContent)
+        return when (val result = send(function)) {
+            is TdApi.Message -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to replace media"))
+        }
+    }
+
+    suspend fun getInstalledStickerSets(): Result<List<StickerSetInfo>> {
+        val result = send(TdApi.GetInstalledStickerSets(TdApi.StickerTypeRegular()))
+        return when (result) {
+            is TdApi.StickerSets -> {
+                val sets = result.sets.orEmpty().filterNotNull().map { info ->
+                    StickerSetInfo(
+                        id = info.id,
+                        title = info.title.orEmpty(),
+                        name = info.name.orEmpty(),
+                        thumbnailPath = info.thumbnail?.file?.local?.path
+                    )
+                }
+                Result.success(sets)
+            }
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to get installed sticker sets"))
+        }
+    }
+
+    suspend fun getStickerSet(setId: Long): Result<StickerSetInfo> {
+        val result = send(TdApi.GetStickerSet(setId))
+        return when (result) {
+            is TdApi.StickerSet -> {
+                val items = result.stickers.orEmpty().filterNotNull().map { mapStickerItem(it) }
+                Result.success(
+                    StickerSetInfo(
+                        id = result.id,
+                        title = result.title.orEmpty(),
+                        name = result.name.orEmpty(),
+                        thumbnailPath = result.thumbnail?.file?.local?.path,
+                        stickers = items
+                    )
+                )
+            }
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to get sticker set"))
+        }
+    }
+
+    suspend fun getRecentStickers(): Result<List<StickerItem>> {
+        val result = send(TdApi.GetRecentStickers(false))
+        return when (result) {
+            is TdApi.Stickers -> {
+                val items = result.stickers.orEmpty().filterNotNull().map { mapStickerItem(it) }
+                Result.success(items)
+            }
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to get recent stickers"))
+        }
+    }
+
+    suspend fun getFavoriteStickers(): Result<List<StickerItem>> {
+        val result = send(TdApi.GetFavoriteStickers())
+        return when (result) {
+            is TdApi.Stickers -> {
+                val items = result.stickers.orEmpty().filterNotNull().map { mapStickerItem(it) }
+                Result.success(items)
+            }
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to get favorite stickers"))
+        }
+    }
+
+    suspend fun searchStickerSets(query: String): Result<List<StickerSetInfo>> {
+        val result = send(TdApi.SearchStickerSets(TdApi.StickerTypeRegular(), query))
+        return when (result) {
+            is TdApi.StickerSets -> {
+                val sets = result.sets.orEmpty().filterNotNull().map { info ->
+                    StickerSetInfo(
+                        id = info.id,
+                        title = info.title.orEmpty(),
+                        name = info.name.orEmpty()
+                    )
+                }
+                Result.success(sets)
+            }
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to search sticker sets"))
+        }
+    }
+
+    private fun mapStickerItem(sticker: TdApi.Sticker): StickerItem {
+        val file = sticker.sticker
+        if (file != null && !file.local.isDownloadingCompleted && file.local.canBeDownloaded) {
+            scope.launch { downloadFile(file.id) }
+        }
+        return StickerItem(
+            fileId = file?.id ?: 0,
+            emoji = sticker.emoji.orEmpty(),
+            width = sticker.width,
+            height = sticker.height,
+            isAnimated = sticker.format is TdApi.StickerFormatTgs,
+            isVideo = sticker.format is TdApi.StickerFormatWebm,
+            localPath = file?.local?.path?.takeIf { it.isNotBlank() },
+            setId = sticker.setId
+        )
+    }
+
+    suspend fun createChatFolder(
+        title: String,
+        includedChatIds: LongArray = LongArray(0),
+        excludedChatIds: LongArray = LongArray(0)
+    ): Result<TdApi.ChatFolderInfo> {
+        val folder = TdApi.ChatFolder(
+            TdApi.ChatFolderName(TdApi.FormattedText(title, emptyArray<TdApi.TextEntity>()), false),
+            null,
+            -1,
+            false,
+            LongArray(0),
+            includedChatIds,
+            excludedChatIds,
+            false, false, false, false, false, false, false, false
+        )
+        return when (val result = send(TdApi.CreateChatFolder(folder))) {
+            is TdApi.ChatFolderInfo -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to create chat folder"))
+        }
+    }
+
+    suspend fun editChatFolder(
+        folderId: Int,
+        title: String,
+        includedChatIds: LongArray = LongArray(0),
+        excludedChatIds: LongArray = LongArray(0)
+    ): Result<TdApi.ChatFolderInfo> {
+        val folder = TdApi.ChatFolder(
+            TdApi.ChatFolderName(TdApi.FormattedText(title, emptyArray<TdApi.TextEntity>()), false),
+            null,
+            -1,
+            false,
+            LongArray(0),
+            includedChatIds,
+            excludedChatIds,
+            false, false, false, false, false, false, false, false
+        )
+        return when (val result = send(TdApi.EditChatFolder(folderId, folder))) {
+            is TdApi.ChatFolderInfo -> Result.success(result)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to edit chat folder"))
+        }
+    }
+
+    suspend fun deleteChatFolder(folderId: Int): Result<Unit> {
+        return sendExpectOk(TdApi.DeleteChatFolder(folderId, LongArray(0)))
+    }
+
+    suspend fun reorderChatFolders(folderIds: IntArray): Result<Unit> {
+        return sendExpectOk(TdApi.ReorderChatFolders(folderIds, 0))
+    }
+
+    suspend fun editMessage(chatId: Long, messageId: Long, newText: String): Result<TdApi.Message> {
+        val raw = rawMessages[messageId]
+        val function = when (raw?.content) {
+            is TdApi.MessagePhoto,
+            is TdApi.MessageVideo,
+            is TdApi.MessageAnimation,
+            is TdApi.MessageDocument,
+            is TdApi.MessageAudio,
+            is TdApi.MessageVoiceNote -> {
+                TdApi.EditMessageCaption(
+                    chatId,
+                    messageId,
+                    null,
+                    TdApi.FormattedText(newText, emptyArray()),
+                    false
+                )
+            }
+            else -> {
+                val content = TdApi.InputMessageText(
+                    TdApi.FormattedText(newText, emptyArray()),
+                    null,
+                    true
+                )
+                TdApi.EditMessageText(chatId, messageId, null, content)
+            }
+        }
+        return when (val result = send(function)) {
             is TdApi.Message -> Result.success(result)
             is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
             else -> Result.failure(IllegalStateException("Unexpected edit message result"))
@@ -569,6 +939,10 @@ class TelegramClient(private val application: Application) {
 
     suspend fun unpinMessage(chatId: Long, messageId: Long): Result<Unit> {
         return sendExpectOk(TdApi.UnpinChatMessage(chatId, messageId))
+    }
+
+    suspend fun unpinAllMessages(chatId: Long): Result<Unit> {
+        return sendExpectOk(TdApi.UnpinAllChatMessages(chatId))
     }
 
     suspend fun createVoiceCall(userId: Long): Result<Int> {
@@ -1122,6 +1496,23 @@ class TelegramClient(private val application: Application) {
     /** Stops a poll, so no further votes are accepted. */
     suspend fun stopPoll(chatId: Long, messageId: Long): Result<Unit> {
         return sendExpectOk(TdApi.StopPoll(chatId, messageId, null))
+    }
+
+    // --- scheduled messages -----------------------------------------------------
+
+    suspend fun getScheduledMessages(chatId: Long): List<Message> {
+        val result = send(TdApi.GetChatScheduledMessages(chatId))
+        val messages = (result as? TdApi.Messages)?.messages ?: return emptyList()
+        return messages.mapNotNull { td -> td?.let(::mapUiMessage) }
+    }
+
+    suspend fun sendScheduledMessageNow(chatId: Long, messageId: Long): Result<Unit> {
+        return sendExpectOk(TdApi.EditMessageSchedulingState(chatId, messageId, null))
+    }
+
+    suspend fun rescheduleMessage(chatId: Long, messageId: Long, dateSeconds: Int): Result<Unit> {
+        val state = TdApi.MessageSchedulingStateSendAtDate(dateSeconds, 0)
+        return sendExpectOk(TdApi.EditMessageSchedulingState(chatId, messageId, state))
     }
 
     /**
@@ -1759,7 +2150,11 @@ class TelegramClient(private val application: Application) {
 
     private fun Message.needsMedia(): Boolean = when (type) {
         com.foresightlabs.aether.domain.model.MessageType.IMAGE,
-        com.foresightlabs.aether.domain.model.MessageType.ALBUM -> mediaItems.isEmpty()
+        com.foresightlabs.aether.domain.model.MessageType.ALBUM,
+        com.foresightlabs.aether.domain.model.MessageType.ANIMATION,
+        com.foresightlabs.aether.domain.model.MessageType.VIDEO_NOTE,
+        com.foresightlabs.aether.domain.model.MessageType.AUDIO,
+        com.foresightlabs.aether.domain.model.MessageType.STICKER -> mediaItems.isEmpty()
         else -> false
     }
 

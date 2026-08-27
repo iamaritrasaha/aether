@@ -244,6 +244,7 @@ private fun titleFor(action: MessageAction): String = when (action) {
     MessageAction.COPY -> "Copy text"
     MessageAction.FORWARD -> "Forward"
     MessageAction.EDIT -> "Edit message"
+    MessageAction.REPLACE_MEDIA -> "Replace media"
     MessageAction.PIN -> "Pin message"
     MessageAction.UNPIN -> "Unpin message"
     MessageAction.SAVE -> "Save to downloads"
@@ -260,6 +261,7 @@ private fun iconFor(action: MessageAction): ImageVector = when (action) {
     MessageAction.COPY -> Icons.Default.ContentCopy
     MessageAction.FORWARD -> Icons.AutoMirrored.Filled.Send
     MessageAction.EDIT -> Icons.Default.Edit
+    MessageAction.REPLACE_MEDIA -> Icons.Default.Edit
     MessageAction.PIN, MessageAction.UNPIN -> Icons.Default.PushPin
     MessageAction.SAVE -> Icons.Default.Download
     MessageAction.COPY_LINK -> Icons.Default.Link

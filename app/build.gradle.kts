@@ -32,8 +32,8 @@ android {
     applicationId = "com.foresightlabs.aether"
     minSdk = 24
     targetSdk = 37
-    versionCode = 2
-    versionName = "1.1"
+    versionCode = 3
+    versionName = "1.2.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -94,6 +94,7 @@ android {
 
 dependencies {
   implementation(project(":tdlib"))
+  implementation(project(":call-media"))
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.compose.material.icons.core)
@@ -108,12 +109,22 @@ dependencies {
   implementation(libs.androidx.lifecycle.viewmodel.compose)
   implementation(libs.androidx.navigation.compose)
   implementation(libs.coil.compose)
+  implementation(libs.coil.gif)
+  implementation(libs.coil.video)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.androidx.datastore.preferences)
+  implementation(libs.androidx.camera.core)
+  implementation(libs.androidx.camera.camera2)
+  implementation(libs.androidx.camera.lifecycle)
+  implementation(libs.androidx.camera.view)
+  implementation(libs.androidx.camera.video)
+  implementation(libs.androidx.media3.exoplayer)
+  implementation(libs.androidx.media3.ui)
   // Haze 1.2.2 targets the same Compose 1.7 generation as Aether and provides
   // real backdrop capture/RenderEffect blur with a built-in scrim fallback.
   implementation("dev.chrisbanes.haze:haze:1.2.2")
+  implementation("com.airbnb.android:lottie-compose:6.4.0")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
