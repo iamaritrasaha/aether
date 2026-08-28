@@ -54,10 +54,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.domain.model.ChatFolder
+import com.foresightlabs.aether.ui.design.AetherGlass
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
+
 
 @Composable
 fun FolderManagementSheet(
@@ -93,13 +95,14 @@ fun FolderManagementSheet(
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
-                Box(
+                AetherGlass(
+                    frostState = null,
+                    shape = AetherEmber.Shapes.RisingSheet,
+                    elevation = 12.dp,
+                    emphasis = 0.25f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(480.dp)
-                        .clip(AetherEmber.Shapes.RisingSheet)
-                        .background(colors.surface)
-                        .border(1.dp, colors.border, AetherEmber.Shapes.RisingSheet)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -354,26 +357,28 @@ fun FolderManagementSheet(
                 ) { editingFolder = null },
             contentAlignment = Alignment.Center
         ) {
-            Column(
+            AetherGlass(
+                frostState = null,
+                shape = RoundedCornerShape(18.dp),
+                elevation = 10.dp,
+                emphasis = 0.2f,
                 modifier = Modifier
                     .width(320.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(colors.surface)
-                    .border(1.dp, colors.border, RoundedCornerShape(18.dp))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) { /* stay inside */ }
                     .padding(20.dp)
             ) {
-                Text(
-                    text = "Edit Folder",
-                    fontFamily = SpaceGroteskFontFamily,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.textPrimary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Edit Folder",
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
 
                 OutlinedTextField(
                     value = editingFolderName,
@@ -427,4 +432,5 @@ fun FolderManagementSheet(
             }
         }
     }
+}
 }

@@ -68,11 +68,7 @@ object ActiveNow {
      */
     fun from(chats: List<Chat>, limit: Int = MAX_PEOPLE): ActiveNowState {
         val candidates = chats.filter { chat ->
-            val user = chat.directUser
-            chat.type == ChatType.DIRECT &&
-                user != null &&
-                !user.isBot &&
-                !user.isDeleted
+            chat.isPersonalChat && chat.directUser != null
         }
         if (candidates.isEmpty()) return ActiveNowState.Empty
 

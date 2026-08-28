@@ -55,6 +55,7 @@ import com.foresightlabs.aether.ui.components.AetherAvatar
 import com.foresightlabs.aether.ui.design.AetherAccent
 import com.foresightlabs.aether.ui.design.AetherBackButton
 import com.foresightlabs.aether.ui.design.AetherFloatingHeader
+import com.foresightlabs.aether.ui.design.AetherGlass
 import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
 import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFraction
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
@@ -169,7 +170,7 @@ fun SettingsScreen(
                         SettingsRowItem(
                             icon = Icons.Default.Palette,
                             title = "Appearance & Atmosphere",
-                            subtitle = "Dynamic Palettes, Weather Modulation, OLED, Accents",
+                            subtitle = "Atmospheric palettes, weather modulation, accents, typography",
                             onClick = onNavigateToAppearance,
                             testTag = "settings_appearance_item"
                         )
@@ -360,65 +361,68 @@ fun SettingsScreen(
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(
+                AetherGlass(
+                    frostState = null,
+                    shape = AetherEmber.Shapes.L,
+                    elevation = 10.dp,
+                    emphasis = 0.2f,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(AetherEmber.Shapes.L)
-                        .background(colors.surface)
-                        .border(1.dp, Color(0x28FFFFFF), AetherEmber.Shapes.L)
                         .clickable(enabled = false) {}
                         .padding(22.dp)
                 ) {
-                    Text(
-                        text = "Log out of Aether?",
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.textPrimary
-                    )
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "Log out of Aether?",
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.textPrimary
+                        )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                    Text(
-                        text = "This signs this device out of Telegram through TDLib. Your chats and media stay safe on Telegram's cloud servers.",
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 13.5.sp,
-                        color = colors.textSecondary,
-                        lineHeight = 19.sp
-                    )
+                        Text(
+                            text = "This signs this device out of Telegram through TDLib. Your chats and media stay safe on Telegram's cloud servers.",
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 13.5.sp,
+                            color = colors.textSecondary,
+                            lineHeight = 19.sp
+                        )
 
-                    Spacer(modifier = Modifier.height(22.dp))
+                        Spacer(modifier = Modifier.height(22.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TextButton(onClick = onDismissLogout) {
-                            Text(
-                                "Cancel",
-                                fontFamily = ManropeFontFamily,
-                                color = colors.textSecondary,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        Box(
-                            modifier = Modifier
-                                .clip(AetherEmber.Shapes.Pill)
-                                .background(Color(0xFFEF4444))
-                                .clickable(onClick = onConfirmLogout)
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                "Log Out",
-                                fontFamily = ManropeFontFamily,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.5.sp
-                            )
+                            TextButton(onClick = onDismissLogout) {
+                                Text(
+                                    "Cancel",
+                                    fontFamily = ManropeFontFamily,
+                                    color = colors.textSecondary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(AetherEmber.Shapes.Pill)
+                                    .background(Color(0xFFEF4444))
+                                    .clickable(onClick = onConfirmLogout)
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    "Log Out",
+                                    fontFamily = ManropeFontFamily,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
                         }
                     }
                 }

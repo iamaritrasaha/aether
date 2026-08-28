@@ -1,9 +1,11 @@
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
 package com.foresightlabs.aether.navigation
 
 import android.app.Application
-import androidx.compose.animation.AnimatedContentTransitionScope
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -29,7 +31,22 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
+import androidx.compose.foundation.background
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.navigation.compose.NavHost
+import com.foresightlabs.aether.ui.design.AetherDockDefaults
+import com.foresightlabs.aether.ui.design.AetherNavigationMotion
+import com.foresightlabs.aether.ui.theme.LocalReducedMotion
+import com.foresightlabs.aether.ui.design.LocalDockAnimatedScope
+import com.foresightlabs.aether.ui.design.LocalSceneHeightCache
+import com.foresightlabs.aether.ui.design.LocalSceneOwnsDock
+import com.foresightlabs.aether.ui.design.LocalSceneTransitionProgress
+import com.foresightlabs.aether.ui.design.SceneHeightCache
+import com.foresightlabs.aether.ui.design.LocalSharedTransitionScope
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
@@ -122,7 +139,35 @@ fun AetherApp(
     val selectedFolder by chatsViewModel.selectedFolder.collectAsStateWithLifecycle()
     val folderChats by chatsViewModel.folderChats.collectAsStateWithLifecycle()
     val colors = LocalAetherColors.current
-    val application = LocalContext.current.applicationContext as Application
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val application = context.applicationContext as Application
+
+    val pendingChatId by com.foresightlabs.aether.data.notifications.ActiveConversationTracker.pendingNavigationChatId.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(pendingChatId) {
+        val targetChatId = pendingChatId
+        if (targetChatId != null) {
+            com.foresightlabs.aether.data.notifications.ActiveConversationTracker.consumePendingNavigationChatId()
+            navController.navigate(Destinations.conversation(targetChatId.toString()))
+        }
+    }
+
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        val permissionCoordinator = (application as? AetherApplication)?.permissionCoordinator
+        val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+            contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+        ) {
+            permissionCoordinator?.refresh()
+        }
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isTablet = maxWidth >= 720.dp
@@ -174,6 +219,32 @@ fun AetherApp(
                 }
             }
         } else {
+            // The persistent rear layer. It lives above the navigation graph and
+            // outlives every route change, so the black surface Home shows the
+            // conversations on and the one a conversation shows its composer on
+            // are not two surfaces that hand over — they are this one, uncovered
+            // to different heights.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.background)
+            ) {
+            CompositionLocalProvider(LocalSceneOwnsDock provides true) {
+            SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
+            val sharedScope = this
+            // Route transitions are built once here so reduced motion can flatten
+            // them without every destination re-deriving the same decision.
+            val calm = LocalReducedMotion.current
+            val morph = if (calm) 0 else AetherDockDefaults.MorphMillis
+            // The one pair of rest heights the whole morph interpolates between.
+            // Lives above the graph so it survives Home/Conversation unmounting.
+            val heightCache = remember { SceneHeightCache() }
+            // AnimatedContent holds both the leaving and entering destination at
+            // alpha 1 for the whole transition instead of cross-fading them
+            // itself — Home and Conversation drive their own visual change from
+            // the shared progress below, and a second, independent fade on top of
+            // that would fight it and reintroduce the dip this was built to fix.
+            val hold = tween<Float>(morph, easing = LinearEasing)
             NavHost(
                 navController = navController,
                 startDestination = Destinations.CHATS,
@@ -181,9 +252,26 @@ fun AetherApp(
             ) {
                 composable(
                     route = Destinations.CHATS,
-                    enterTransition = { fadeIn(animationSpec = tween(220)) },
-                    exitTransition = { fadeOut(animationSpec = tween(180)) }
+                    enterTransition = { fadeIn(animationSpec = hold, initialAlpha = 1f) },
+                    exitTransition = { fadeOut(animationSpec = hold, targetAlpha = 1f) },
+                    popEnterTransition = { fadeIn(animationSpec = hold, initialAlpha = 1f) },
+                    popExitTransition = { fadeOut(animationSpec = hold, targetAlpha = 1f) }
                 ) {
+                    // 0 at rest on Home, moving toward 1 as a conversation covers
+                    // it — read from the same underlying transition Navigation
+                    // Compose drives for predictive back, so a live gesture moves
+                    // this in step with the finger rather than waiting for it to
+                    // finish.
+                    val progress by transition.animateFloat(
+                        label = "home_progress",
+                        transitionSpec = { if (calm) snap() else tween(morph, easing = FastOutSlowInEasing) }
+                    ) { state -> if (state == EnterExitState.Visible) 0f else 1f }
+                    CompositionLocalProvider(
+                        LocalSharedTransitionScope provides sharedScope,
+                        LocalDockAnimatedScope provides this@composable,
+                        LocalSceneTransitionProgress provides progress,
+                        LocalSceneHeightCache provides heightCache
+                    ) {
                     HomeScreen(
                         chats = folderChats,
                         currentUser = currentUser,
@@ -203,12 +291,15 @@ fun AetherApp(
                         onChatAction = chatsViewModel::perform,
                         onNavigateToPulse = { navController.navigate(Destinations.PULSE) }
                     )
+                    }
                 }
 
                 composable(
                     route = Destinations.CONTACTS,
-                    enterTransition = { fadeIn(animationSpec = tween(220)) },
-                    exitTransition = { fadeOut(animationSpec = tween(180)) }
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) {
                     val aetherApp = application as? AetherApplication
                     val contactsRepository = aetherApp?.contactsRepository
@@ -237,8 +328,10 @@ fun AetherApp(
 
                 composable(
                     route = Destinations.PULSE,
-                    enterTransition = { fadeIn(animationSpec = tween(220)) },
-                    exitTransition = { fadeOut(animationSpec = tween(180)) }
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) {
                     val pulseViewModel: com.foresightlabs.aether.ui.pulse.PulseViewModel = viewModel()
                     val myPulse by pulseViewModel.myPulse.collectAsStateWithLifecycle()
@@ -272,33 +365,49 @@ fun AetherApp(
                 composable(
                     route = Destinations.CONVERSATION_CHAT,
                     arguments = listOf(navArgument("chatId") { type = NavType.StringType }),
-                    enterTransition = {
-                        slideIntoContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    },
-                    exitTransition = {
-                        slideOutOfContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    }
+                    // No page slide: the dock collapsing from the conversation list
+                    // into the composer is the transition, driven below by the same
+                    // progress Home reads — not an independent animation of this
+                    // route's own opacity or position.
+                    enterTransition = { fadeIn(animationSpec = hold, initialAlpha = 1f) },
+                    exitTransition = { fadeOut(animationSpec = hold, targetAlpha = 1f) },
+                    popEnterTransition = { fadeIn(animationSpec = hold, initialAlpha = 1f) },
+                    popExitTransition = { fadeOut(animationSpec = hold, targetAlpha = 1f) }
                 ) { backStackEntry ->
                     val chatId = backStackEntry.arguments?.getString("chatId").orEmpty()
                     val id = chatId.toLongOrNull() ?: return@composable
+                    // 1 at rest in the conversation, moving toward 0 as it is
+                    // uncovered by Home returning underneath it. Defined on the
+                    // *same underlying transition* as Home's — both destinations
+                    // share one AnimatedContent swap, so at any instant the two
+                    // progress values agree exactly; there is no clock to drift.
+                    val progress by transition.animateFloat(
+                        label = "conversation_progress",
+                        transitionSpec = { if (calm) snap() else tween(morph, easing = FastOutSlowInEasing) }
+                    ) { state -> if (state == EnterExitState.Visible) 1f else 0f }
+                    CompositionLocalProvider(
+                        LocalSharedTransitionScope provides sharedScope,
+                        LocalDockAnimatedScope provides this@composable,
+                        LocalSceneTransitionProgress provides progress,
+                        LocalSceneHeightCache provides heightCache
+                    ) {
                         ConversationRoute(
-                        application = application,
-                        target = com.foresightlabs.aether.domain.model.ConversationTarget.Chat(id),
-                        onBack = { navController.popBackStack() },
-                        onNavigateToProfile = { navController.navigate(Destinations.profile(chatId)) },
-                        onNavigateToChatAppearance = { navController.navigate(Destinations.chatAppearance(it)) }
-                    )
+                            application = application,
+                            target = com.foresightlabs.aether.domain.model.ConversationTarget.Chat(id),
+                            onBack = { navController.popBackStack() },
+                            onNavigateToProfile = { navController.navigate(Destinations.profile(chatId)) },
+                            onNavigateToChatAppearance = { navController.navigate(Destinations.chatAppearance(it)) }
+                        )
+                    }
                 }
 
                 composable(
                     route = Destinations.FORUM_TOPICS,
-                    arguments = listOf(navArgument("chatId") { type = NavType.StringType })
+                    arguments = listOf(navArgument("chatId") { type = NavType.StringType }),
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) { backStackEntry ->
                     val chatId = backStackEntry.arguments?.getString("chatId").orEmpty()
                     val id = chatId.toLongOrNull() ?: return@composable
@@ -330,7 +439,11 @@ fun AetherApp(
                     arguments = listOf(
                         navArgument("chatId") { type = NavType.StringType },
                         navArgument("topicId") { type = NavType.StringType }
-                    )
+                    ),
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) { backStackEntry ->
                     val chatId = backStackEntry.arguments?.getString("chatId")?.toLongOrNull()
                         ?: return@composable
@@ -355,18 +468,10 @@ fun AetherApp(
                 composable(
                     route = Destinations.CONVERSATION_USER,
                     arguments = listOf(navArgument("userId") { type = NavType.StringType }),
-                    enterTransition = {
-                        slideIntoContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    },
-                    exitTransition = {
-                        slideOutOfContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    }
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) { backStackEntry ->
                     val userId = backStackEntry.arguments?.getString("userId").orEmpty()
                     val id = userId.toLongOrNull() ?: return@composable
@@ -382,18 +487,10 @@ fun AetherApp(
                 composable(
                     route = Destinations.PROFILE,
                     arguments = listOf(navArgument("chatId") { type = NavType.StringType }),
-                    enterTransition = {
-                        slideIntoContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    },
-                    exitTransition = {
-                        slideOutOfContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    }
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) { backStackEntry ->
                     val chatId = backStackEntry.arguments?.getString("chatId")
                     val chat = chats.firstOrNull { it.id == chatId }
@@ -405,6 +502,9 @@ fun AetherApp(
                             chat = chat,
                             onBack = { navController.popBackStack() },
                             onNavigateToConversation = { navController.popBackStack() },
+                            onChatAction = chatsViewModel::perform,
+                            canCallAudio = profileCalls.isCallMediaAvailable,
+                            canCallVideo = false,
                             onStartVoiceCall = {
                                 val targetUserId = chat.directUser?.id?.toLongOrNull() ?: chat.id.toLongOrNull() ?: 0L
                                 if (targetUserId != 0L) {
@@ -438,8 +538,10 @@ fun AetherApp(
 
                 composable(
                     route = Destinations.SEARCH,
-                    enterTransition = { fadeIn(animationSpec = tween(200)) },
-                    exitTransition = { fadeOut(animationSpec = tween(150)) }
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) {
                     val searchViewModel: SearchViewModel = viewModel()
                     val results by searchViewModel.results.collectAsStateWithLifecycle()
@@ -459,18 +561,10 @@ fun AetherApp(
 
                 composable(
                     route = Destinations.CALLS,
-                    enterTransition = {
-                        slideIntoContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    },
-                    exitTransition = {
-                        slideOutOfContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    }
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) {
                     val callsRepository = (application as AetherApplication).callsRepository
                     val callsViewModel: CallsViewModel = viewModel(
@@ -492,18 +586,10 @@ fun AetherApp(
 
                 composable(
                     route = Destinations.SETTINGS,
-                    enterTransition = {
-                        slideIntoContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    },
-                    exitTransition = {
-                        slideOutOfContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    }
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) {
                     val settingsViewModel: SettingsViewModel = viewModel()
                     val user by settingsViewModel.currentUser.collectAsStateWithLifecycle()
@@ -521,29 +607,24 @@ fun AetherApp(
 
                 composable(
                     route = Destinations.APPEARANCE,
-                    enterTransition = {
-                        slideIntoContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    },
-                    exitTransition = {
-                        slideOutOfContainer(
-                            towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
-                        )
-                    }
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) {
                     AppearanceScreen(onBack = { navController.popBackStack() })
                 }
 
                 composable(
                     route = Destinations.CHAT_APPEARANCE,
-                    arguments = listOf(navArgument("chatId") { type = NavType.LongType })
+                    arguments = listOf(navArgument("chatId") { type = NavType.LongType }),
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
                 ) { backStackEntry ->
                     val chatId = backStackEntry.arguments?.getLong("chatId") ?: return@composable
                     ChatAppearanceScreen(chatId = chatId, onBack = { navController.popBackStack() })
-                }
             }
         }
 
@@ -551,7 +632,7 @@ fun AetherApp(
         val activeCall by callsRepository.activeCallState.collectAsStateWithLifecycle()
         val navScope = rememberCoroutineScope()
 
-        if (activeCall != null) {
+        if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED && activeCall != null) {
             if (activeCall!!.isMinimized) {
                 OngoingCallBar(
                     activeCall = activeCall!!,
@@ -570,6 +651,10 @@ fun AetherApp(
                     onToggleSpeaker = callsRepository::toggleSpeaker,
                     onMinimize = { callsRepository.setMinimized(true) }
                 )
+            }
+        }
+            }
+            }
             }
         }
     }
@@ -605,28 +690,49 @@ private fun ConversationRoute(
     val installedStickerSets by viewModel.installedStickerSets.collectAsStateWithLifecycle()
     val recentStickers by viewModel.recentStickers.collectAsStateWithLifecycle()
     val favoriteStickers by viewModel.favoriteStickers.collectAsStateWithLifecycle()
+    val savedAnimations by viewModel.savedAnimations.collectAsStateWithLifecycle()
     val repository = LocalAppearanceRepository.current
     val chatId = header?.id?.toLongOrNull()
+
+    val app = application as? AetherApplication
+    val targetChatId = when (target) {
+        is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> target.chatId
+        is com.foresightlabs.aether.domain.model.ConversationTarget.Topic -> target.chatId
+        is com.foresightlabs.aether.domain.model.ConversationTarget.User -> chatId
+    }
+    val targetTopicId = (target as? com.foresightlabs.aether.domain.model.ConversationTarget.Topic)?.topicId
+
+    androidx.compose.runtime.DisposableEffect(targetChatId, targetTopicId) {
+        if (targetChatId != null) {
+            app?.notificationManager?.onConversationOpened(targetChatId, targetTopicId)
+        }
+        onDispose {
+            app?.notificationManager?.onConversationClosed()
+        }
+    }
+
     val resolvedAppearance by (chatId?.let(repository::getResolvedChatAppearanceFlow)
         ?: kotlinx.coroutines.flow.flowOf(null)).collectAsStateWithLifecycle(initialValue = null)
     val resolvedAtmosphere = resolvedAppearance?.let { buildAtmosphere(it.palette, WeatherReading.Idle) }
     val atmosphere = resolvedAtmosphere ?: LocalAtmosphere.current
     val baseColors = LocalAetherColors.current
     val conversationColors = resolvedAppearance?.let { appearance ->
+        // Outgoing messages are dark graphite in every style — that tonal
+        // inversion against the pale incoming bubble is the conversation's
+        // structure, not a per-chat preference. A style only decides how much of
+        // the atmosphere's hue is allowed to smoke through the graphite, so
+        // "Atmosphere" still adapts without ever becoming an accent-coloured slab.
         val outgoing = when (appearance.bubbleStyle) {
-            ChatBubbleStyle.ATMOSPHERE, ChatBubbleStyle.EMBER -> atmosphere.accent
-            ChatBubbleStyle.GLASS -> Color(0xB82D3648)
-            ChatBubbleStyle.MIDNIGHT -> Color(0xFF1A1A20)
+            ChatBubbleStyle.ATMOSPHERE -> smokeGraphite(atmosphere.accent, 0.14f)
+            ChatBubbleStyle.EMBER -> smokeGraphite(atmosphere.accentStrong, 0.18f)
+            ChatBubbleStyle.GLASS -> smokeGraphite(atmosphere.accent, 0.10f).copy(alpha = 0.82f)
+            ChatBubbleStyle.MIDNIGHT -> Color(0xFF16161B)
         }
         baseColors.copy(
             accent = appearance.fixedAccent ?: atmosphere.accent,
             accentSubtle = (appearance.fixedAccent ?: atmosphere.accent).copy(alpha = .18f),
             bubbleOutgoing = outgoing,
-            bubbleOutgoingEnd = when (appearance.bubbleStyle) {
-                ChatBubbleStyle.GLASS -> Color(0x8A56647A)
-                ChatBubbleStyle.MIDNIGHT -> Color(0xFF25252D)
-                else -> atmosphere.accentStrong
-            }
+            bubbleOutgoingEnd = outgoing
         )
     } ?: baseColors
     CompositionLocalProvider(
@@ -686,10 +792,19 @@ private fun ConversationRoute(
             favoriteStickers = favoriteStickers,
             onLoadStickers = viewModel::loadStickers,
             onLoadStickerSetDetails = viewModel::loadStickerSetDetails,
+            savedAnimations = savedAnimations,
+            onLoadSavedAnimations = viewModel::loadSavedAnimations,
+            onSendAnimation = { fileId -> viewModel.sendAnimationFile(fileId) },
             onLoadScheduled = viewModel::getScheduledMessages,
             onSendScheduledNow = { msg -> viewModel.sendScheduledMessageNow(msg) },
             onRescheduleMessage = { msg, secs -> viewModel.rescheduleMessage(msg, secs) },
             onPollVote = viewModel::voteOnPoll,
+            onCopyMessageLink = { message ->
+                val clipboard = application.getSystemService(android.content.ClipboardManager::class.java)
+                viewModel.copyMessageLink(message) { link ->
+                    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Message Link", link))
+                }
+            },
             pinnedFromServer = pinnedMessages,
             onJumpToMessage = viewModel::jumpTo,
             onUnpinMessage = viewModel::unpinMessage,
@@ -711,3 +826,20 @@ private fun ConversationRoute(
  */
 private fun destinationFor(chat: com.foresightlabs.aether.domain.model.Chat): String =
     if (chat.isForum) Destinations.forumTopics(chat.id) else Destinations.conversation(chat.id)
+
+/**
+ * A neutral smoky charcoal carrying a trace of the surrounding sky.
+ *
+ * The hue is mixed into a near-black base at a low weight, so the result stays
+ * firmly in the graphite family however saturated the atmosphere becomes.
+ */
+private fun smokeGraphite(hue: Color, weight: Float): Color {
+    val base = 0.09f
+    fun mix(channel: Float) = (base * (1f - weight) + channel * weight).coerceIn(0f, 1f)
+    return Color(
+        red = mix(hue.red),
+        green = mix(hue.green),
+        blue = mix(hue.blue),
+        alpha = 1f
+    )
+}

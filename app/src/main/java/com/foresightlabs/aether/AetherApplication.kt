@@ -33,6 +33,9 @@ class AetherApplication : Application(), ImageLoaderFactory {
     lateinit var liveLocationCoordinator: com.foresightlabs.aether.data.location.LiveLocationCoordinator
         private set
 
+    lateinit var notificationManager: com.foresightlabs.aether.data.notifications.AetherNotificationManager
+        private set
+
     private val applicationScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
 
     override fun newImageLoader(): ImageLoader {
@@ -54,6 +57,34 @@ class AetherApplication : Application(), ImageLoaderFactory {
         permissionCoordinator = PermissionCoordinator(this)
         createNotificationChannels()
         telegram = TelegramClient(this)
+        notificationManager = com.foresightlabs.aether.data.notifications.AetherNotificationManager(
+            context = this,
+            getChat = { telegram.getRawChat(it) },
+            getUser = { telegram.getRawUser(it) }
+        )
+        telegram.notificationManager = notificationManager
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            private var resumedActivities = 0
+
+            override fun onActivityResumed(activity: android.app.Activity) {
+                resumedActivities++
+                com.foresightlabs.aether.data.notifications.ActiveConversationTracker.setAppForeground(true)
+            }
+
+            override fun onActivityPaused(activity: android.app.Activity) {
+                resumedActivities--
+                if (resumedActivities <= 0) {
+                    resumedActivities = 0
+                    com.foresightlabs.aether.data.notifications.ActiveConversationTracker.setAppForeground(false)
+                }
+            }
+
+            override fun onActivityStarted(activity: android.app.Activity) {}
+            override fun onActivityStopped(activity: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) {}
+            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
+            override fun onActivityDestroyed(activity: android.app.Activity) {}
+        })
         telegram.start()
         contactsRepository = DefaultContactsRepository(
             context = applicationContext,

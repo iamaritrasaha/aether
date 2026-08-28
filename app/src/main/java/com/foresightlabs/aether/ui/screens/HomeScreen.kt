@@ -1,17 +1,24 @@
 package com.foresightlabs.aether.ui.screens
 
+import kotlin.math.pow
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import com.foresightlabs.aether.ui.components.HomeSelectionDock
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,54 +34,41 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.ChatBubble
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.foundation.Canvas
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import com.foresightlabs.aether.ui.theme.LocalReducedMotion
-import kotlinx.coroutines.isActive
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.foresightlabs.aether.domain.daily.AetherDaily
 import com.foresightlabs.aether.domain.daily.DailyLine
 import com.foresightlabs.aether.domain.model.Chat
-import com.foresightlabs.aether.domain.model.ChatFilterCategory
 import com.foresightlabs.aether.domain.model.ConnectionStatus
 import com.foresightlabs.aether.domain.model.User
 import com.foresightlabs.aether.domain.presence.ActiveNow
@@ -86,45 +80,37 @@ import com.foresightlabs.aether.ui.components.AetherSearchPill
 import com.foresightlabs.aether.domain.chats.ChatAction
 import com.foresightlabs.aether.ui.components.ChatActionSheet
 import com.foresightlabs.aether.ui.components.ChatRow
-import com.foresightlabs.aether.ui.design.AetherAccent
-import com.foresightlabs.aether.ui.design.AetherChip
+import com.foresightlabs.aether.ui.design.AetherStatusMote
+import com.foresightlabs.aether.ui.design.AetherStatusMoteState
 import com.foresightlabs.aether.ui.design.AetherEmptyState
-import com.foresightlabs.aether.ui.design.AetherIconButton
-import com.foresightlabs.aether.ui.design.AetherNavItem
-import com.foresightlabs.aether.ui.design.AetherNavPill
-import com.foresightlabs.aether.ui.design.AetherNavPillDefaults
-import com.foresightlabs.aether.ui.design.AetherSheet
-import com.foresightlabs.aether.ui.design.AetherSheetDefaults
-import com.foresightlabs.aether.ui.design.HomeLayout
+import com.foresightlabs.aether.ui.design.LocalSceneHeightCache
+import com.foresightlabs.aether.ui.design.LocalSceneOwnsDock
+import com.foresightlabs.aether.ui.design.LocalSceneTransitionProgress
+import com.foresightlabs.aether.ui.design.edgePx
 import com.foresightlabs.aether.ui.design.PresenceDensity
 import com.foresightlabs.aether.ui.design.PresenceStripTokens
-import com.foresightlabs.aether.ui.design.SheetAnchor
-import com.foresightlabs.aether.ui.design.SheetAnchors
-import com.foresightlabs.aether.ui.design.rememberAetherSheetState
-import com.foresightlabs.aether.ui.design.aetherReveal
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
-import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
-import com.foresightlabs.aether.ui.weather.AetherWeatherHero
 import com.foresightlabs.aether.ui.weather.AetherWeatherVisuals
 import com.foresightlabs.aether.ui.weather.buildWeatherHeroState
-import java.text.SimpleDateFormat
+import kotlinx.coroutines.launch
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 /**
- * Phase 1 — the Living Home.
+ * Home is one composition in two regions.
  *
- * Three layers, in depth order:
- *  1. Living Atmosphere, spatially stable behind everything
- *  2. the personal hero: greeting, Aether Daily, Active Now
- *  3. the foreground conversations sheet, which physically moves
+ * The upper region is atmosphere: the greeting, the day's line and the people who
+ * are actually around, set directly on the Living Atmosphere with no panel of any
+ * kind beneath them. The lower region is content: an opaque near-black (or
+ * porcelain) surface carrying the conversations, joined to the atmosphere by a
+ * single large radius.
  *
- * The dock is fixed near the safe bottom and belongs to none of them.
+ * There is deliberately no draggable sheet, no stack of glass cards and no second
+ * toolbar. Chrome on this screen is one quiet search field, one compose action and
+ * the dock.
  */
 @Composable
 fun HomeScreen(
@@ -145,27 +131,30 @@ fun HomeScreen(
     onEditFolder: (Int, String) -> Unit = { _, _ -> },
     onDeleteFolder: (Int) -> Unit = {},
     onReorderFolders: (List<Int>) -> Unit = {},
-    dockSelectedKey: String = HOME_KEY,
     modifier: Modifier = Modifier
 ) {
-    val density = LocalDensity.current
     val colors = LocalAetherColors.current
+    val density = LocalDensity.current
     val frostState = rememberAetherFrostState()
 
     var searchQuery by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf(ChatFilterCategory.PEOPLE) }
-    var heroHeightPx by remember { mutableIntStateOf(0) }
-    var heroCoreHeightPx by remember { mutableIntStateOf(0) }
-    var requestSearchFocus by remember { mutableStateOf(false) }
     var showLocationPicker by remember { mutableStateOf(false) }
-    var showFolderManagement by remember { mutableStateOf(false) }
     var actionSheetChat by remember { mutableStateOf<Chat?>(null) }
+    var selectedChatIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val isSelectionActive = selectedChatIds.isNotEmpty()
+
+    BackHandler(enabled = isSelectionActive) {
+        selectedChatIds = emptySet()
+    }
+
+    // The hero is measured, not guessed, so the conversations behind it always
+    // start clear of its lower edge whatever the greeting and strip come to.
+    var heroHeightPx by remember { mutableIntStateOf(0) }
 
     val themeState = com.foresightlabs.aether.ui.theme.LocalAppThemeState.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
-    val sheetState = rememberAetherSheetState(SheetAnchor.RESTING)
     val listState = rememberLazyListState()
 
     // Real presence only. Never a fabricated dot.
@@ -174,284 +163,297 @@ fun HomeScreen(
     // Stable for the whole local day, offline, no external quote source.
     val dailyLine = rememberAetherDaily()
 
-    val visibleChats = remember(chats, selectedCategory, searchQuery) {
+    // Primary Home feed shows 1:1 personal conversations only.
+    val visibleChats = remember(chats, searchQuery) {
         chats.filter { chat ->
-            selectedCategory.matches(chat) && matchesQuery(chat, searchQuery)
+            chat.isPersonalChat && matchesQuery(chat, searchQuery)
         }
     }
 
+    val atmosphere = LocalAtmosphere.current
+    val weatherState = remember(atmosphere) {
+        buildWeatherHeroState(atmosphere, atmosphere.palette)
+    }
+
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        // A short display trades strip size, then the strip itself, before it ever
+        // trades away the conversation list.
+        val presenceDensity: PresenceDensity? = when {
+            activeNow == ActiveNowState.Empty -> null
+            maxHeight < 600.dp -> null
+            maxHeight < 720.dp -> PresenceDensity.COMPACT
+            else -> PresenceDensity.COMFORTABLE
+        }
+        val greetingSize = if (maxHeight < 720.dp || maxWidth < 370.dp) 33.sp else 38.sp
+        val heroHeightDp = with(density) { heroHeightPx.toDp() }
+
+        // Null outside the persistent scene, in which case this screen sizes
+        // itself exactly as it always did (standalone previews, screenshots,
+        // tests). Inside the scene it is the shared Home ↔ Conversation morph:
+        // 0 at rest here, moving toward 1 as a conversation opens over it.
+        val sceneProgress = LocalSceneTransitionProgress.current
+        val heightCache = LocalSceneHeightCache.current
+        // "At rest" is judged loosely rather than at exactly 0 so a settling
+        // spring's last fractional step does not flip this back to measuring
+        // mode and jitter the layout on the final frame.
+        val atRest = sceneProgress == null || sceneProgress < 0.02f
         val containerHeightPx = with(density) { maxHeight.toPx() }
-        val topInsetPx = with(density) { statusBarInset().toPx() }
-        val preferredViewportPx = with(density) {
-            (HomeLayout.PreferredChatViewport + AetherNavPillDefaults.Height).toPx()
-        }
-        val floorViewportPx = with(density) {
-            (HomeLayout.MinimumChatViewport + AetherNavPillDefaults.Height).toPx()
-        }
-        val minAtmospherePx = with(density) { AetherSheetDefaults.MinAtmosphereReveal.toPx() }
-        val relaxedExtraPx = with(density) { AetherSheetDefaults.RelaxedExtraAtmosphere.toPx() }
+        val morphedHeroPx = if (!atRest && heightCache != null) {
+            heightCache.edgePx(sceneProgress!!, containerHeightPx)
+        } else null
+        // Home's contents recede in a carefully staggered sequence as the panel
+        // expands into the conversation canvas, rather than disappearing abruptly
+        // all together. Every element derives its visual state continuously from
+        // the same shared transition progress, so reversing or predictive back
+        // seamlessly restores the entire hero without abrupt visibility flips.
+        val p = sceneProgress?.coerceIn(0f, 1f) ?: 0f
 
-        // A narrow display must not cost the user real presence data. Pick the
-        // densest strip that still leaves a usable conversation viewport, trading
-        // list rows down to a floor before ever dropping the strip. Decided from the
-        // hero core measurement only, so the choice cannot feed back into itself.
-        val homeFit = HomeLayout.resolve(
-            containerHeightPx = containerHeightPx,
-            topInsetPx = topInsetPx,
-            heroCoreHeightPx = heroCoreHeightPx.toFloat(),
-            hasPresence = activeNow != ActiveNowState.Empty,
-            comfortableAllowancePx = with(density) {
-                PresenceStripTokens.verticalAllowance(PresenceDensity.COMFORTABLE).toPx()
-            },
-            compactAllowancePx = with(density) {
-                PresenceStripTokens.verticalAllowance(PresenceDensity.COMPACT).toPx()
-            },
-            preferredViewportPx = preferredViewportPx,
-            floorViewportPx = floorViewportPx
-        )
-        val presenceDensity = homeFit.presence
-        val minChatViewportPx = homeFit.minViewportPx
+        // 1. Surrounding chat rows soften early so the tapped chat's identity
+        // can guide the eye into the arriving header.
+        val chatsContentAlpha = if (sceneProgress == null) 1f else (1f - p / 0.38f).coerceIn(0f, 1f)
+        val chatsTranslationY = if (sceneProgress == null) 0f else with(density) { (10.dp.toPx() * (p / 0.38f).coerceIn(0f, 1f)) }
 
-        // Anchors come from what was actually measured — hero content, available
-        // height and safe insets — never from a fixed screen fraction.
-        val anchors = remember(
-            containerHeightPx, heroHeightPx, topInsetPx,
-            minChatViewportPx, minAtmospherePx, relaxedExtraPx
-        ) {
-            val measuredHeroBottomPx = if (heroHeightPx > 0) {
-                topInsetPx + heroHeightPx.toFloat()
-            } else {
-                0f
-            }
-            val collapsedLipPx = with(density) { AetherSheetDefaults.CollapsedLipHeight.toPx() }
-            SheetAnchors.derive(
-                containerHeightPx = containerHeightPx,
-                heroBottomPx = measuredHeroBottomPx,
-                topInsetPx = topInsetPx,
-                minChatViewportPx = minChatViewportPx,
-                minAtmosphereRevealPx = minAtmospherePx,
-                relaxedExtraPx = relaxedExtraPx,
-                collapsedLipHeightPx = collapsedLipPx
-            )
+        // 2. Top search & contextual controls begin receding first.
+        val topControlsAlpha = if (sceneProgress == null) 1f else (1f - p / 0.45f).coerceIn(0f, 1f)
+        val topControlsTranslationY = if (sceneProgress == null) 0f else with(density) { (-10.dp.toPx() * (p / 0.45f).coerceIn(0f, 1f)) }
+
+        // 3. Greeting ("Good evening", Daily line, Quiet weather line) stays clearly
+        // visible through the early movement, then moves gently upward and fades
+        // smoothly all the way to p=0.82 without any hard visibility cutoffs.
+        val greetingAlpha = if (sceneProgress == null) 1f else {
+            val normalized = (p / 0.82f).coerceIn(0f, 1f)
+            (1f - normalized.toDouble().pow(1.15).toFloat()).coerceIn(0f, 1f)
         }
-        LaunchedEffect(anchors) { sheetState.updateAnchors(anchors) }
-
-        val atmosphere = LocalAtmosphere.current
-        val weatherState = remember(atmosphere) {
-            buildWeatherHeroState(atmosphere, atmosphere.palette)
+        val greetingTranslationY = if (sceneProgress == null) 0f else with(density) {
+            (-22.dp.toPx() * (p / 0.80f).coerceIn(0f, 1f))
         }
-        val weatherRevealProgress = sheetState.relaxProgress
-        val expandProgress = sheetState.expandProgress
-
-        // The luminous region is sized from the sheet's relaxed anchor so the
-        val heroFraction = if (containerHeightPx > 0f && anchors.isResolved) {
-            ((anchors.peek + relaxedExtraPx) / containerHeightPx).coerceIn(0.3f, 1f)
-        } else {
-            0.7f
+        val greetingScale = if (sceneProgress == null) 1f else {
+            1f - 0.04f * (p / 0.80f).coerceIn(0f, 1f)
         }
 
-        AetherAtmosphericBackground(
-            modifier = Modifier.fillMaxSize(),
-            heroFraction = heroFraction,
-            enableAmbientMotion = true,
-            frostState = frostState
-        ) {
-            Box(modifier = Modifier.fillMaxSize()) {
+        // 4. Presence strip (Active now) recedes gracefully between 0.05 and 0.60.
+        val presenceProgress = ((p - 0.05f) / 0.55f).coerceIn(0f, 1f)
+        val presenceAlpha = if (sceneProgress == null) 1f else (1f - presenceProgress)
+        val presenceTranslationY = if (sceneProgress == null) 0f else with(density) {
+            (-14.dp.toPx() * presenceProgress)
+        }
+        val presenceScale = if (sceneProgress == null) 1f else (1f - 0.04f * presenceProgress)
 
-                // --- Layer 2: dynamic atmospheric weather phenomena -----------
-                AetherWeatherVisuals(
-                    condition = weatherState.condition,
-                    timeBand = weatherState.timeBand,
-                    revealProgress = weatherRevealProgress,
-                    weatherState = weatherState,
-                    modifier = Modifier.fillMaxSize()
+        // --- The rear layer: the conversations ---------------------------
+        // The dark chat world is the back of the screen, not a sheet laid onto
+        // it. It fills the window and needs no corner rounding of its own — the
+        // hero in front is what shapes the boundary between them, and this is
+        // the same surface that collapses into the conversation's composer dock.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                // The scene above the navigation graph already paints this surface
+                // and keeps it mounted across the transition, so painting it again
+                // here would be a second copy that fades independently.
+                .then(
+                    if (LocalSceneOwnsDock.current) Modifier
+                    else Modifier.background(colors.background)
                 )
-
-                // --- Layer 3a: Weather Hero (Ambient Temperature -> Full Hero) -
-                AetherWeatherHero(
-                    weatherState = weatherState,
-                    revealProgress = weatherRevealProgress,
-                    onLocationClick = { showLocationPicker = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aetherReveal(
-                            alpha = 1f - expandProgress * 0.85f,
-                            verticalShiftPx = -expandProgress * 28f
-                        )
+                .testTag("conversations_surface")
+        ) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        alpha = chatsContentAlpha
+                        translationY = chatsTranslationY
+                    }
+                    .testTag("conversation_list"),
+                contentPadding = PaddingValues(
+                    // Clears the hero in front of it, plus the overlap the hero
+                    // hides, so the first conversation is never pressed against
+                    // the curve.
+                    top = heroHeightDp + ChatsRevealGap,
+                    bottom = if (isSelectionActive) 80.dp else AetherEmber.Spacing.Space32
                 )
-
-                // --- Layer 3b: personal hero (Greeting & Active Now) ----------
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .onSizeChanged { heroHeightPx = it.height }
-                        // Parallax & fade as the Weather Hero takes the upper stage.
-                        // Layout-level so the greeting's controls and the presence
-                        // avatars — which open chats — cannot be tapped once they
-                        // have moved away or faded out.
-                        .aetherReveal(
-                            alpha = if (weatherRevealProgress > 0f) {
-                                (1f - weatherRevealProgress * 2.8f).coerceIn(0f, 1f)
+            ) {
+                items(visibleChats, key = { it.id }) { chat ->
+                    ChatRow(
+                        chat = chat,
+                        onClick = {
+                            if (isSelectionActive) {
+                                selectedChatIds = if (chat.id in selectedChatIds) selectedChatIds - chat.id else selectedChatIds + chat.id
                             } else {
-                                1f - expandProgress * 0.85f
-                            },
-                            verticalShiftPx = if (weatherRevealProgress > 0f) {
-                                weatherRevealProgress * 14f
-                            } else {
-                                -expandProgress * 28f
+                                onChatClick(chat)
                             }
-                        )
-                ) {
-                    Column(modifier = Modifier.onSizeChanged { heroCoreHeightPx = it.height }) {
-                        HomeTopBar(
-                            currentUser = currentUser,
-                            connection = connection,
-                            hasWeather = weatherState.isAvailable,
-                            onNewMessageClick = onNewMessageClick,
-                            onNavigateToSettings = onNavigateToSettings
-                        )
-
-                        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space12))
-
-                        HomeGreeting(currentUser = currentUser, daily = dailyLine)
-                    }
-
-                    if (presenceDensity != null) {
-                        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space20))
-                        PresenceSection(
-                            state = activeNow,
-                            density = presenceDensity,
-                            onPersonClick = { onChatClick(it.chat) },
-                            onNewClick = onNewMessageClick
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
+                        },
+                        onLongPress = {
+                            selectedChatIds = if (chat.id in selectedChatIds) selectedChatIds - chat.id else selectedChatIds + chat.id
+                        },
+                        isSelected = chat.id in selectedChatIds,
+                        isSelectionActive = isSelectionActive,
+                        sharedAvatar = true
+                    )
                 }
 
-                // --- Layer 4: foreground conversations sheet -----------------
-                AetherSheet(
-                    state = sheetState,
-                    containerHeightPx = containerHeightPx,
-                    label = "Conversations",
-                    modifier = Modifier
-                        .testTag("conversations_sheet")
-                ) {
-                    AetherSearchPill(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = "Search conversations",
-                        requestFocus = requestSearchFocus,
-                        onFocused = {
-                            requestSearchFocus = false
-                            sheetState.animateTo(SheetAnchor.EXPANDED)
-                        },
-                        modifier = Modifier.padding(
-                            start = AetherEmber.Spacing.Space16,
-                            end = AetherEmber.Spacing.Space16,
-                            top = AetherEmber.Spacing.Space8,
-                            bottom = AetherEmber.Spacing.Space8
-                        )
+                if (visibleChats.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillParentMaxHeight(0.6f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            HomeEmptyState(
+                                isLoading = isLoading,
+                                hasAnyPersonalChats = chats.any { it.isPersonalChat },
+                                query = searchQuery
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Selection Action Dock at the bottom of the black conversations layer
+            AnimatedVisibility(
+                visible = isSelectionActive,
+                enter = slideInVertically(
+                    initialOffsetY = { it },
+                    animationSpec = tween(durationMillis = 220)
+                ) + fadeIn(animationSpec = tween(durationMillis = 180)),
+                exit = slideOutVertically(
+                    targetOffsetY = { it },
+                    animationSpec = tween(durationMillis = 180)
+                ) + fadeOut(animationSpec = tween(durationMillis = 140)),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                val selectedChatsList = remember(chats, selectedChatIds) {
+                    chats.filter { it.id in selectedChatIds }
+                }
+                HomeSelectionDock(
+                    selectedChats = selectedChatsList,
+                    onClearSelection = { selectedChatIds = emptySet() },
+                    onChatAction = onChatAction
+                )
+            }
+        }
+
+        // --- The foreground layer: the hero -------------------------------
+        // A panel lying on top of that dark world. It owns the curve: its lower
+        // corners are rounded, so the conversations behind it appear a little
+        // sooner at the edges than they do at the centre.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .zIndex(1f)
+                .then(
+                    if (morphedHeroPx != null) {
+                        // Mid-morph: an explicit height interpolated from the
+                        // shared rest-height pair, so this panel and Conversation's
+                        // canvas — reading the same two numbers and the same
+                        // progress — are always the same rectangle, not two
+                        // independently animated shapes that merely resemble it.
+                        Modifier.height(with(density) { morphedHeroPx.toDp() })
+                    } else {
+                        // At rest: measured from its own content, exactly as
+                        // before, and the result is banked for the next morph.
+                        Modifier.onSizeChanged {
+                            heroHeightPx = it.height
+                            heightCache?.homeRestPx = it.height.toFloat()
+                        }
+                    }
+                )
+                .clip(
+                    RoundedCornerShape(
+                        bottomStart = HeroCornerRadius,
+                        bottomEnd = HeroCornerRadius
+                    )
+                )
+                .testTag("home_hero")
+        ) {
+                AetherAtmosphericBackground(
+                    modifier = Modifier.matchParentSize(),
+                    heroFraction = 1f,
+                    enableAmbientMotion = true,
+                    frostState = frostState
+                ) {}
+
+                    // Real weather still shapes this screen; it simply does so
+                    // quietly, behind the greeting, instead of taking the stage.
+                    AetherWeatherVisuals(
+                        condition = weatherState.condition,
+                        timeBand = weatherState.timeBand,
+                        revealProgress = HeroWeatherPresence,
+                        weatherState = weatherState,
+                        modifier = Modifier.matchParentSize()
                     )
 
-                    if (folders.size > 1) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(
-                                    start = AetherEmber.Spacing.Space16,
-                                    end = AetherEmber.Spacing.Space16,
-                                    top = AetherEmber.Spacing.Space4,
-                                    bottom = AetherEmber.Spacing.Space4
-                                ),
-                            horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
-                        ) {
-                            folders.forEach { folder ->
-                                AetherChip(
-                                    label = folder.title,
-                                    selected = selectedFolder.id == folder.id,
-                                    onClick = { onSelectFolder(folder) },
-                                    modifier = Modifier.testTag("folder_${folder.id}")
-                                )
-                            }
-                            AetherChip(
-                                label = "Edit",
-                                selected = false,
-                                onClick = { showFolderManagement = true },
-                                modifier = Modifier.testTag("folder_manage_btn")
-                            )
-                        }
-                    }
-
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(
-                                start = AetherEmber.Spacing.Space16,
-                                end = AetherEmber.Spacing.Space16,
-                                top = AetherEmber.Spacing.Space8,
-                                bottom = AetherEmber.Spacing.Space12
-                            ),
-                        horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
+                            .statusBarsPadding()
                     ) {
-                        ChatFilterCategory.entries.forEach { category ->
-                            AetherChip(
-                                label = category.label,
-                                selected = selectedCategory == category,
-                                onClick = { selectedCategory = category },
-                                modifier = Modifier.testTag("filter_${category.name.lowercase()}")
-                            )
-                        }
-                    }
-
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .nestedScroll(sheetState.nestedScrollConnection())
-                            .testTag("conversation_list"),
-                        contentPadding = PaddingValues(
-                            top = AetherEmber.Spacing.Space4,
-                            bottom = with(density) {
-                                (sheetState.bottomOverflow).toDp()
-                            } + AetherNavPillDefaults.Height + AetherEmber.Spacing.Space40
-                        )
-                    ) {
-                        items(visibleChats, key = { it.id }) { chat ->
-                            ChatRow(
-                                chat = chat,
-                                onClick = { onChatClick(chat) },
-                                onLongPress = { actionSheetChat = chat }
-                            )
-                            HorizontalDivider(
-                                color = colors.divider,
-                                thickness = 0.5.dp,
-                                modifier = Modifier.padding(start = 78.dp, end = 16.dp)
-                            )
-                        }
-
-                        if (visibleChats.isEmpty()) {
-                            item {
-                                Box(
-                                    modifier = Modifier.fillParentMaxHeight(0.8f),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    HomeEmptyState(
-                                        isLoading = isLoading,
-                                        hasAnyChats = chats.isNotEmpty(),
-                                        query = searchQuery,
-                                        category = selectedCategory
-                                    )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    alpha = topControlsAlpha
+                                    translationY = topControlsTranslationY
                                 }
+                        ) {
+                            HomeHeroControls(
+                                connection = connection,
+                                searchQuery = searchQuery,
+                                onSearchQueryChange = { searchQuery = it },
+                                onNavigateToSettings = onNavigateToSettings
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space20))
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    alpha = greetingAlpha
+                                    translationY = greetingTranslationY
+                                    scaleX = greetingScale
+                                    scaleY = greetingScale
+                                }
+                        ) {
+                            HomeGreeting(
+                                currentUser = currentUser,
+                                daily = dailyLine,
+                                greetingSize = greetingSize,
+                                weatherLine = weatherState.quietLine(),
+                                onWeatherClick = { showLocationPicker = true }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
+
+                        if (presenceDensity != null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .graphicsLayer {
+                                        alpha = presenceAlpha
+                                        translationY = presenceTranslationY
+                                        scaleX = presenceScale
+                                        scaleY = presenceScale
+                                    }
+                            ) {
+                                PresenceSection(
+                                    state = activeNow,
+                                    density = presenceDensity,
+                                    onPersonClick = { onChatClick(it.chat) },
+                                    onNewClick = onNewMessageClick
+                                )
                             }
                         }
+
+                        // The hero's own lower edge, deep enough that its rounded
+                        // corners cut through empty atmosphere rather than through
+                        // the last row of faces.
+                        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
                     }
-                }
-            }
         }
 
         ChatActionSheet(
@@ -460,41 +462,6 @@ fun HomeScreen(
             onAction = { action ->
                 actionSheetChat?.let { onChatAction(it, action) }
             }
-        )
-
-        // --- Dock: fixed near the safe bottom, overlaying the backdrop scene ---------
-        AetherNavPill(
-            items = listOf(
-                AetherNavItem(
-                    key = HOME_KEY,
-                    icon = Icons.Default.ChatBubble,
-                    contentDescription = "Chats",
-                    onClick = { sheetState.animateTo(SheetAnchor.RESTING) }
-                ),
-                AetherNavItem(
-                    key = "pulse",
-                    icon = Icons.Default.AutoAwesome,
-                    contentDescription = "Pulse",
-                    onClick = onNavigateToPulse
-                ),
-                AetherNavItem(
-                    key = "calls",
-                    icon = Icons.Default.Call,
-                    contentDescription = "Calls",
-                    onClick = onNavigateToCalls
-                ),
-                AetherNavItem(
-                    key = "settings",
-                    icon = Icons.Default.Settings,
-                    contentDescription = "Settings",
-                    onClick = onNavigateToSettings
-                )
-            ),
-            selectedKey = dockSelectedKey,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .testTag("home_dock"),
-            frostState = frostState
         )
 
         if (showLocationPicker) {
@@ -534,156 +501,196 @@ fun HomeScreen(
                 )
             }
         }
-
-        com.foresightlabs.aether.ui.components.FolderManagementSheet(
-            isVisible = showFolderManagement,
-            folders = folders,
-            onDismiss = { showFolderManagement = false },
-            onCreateFolder = onCreateFolder,
-            onEditFolder = onEditFolder,
-            onDeleteFolder = onDeleteFolder,
-            onReorderFolders = onReorderFolders
-        )
     }
 }
 
-private const val HOME_KEY = "chats"
+/** How much of the weather scene the calm hero carries. Present, never theatrical. */
+private const val HeroWeatherPresence = 0.26f
 
+/** The foreground hero owns the curve; the conversations behind it do not. */
+private val HeroCornerRadius = 34.dp
+
+/** Breathing room under the hero's edge before the first conversation. */
+private val ChatsRevealGap = 22.dp
+
+/**
+ * The whole of Home's top chrome: a quiet search lens, and the compact Settings control.
+ *
+ * Deliberately not an app bar — no avatar, no settings duplicate, no filled
+ * container. Starting a conversation is the first item in the strip below;
+ * Settings navigates directly to the settings screen.
+ */
 @Composable
-private fun HomeTopBar(
-    currentUser: User?,
+private fun HomeHeroControls(
     connection: ConnectionStatus,
-    hasWeather: Boolean,
-    onNewMessageClick: () -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
     onNavigateToSettings: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
-                horizontal = AetherEmber.Spacing.Space20,
-                vertical = AetherEmber.Spacing.Space4
+                start = AetherEmber.Spacing.Space20,
+                end = AetherEmber.Spacing.Space12,
+                top = AetherEmber.Spacing.Space8
             ),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space12)
-        ) {
-            if (hasWeather) {
-                // Reserves space for the ambient temperature floating at top-left
-                Spacer(modifier = Modifier.width(60.dp))
-            }
+        AetherSearchPill(
+            value = searchQuery,
+            onValueChange = onSearchQueryChange,
+            placeholder = "Search",
+            onAtmosphere = true,
+            height = 40.dp,
+            modifier = Modifier
+                .width(178.dp)
+                .testTag("home_top_search")
+        )
 
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .border(1.5.dp, Color(0x55FFFFFF), CircleShape)
-                    .padding(2.dp)
-                    .clickable { onNavigateToSettings() }
-                    .testTag("current_user_avatar"),
-                contentAlignment = Alignment.Center
-            ) {
-                AetherAvatar(
-                    initials = currentUser?.avatarInitials ?: "A",
-                    gradient = currentUser?.avatarGradient
-                        ?: listOf(AetherAccent.current, AetherAccent.subtle),
-                    size = 34.dp,
-                    photoPath = currentUser?.photoPath
-                )
-            }
-        }
+        Spacer(modifier = Modifier.weight(1f))
 
-        // Truthful connection state only; nothing is shown when connected.
-        if (connection != ConnectionStatus.READY && connection != ConnectionStatus.UNKNOWN) {
-            Box(
-                modifier = Modifier
-                    .clip(AetherEmber.Shapes.Pill)
-                    .background(AetherEmber.Colors.GlassPill)
-                    .border(0.75.dp, AetherEmber.Colors.GlassPillBorder, AetherEmber.Shapes.Pill)
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    text = connection.label.uppercase(),
-                    fontFamily = ManropeFontFamily,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    letterSpacing = 1.sp
-                )
-            }
-        }
+        // A tiny ambient reading of Aether's real Telegram connection state —
+        // not a control, and deliberately quiet enough that Search, Settings
+        // and the greeting are what actually register at a glance.
+        AetherStatusMote(
+            state = connection.toAetherMoteState(),
+            modifier = Modifier.testTag("home_status_mote")
+        )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)) {
-            AetherIconButton(
-                icon = Icons.Default.Edit,
-                contentDescription = "New conversation",
-                onClick = onNewMessageClick,
-                iconSize = 18.dp,
-                modifier = Modifier.testTag("new_conversation_button")
+        Spacer(modifier = Modifier.weight(1f))
+
+        HomeSettingsButton(
+            onClick = onNavigateToSettings
+        )
+    }
+}
+
+/**
+ * Aether's own connection/sync reading, derived only from TDLib's real
+ * [ConnectionStatus] — never simulated. [ConnectionStatus.UNKNOWN] is the gap
+ * before TDLib has reported anything yet, which reads the same as offline
+ * rather than flashing a color before there is any real signal.
+ */
+private fun ConnectionStatus.toAetherMoteState(): AetherStatusMoteState = when (this) {
+    ConnectionStatus.READY -> AetherStatusMoteState.CONNECTED
+    ConnectionStatus.UPDATING -> AetherStatusMoteState.SYNCING
+    ConnectionStatus.CONNECTING, ConnectionStatus.CONNECTING_PROXY -> AetherStatusMoteState.CONNECTING
+    ConnectionStatus.WAITING_FOR_NETWORK, ConnectionStatus.UNKNOWN -> AetherStatusMoteState.OFFLINE
+}
+
+/**
+ * Mac-like restrained optical control for opening Settings from Home.
+ *
+ * Compact circular control, clean gear glyph, visually light, low-contrast
+ * neutral backing, subtle depth border.
+ * 48dp minimum touch target, 40dp visible circular lens, 20dp icon.
+ */
+@Composable
+fun HomeSettingsButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalAetherColors.current
+    Box(
+        modifier = modifier
+            .size(48.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(bounded = false, radius = 24.dp),
+                onClick = onClick
             )
-            AetherIconButton(
-                icon = Icons.Default.Settings,
-                contentDescription = "Settings",
-                onClick = onNavigateToSettings,
-                modifier = Modifier.testTag("settings_button")
+            .semantics { this.contentDescription = "Settings" }
+            .testTag("home_settings_button"),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(Color(0x22FFFFFF))
+                .border(
+                    width = 0.5.dp,
+                    color = Color(0x18FFFFFF),
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = null,
+                tint = colors.atmosphereTextPrimary.copy(alpha = 0.88f),
+                modifier = Modifier.size(20.dp)
             )
         }
     }
 }
 
+/**
+ * The dominant element on Home: who you are and what today is, set straight on the
+ * atmosphere with nothing behind it.
+ */
 @Composable
-private fun HomeGreeting(currentUser: User?, daily: DailyLine) {
+private fun HomeGreeting(
+    currentUser: User?,
+    daily: DailyLine,
+    greetingSize: androidx.compose.ui.unit.TextUnit,
+    weatherLine: String?,
+    onWeatherClick: () -> Unit
+) {
+    val colors = LocalAetherColors.current
     Column(modifier = Modifier.padding(horizontal = AetherEmber.Spacing.Space20)) {
         Text(
-            text = localDateLabel().uppercase(),
-            fontFamily = ManropeFontFamily,
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.0.sp,
-            color = AetherEmber.Colors.AtmosphereTextSecondary
-        )
-
-        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space4))
-
-        // Space Grotesk is reserved for identity moments like this one.
-        Text(
             text = greetingFor(currentUser),
-            fontFamily = SpaceGroteskFontFamily,
-            fontSize = 28.sp,
-            lineHeight = 32.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = (-0.4).sp,
-            color = AetherEmber.Colors.AtmosphereTextPrimary,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space20))
-
-        Text(
-            text = "AETHER DAILY",
             fontFamily = ManropeFontFamily,
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.0.sp,
-            color = AetherEmber.Colors.AtmosphereTextSecondary
+            fontSize = greetingSize,
+            // Tight enough that two lines read as one confident block.
+            lineHeight = greetingSize * 1.04f,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = (-1.2).sp,
+            color = colors.atmosphereTextPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag("home_greeting")
         )
-        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space4))
+
+        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space12))
+
         Text(
             text = daily.text,
             fontFamily = ManropeFontFamily,
-            fontSize = 15.sp,
-            lineHeight = 21.sp,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
             fontWeight = FontWeight.Medium,
-            color = AetherEmber.Colors.AtmosphereTextPrimary,
+            color = colors.atmosphereTextSecondary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.testTag("aether_daily")
         )
+
+        if (weatherLine != null) {
+            Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space4))
+            Text(
+                text = weatherLine,
+                fontFamily = ManropeFontFamily,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.atmosphereTextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .clip(AetherEmber.Shapes.Pill)
+                    .clickable { onWeatherClick() }
+                    .testTag("home_weather_line")
+            )
+        }
     }
 }
 
+/**
+ * The people genuinely around right now. One avatar, one name, one small presence
+ * dot — no stacked rings, no decorative halo.
+ */
 @Composable
 private fun PresenceSection(
     state: ActiveNowState,
@@ -693,30 +700,20 @@ private fun PresenceSection(
 ) {
     if (state == ActiveNowState.Empty) return
 
-    // Every value below comes from the canonical strip tokens; the compact variant
-    // takes smaller steps on the same grid rather than inventing its own spacing.
+    val colors = LocalAetherColors.current
     val avatarSize = PresenceStripTokens.avatarSize(density)
     val itemSpacing = PresenceStripTokens.itemSpacing(density)
     val labelWidth = PresenceStripTokens.labelWidth(density)
-    val labelSize = if (density == PresenceDensity.COMPACT) 12.sp else 12.5.sp
+    val labelSize = if (density == PresenceDensity.COMPACT) 11.5.sp else 12.sp
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            // "Recently active" and "Active now" are different claims and stay
-            // visually and textually distinct.
-            text = state.label.uppercase(),
-            fontFamily = ManropeFontFamily,
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.8.sp,
-            color = AetherEmber.Colors.AtmosphereTextSecondary,
-            modifier = Modifier
-                .padding(horizontal = AetherEmber.Spacing.Space20)
-                .testTag("active_now_label")
-        )
-
-        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
-
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            // The strip is the claim. Screen readers still hear which claim it is,
+            // because "online now" and "recently active" are different facts.
+            .semantics { contentDescription = state.label }
+            .testTag("active_now_label")
+    ) {
         LazyRow(
             modifier = Modifier
                 .fillMaxWidth()
@@ -730,34 +727,34 @@ private fun PresenceSection(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .width(labelWidth)
+                        .testTag("active_now_new")
                         .clickable { onNewClick() }
                         .clearAndSetSemantics {
                             contentDescription = "Start a new conversation"
                         }
-                        .testTag("active_now_new")
                 ) {
                     Box(
                         modifier = Modifier
                             .size(avatarSize)
                             .clip(CircleShape)
-                            .background(AetherEmber.Colors.GlassPill)
-                            .border(1.5.dp, Color(0x60FFFFFF), CircleShape),
+                            .background(Color(0x24FFFFFF))
+                            .border(1.dp, Color(0x33FFFFFF), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(avatarSize * 0.42f)
+                            tint = colors.atmosphereTextPrimary,
+                            modifier = Modifier.size(avatarSize * 0.40f)
                         )
                     }
-                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space4))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
                     Text(
-                        text = "New",
+                        text = "Add",
                         fontFamily = ManropeFontFamily,
                         fontSize = labelSize,
-                        fontWeight = FontWeight.SemiBold,
-                        color = AetherEmber.Colors.AtmosphereTextPrimary,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.atmosphereTextSecondary,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
                         modifier = Modifier.fillMaxWidth()
@@ -790,15 +787,15 @@ private fun PresenceSection(
                         hasUnseenPulse = person.hasUnseenPulse,
                         chatType = person.chat.type,
                         photoPath = person.chat.photoPath,
-                        showGlowingRim = state is ActiveNowState.Online
+                        showGlowingRim = false
                     )
-                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space4))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
                     Text(
                         text = person.firstName,
                         fontFamily = ManropeFontFamily,
                         fontSize = labelSize,
-                        fontWeight = FontWeight.SemiBold,
-                        color = AetherEmber.Colors.AtmosphereTextPrimary,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.atmosphereTextSecondary,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -810,15 +807,15 @@ private fun PresenceSection(
     }
 }
 
+
 @Composable
 private fun HomeEmptyState(
     isLoading: Boolean,
-    hasAnyChats: Boolean,
-    query: String,
-    category: ChatFilterCategory
+    hasAnyPersonalChats: Boolean,
+    query: String
 ) {
     when {
-        isLoading && !hasAnyChats -> AetherEmptyState(
+        isLoading && !hasAnyPersonalChats -> AetherEmptyState(
             title = "Loading your conversations",
             detail = "Aether is syncing with Telegram."
         )
@@ -826,18 +823,9 @@ private fun HomeEmptyState(
             title = "No conversations match “$query”",
             detail = "Try a different name or phrase."
         )
-        !hasAnyChats -> AetherEmptyState(
-            title = "No conversations yet",
-            detail = "Start one and it will appear here."
-        )
         else -> AetherEmptyState(
-            title = "Nothing in ${category.label}",
-            detail = when (category) {
-                ChatFilterCategory.PEOPLE -> "Your direct conversations will show up here."
-                ChatFilterCategory.GROUPS -> "You are not in any groups yet."
-                ChatFilterCategory.CHANNELS -> "You are not following any channels yet."
-                ChatFilterCategory.UNREAD -> "You are all caught up."
-            }
+            title = "No conversations yet",
+            detail = "Start a conversation and it will appear here."
         )
     }
 }
@@ -856,17 +844,16 @@ private fun rememberAetherDaily(): DailyLine {
     return remember(day) { AetherDaily.lineForEpochDay(day) }
 }
 
-@Composable
-private fun statusBarInset() = WindowInsets.statusBars
-    .asPaddingValues()
-    .calculateTopPadding()
-
 private fun matchesQuery(chat: Chat, query: String): Boolean {
     if (query.isBlank()) return true
     return chat.title.contains(query, ignoreCase = true) ||
         chat.lastMessageText.contains(query, ignoreCase = true)
 }
 
+/**
+ * The greeting is real: the local hour, and the user's own first name when Telegram
+ * has told us one. Nothing is invented when it has not.
+ */
 private fun greetingFor(user: User?): String {
     val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
     val greeting = when (hour) {
@@ -879,5 +866,12 @@ private fun greetingFor(user: User?): String {
     return if (firstName == null) greeting else "$greeting,\n$firstName"
 }
 
-private fun localDateLabel(now: Date = Date()): String =
-    SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(now)
+/**
+ * The weather reading as one unobtrusive line, or nothing at all when Aether does
+ * not actually have a reading.
+ */
+private fun com.foresightlabs.aether.ui.weather.WeatherHeroState.quietLine(): String? {
+    if (!isAvailable) return null
+    val name = conditionName ?: return temperatureDisplay
+    return "$temperatureDisplay · $name"
+}

@@ -8,6 +8,7 @@ import com.foresightlabs.aether.domain.messages.MessageCapabilities
 import com.foresightlabs.aether.domain.messages.SendOptions
 import com.foresightlabs.aether.domain.messages.SendSchedule
 import com.foresightlabs.aether.domain.text.ReplyQuote
+import com.foresightlabs.aether.domain.model.AnimationItem
 import com.foresightlabs.aether.domain.model.AuthUiState
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.ChatFolder
@@ -84,6 +85,8 @@ class TelegramClient(private val application: Application) {
 
     val latestRawCallState = MutableStateFlow<TdApi.Call?>(null)
 
+    var notificationManager: com.foresightlabs.aether.data.notifications.AetherNotificationManager? = null
+
     @Volatile private var myUserId: Long = 0L
     @Volatile private var chatsFullyLoaded = false
     private val chatLoadMutex = Mutex()
@@ -153,6 +156,7 @@ class TelegramClient(private val application: Application) {
     }
 
     suspend fun logOut(): Result<Unit> {
+        notificationManager?.clearAllNotifications()
         _authState.value = AuthUiState.LoggingOut
         return sendExpectOk(TdApi.LogOut())
     }
@@ -231,9 +235,49 @@ class TelegramClient(private val application: Application) {
         scope.launch { closeChat(chatId) }
     }
 
-    suspend fun viewMessages(chatId: Long, messageIds: LongArray) {
+    suspend fun viewMessages(chatId: Long, messageIds: LongArray, forceRead: Boolean = true) {
         if (messageIds.isEmpty()) return
-        send(TdApi.ViewMessages(chatId, messageIds, null, true))
+        send(TdApi.ViewMessages(chatId, messageIds, null, forceRead))
+    }
+
+    suspend fun getRawChat(chatId: Long): TdApi.Chat? {
+        return chats[chatId] ?: when (val res = send(TdApi.GetChat(chatId))) {
+            is TdApi.Chat -> {
+                chats[res.id] = res
+                res
+            }
+            else -> null
+        }
+    }
+
+    suspend fun getRawUser(userId: Long): TdApi.User? {
+        return users[userId] ?: when (val res = send(TdApi.GetUser(userId))) {
+            is TdApi.User -> {
+                users[res.id] = res
+                res
+            }
+            else -> null
+        }
+    }
+
+    suspend fun send(chatId: Long, text: String, replyToMessageId: Long? = null): Result<TdApi.Message> {
+        return sendText(chatId, text, replyToMessageId)
+    }
+
+    suspend fun removeNotification(notificationGroupId: Int, notificationId: Int): Result<Unit> {
+        return sendExpectOk(TdApi.RemoveNotification(notificationGroupId, notificationId))
+    }
+
+    suspend fun removeNotificationGroup(notificationGroupId: Int, maxNotificationId: Int): Result<Unit> {
+        return sendExpectOk(TdApi.RemoveNotificationGroup(notificationGroupId, maxNotificationId))
+    }
+
+    suspend fun getMessageLink(chatId: Long, messageId: Long): Result<String> {
+        return when (val res = send(TdApi.GetMessageLink(chatId, messageId, 0, 0, null, false, false))) {
+            is TdApi.MessageLink -> Result.success(res.link)
+            is TdApi.Error -> Result.failure(Exception(res.message))
+            else -> Result.failure(Exception("Failed to get message link"))
+        }
     }
 
     suspend fun sendText(
@@ -547,6 +591,27 @@ class TelegramClient(private val application: Application) {
         return sendContent(chatId, content, replyToMessageId, forumTopicId)
     }
 
+    suspend fun sendAnimationFile(
+        chatId: Long,
+        fileId: Int,
+        caption: String = "",
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val content = TdApi.InputMessageAnimation(
+            TdApi.InputFileId(fileId),
+            null,
+            intArrayOf(),
+            0,
+            0,
+            0,
+            TdApi.FormattedText(caption, emptyArray()),
+            false,
+            false
+        )
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
+    }
+
     suspend fun sendSticker(
         chatId: Long,
         stickerPath: String,
@@ -814,6 +879,39 @@ class TelegramClient(private val application: Application) {
             isVideo = sticker.format is TdApi.StickerFormatWebm,
             localPath = file?.local?.path?.takeIf { it.isNotBlank() },
             setId = sticker.setId
+        )
+    }
+
+    suspend fun getSavedAnimations(): Result<List<AnimationItem>> {
+        val result = send(TdApi.GetSavedAnimations())
+        return when (result) {
+            is TdApi.Animations -> {
+                val items = result.animations.orEmpty().filterNotNull().map { mapAnimationItem(it) }
+                Result.success(items)
+            }
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("Failed to get saved animations"))
+        }
+    }
+
+    private fun mapAnimationItem(anim: TdApi.Animation): AnimationItem {
+        val file = anim.animation
+        if (file != null && !file.local.isDownloadingCompleted && file.local.canBeDownloaded) {
+            scope.launch { downloadFile(file.id) }
+        }
+        val thumbFile = anim.thumbnail?.file
+        if (thumbFile != null && !thumbFile.local.isDownloadingCompleted && thumbFile.local.canBeDownloaded) {
+            scope.launch { downloadFile(thumbFile.id) }
+        }
+        return AnimationItem(
+            fileId = file?.id ?: 0,
+            width = anim.width,
+            height = anim.height,
+            duration = anim.duration,
+            fileName = anim.fileName.orEmpty(),
+            mimeType = anim.mimeType.orEmpty().ifBlank { "video/mp4" },
+            thumbnailPath = thumbFile?.local?.path?.takeIf { it.isNotBlank() },
+            localPath = file?.local?.path?.takeIf { it.isNotBlank() }
         )
     }
 
@@ -1748,6 +1846,9 @@ class TelegramClient(private val application: Application) {
 
     private suspend fun handleUpdate(update: TdApi.Object) {
         when (update) {
+            is TdApi.UpdateNotificationGroup -> notificationManager?.onUpdateNotificationGroup(update)
+            is TdApi.UpdateNotification -> notificationManager?.onUpdateNotification(update)
+            is TdApi.UpdateActiveNotifications -> notificationManager?.onUpdateActiveNotifications(update)
             is TdApi.UpdateCall -> handleCallUpdate(update.call)
             is TdApi.UpdateAuthorizationState -> onAuth(update.authorizationState)
             is TdApi.UpdateConnectionState -> _connection.value = TelegramMappers.mapConnection(update.state)

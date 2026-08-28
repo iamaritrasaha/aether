@@ -15,7 +15,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.foresightlabs.aether.ui.screens.AppearanceScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
@@ -105,10 +104,5 @@ class AppearanceScreenshotTest {
     @Test
     fun appearanceScreenInNightAtmosphere() {
         capture("appearance-night", themeState(TimeAtmospherePalette.NIGHT))
-    }
-
-    @Test
-    fun appearanceScreenInLightMode() {
-        capture("appearance-light", themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.LIGHT })
     }
 }

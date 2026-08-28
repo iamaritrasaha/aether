@@ -4,9 +4,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +43,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -72,7 +77,7 @@ import com.foresightlabs.aether.ui.theme.aetherDuration
  */
 
 /** Minimum practical touch target. Icon-only controls must not go below this. */
-val AetherMinTouchTarget: Dp = 44.dp
+val AetherMinTouchTarget: Dp = 48.dp
 
 /**
  * Aether has no visually attached app bars. Primary navigation headers are floating
@@ -82,9 +87,9 @@ object AetherFloatingHeaderDefaults {
     val HorizontalMargin = AetherEmber.Spacing.Space16
     val TopGap = AetherEmber.Spacing.Space8
     val ExpandedHeight = 64.dp
-    val CompactHeight = 56.dp
+    val CompactHeight = 60.dp
     val ContentGap = AetherEmber.Spacing.Space8
-    val Shape = AetherEmber.Shapes.L
+    val Shape = AetherEmber.Shapes.XL
 }
 
 /** Top inset for Layer 2 content so its initial state is never hidden by Layer 3. */
@@ -144,95 +149,6 @@ fun AetherSurface(
 }
 
 /**
- * Translucent glass. A functional material for surfaces that float above the
- * atmosphere — docks, overlays, sheets, floating controls.
- *
- * Deliberately does not blur: per-row runtime blur is the single most expensive
- * thing this UI could do, and glass belongs on a handful of floating elements
- * rather than behind every list item.
- */
-@Composable
-fun AetherGlass(
-    modifier: Modifier = Modifier,
-    shape: Shape = AetherEmber.Shapes.L,
-    tint: Color? = null,
-    borderColor: Color? = null,
-    content: @Composable BoxScope.() -> Unit
-) {
-    val colors = LocalAetherColors.current
-    val resolvedTint = tint ?: colors.surfaceGlass
-    val resolvedBorder = borderColor ?: colors.border
-    Box(
-        modifier = modifier
-            .clip(shape)
-            .background(resolvedTint)
-            .border(1.dp, resolvedBorder, shape),
-        content = content
-    )
-}
-
-/**
- * Selectable pill. Selected state is tinted by the current atmosphere, never by a
- * fixed brand orange.
- */
-@Composable
-fun AetherChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    badge: String? = null
-) {
-    val atmosphere = LocalAtmosphere.current
-    val colors = LocalAetherColors.current
-    val duration = aetherDuration(AetherMotion.ControlMillis)
-    val spec = tween<Color>(duration, easing = AetherMotion.ControlEasing)
-
-    val background by animateColorAsState(
-        if (selected) atmosphere.accent.copy(alpha = if (colors.isDark) 0.22f else 0.16f) else colors.surfaceElevated,
-        spec,
-        label = "chip_background"
-    )
-    val borderColor by animateColorAsState(
-        if (selected) atmosphere.accent.copy(alpha = 0.85f) else colors.border,
-        spec,
-        label = "chip_border"
-    )
-    val labelColor by animateColorAsState(
-        if (selected && colors.isDark) Color.White else colors.textPrimary,
-        spec,
-        label = "chip_label"
-    )
-
-    Row(
-        modifier = modifier
-            .clip(AetherEmber.Shapes.Pill)
-            .background(background)
-            .border(if (selected) 1.dp else 0.75.dp, borderColor, AetherEmber.Shapes.Pill)
-            .clickable(onClick = onClick)
-            .defaultMinSize(minHeight = 34.dp)
-            .padding(horizontal = AetherEmber.Spacing.Space12, vertical = AetherEmber.Spacing.Space8),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space4)
-    ) {
-        Text(
-            text = label,
-            style = AetherType.Label,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
-            color = labelColor
-        )
-        if (!badge.isNullOrBlank()) {
-            Text(
-                text = badge,
-                style = AetherType.Metadata,
-                fontWeight = FontWeight.Bold,
-                color = if (selected && colors.isDark) Color.White else colors.textTertiary
-            )
-        }
-    }
-}
-
-/**
  * Circular icon-only control. [contentDescription] is required — icon-only affordances
  * must stay understandable to a screen reader.
  */
@@ -243,7 +159,7 @@ fun AetherIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     size: Dp = AetherMinTouchTarget,
-    iconSize: Dp = 19.dp,
+    iconSize: Dp = 22.dp,
     tint: Color? = null,
     background: Color? = null,
     borderColor: Color? = null,
@@ -252,8 +168,8 @@ fun AetherIconButton(
     val colors = LocalAetherColors.current
     val reducedMotion = LocalReducedMotion.current
     val resolvedTint = tint ?: colors.textPrimary
-    val resolvedBackground = background ?: colors.surfaceGlass
-    val resolvedBorder = borderColor ?: colors.border
+    val resolvedBackground = background ?: Color.Transparent
+    val resolvedBorder = borderColor ?: Color.Transparent
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -263,8 +179,7 @@ fun AetherIconButton(
     )
     val pressedBackground by animateColorAsState(
         targetValue = if (pressed && enabled) {
-            if (colors.isDark) Color.White.copy(alpha = 0.12f)
-            else Color.Black.copy(alpha = 0.08f)
+            Color.White.copy(alpha = 0.12f)
         } else {
             resolvedBackground
         },
@@ -280,7 +195,7 @@ fun AetherIconButton(
             }
             .clip(AetherEmber.Shapes.Pill)
             .background(pressedBackground)
-            .border(1.dp, resolvedBorder, AetherEmber.Shapes.Pill)
+            .then(if (resolvedBorder != Color.Transparent) Modifier.border(1.dp, resolvedBorder, AetherEmber.Shapes.Pill) else Modifier)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
@@ -343,7 +258,7 @@ fun AetherFloatingHeader(
             ),
         contentAlignment = Alignment.TopCenter
     ) {
-        AetherFrostedGlass(
+        AetherGlass(
             frostState = frostState,
             modifier = surfaceModifier
                 .fillMaxWidth()
@@ -486,5 +401,57 @@ fun AetherEmptyState(
             Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space16))
             action()
         }
+    }
+}
+
+/**
+ * Filter / Category chip with canonical neutral lens or subtle selection.
+ */
+@Composable
+fun AetherChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    leadingIcon: ImageVector? = null
+) {
+    val colors = LocalAetherColors.current
+    val text = if (selected) Color.White else colors.textSecondary
+    val shape = RoundedCornerShape(14.dp)
+
+    Row(
+        modifier = modifier
+            .clip(shape)
+            .then(
+                if (selected) {
+                    Modifier
+                        .background(Color(0x28FFFFFF))
+                        .border(BorderStroke(0.75.dp, Color(0x30FFFFFF)), shape)
+                } else {
+                    Modifier
+                        .background(colors.surfaceElevated)
+                        .border(BorderStroke(0.5.dp, colors.borderSubtle), shape)
+                }
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        if (leadingIcon != null) {
+            Icon(
+                imageVector = leadingIcon,
+                contentDescription = null,
+                tint = text,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        Text(
+            text = label,
+            fontFamily = ManropeFontFamily,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = text
+        )
     }
 }

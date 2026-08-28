@@ -7,7 +7,6 @@ import com.foresightlabs.aether.data.preferences.AetherAppearancePreferences
 import com.foresightlabs.aether.data.preferences.AppearanceRepository
 import com.foresightlabs.aether.data.preferences.ChatBubbleStyle
 import com.foresightlabs.aether.ui.theme.AccentColorChoice
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
 import kotlinx.coroutines.CoroutineScope
@@ -29,13 +28,12 @@ class AppearanceRepositoryTest {
         val first = AppearanceRepository(store)
         first.updateAtmosphereMode(AtmosphereMode.MANUAL)
         first.updateManualAtmosphere(TimeAtmospherePalette.NIGHT)
-        first.updateThemeMode(AppThemeMode.OLED)
         first.updateUseAtmosphereAccent(false)
         first.updateAccentChoice(AccentColorChoice.MIST_BLUE)
 
         val recreated = AppearanceRepository(store)
         val preferences = recreated.globalPreferences.first {
-            it.themeMode == AppThemeMode.OLED && it.atmosphereMode == AtmosphereMode.MANUAL
+            it.atmosphereMode == AtmosphereMode.MANUAL
         }
         assertEquals(TimeAtmospherePalette.NIGHT, preferences.manualAtmosphere)
         assertFalse(preferences.useAtmosphereAccent)
@@ -84,7 +82,6 @@ class AppearanceRepositoryTest {
         }
         val repository = AppearanceRepository(store)
         val preferences = repository.globalPreferences.first()
-        assertEquals(AppThemeMode.SYSTEM, preferences.themeMode)
         assertEquals(TimeAtmospherePalette.GOLDEN_HOUR, preferences.manualAtmosphere)
         val override = repository.getChatAppearanceFlow(42L).first()
         assertNull(override.palette)

@@ -4,7 +4,10 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -24,7 +27,9 @@ import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 
-/** Shared capture state for one atmospheric scene and its small floating frost surfaces. */
+/**
+ * Shared capture state for one atmospheric scene and its floating glass surfaces.
+ */
 @Stable
 class AetherFrostState internal constructor(internal val hazeState: HazeState)
 
@@ -35,14 +40,65 @@ fun rememberAetherFrostState(): AetherFrostState = remember { AetherFrostState(H
 fun Modifier.aetherFrostSource(state: AetherFrostState): Modifier = hazeSource(state.hazeState)
 
 /**
- * Canonical real frosted material for Aether's top header and bottom dock.
+ * Canonical Design Tokens for Aether Glass Material.
  *
- * Haze captures a sibling backdrop and uses Android RenderEffect on supported hardware. On an
- * unsupported API/runtime it draws [HazeStyle.fallbackTint], so navigation remains readable
- * without applying Modifier.blur() to the controls themselves.
+ * "The glass has no color. The environment behind the glass gives it color."
+ *
+ * Optical and physical characteristics:
+ * - Transparent material base (zero flat white/black/color tint overlay)
+ * - Specular top catch light & bottom ambient bounce
+ * - Fine refraction-edge border brush
+ * - Soft depth ambient and spot shadows
+ */
+@Immutable
+object AetherGlassTokens {
+    val BlurRadius: Dp = 16.dp
+    val NoiseFactor: Float = 0.02f
+
+    // Base glass color is strictly transparent — appearance comes from the living backdrop
+    val BaseGlassColor: Color = Color.Transparent
+
+    /** Neutral low-fidelity fallback tint used ONLY when hardware backdrop blur is unavailable */
+    val FallbackTint: Color = Color(0xD0141416)
+
+    val BorderWidth: Dp = 0.75.dp
+    val BorderBrush: Brush = Brush.verticalGradient(
+        0f to Color.White.copy(alpha = 0.16f),
+        0.5f to Color.White.copy(alpha = 0.04f),
+        1f to Color.White.copy(alpha = 0.01f)
+    )
+
+    val SpecularBrush: Brush = Brush.verticalGradient(
+        colorStops = arrayOf(
+            0f to Color.White.copy(alpha = 0.06f),
+            0.20f to Color.Transparent,
+            0.85f to Color.Transparent,
+            1f to Color.White.copy(alpha = 0.01f)
+        )
+    )
+
+    val AmbientShadowColor: Color = Color.Black.copy(alpha = 0.12f)
+    val SpotShadowColor: Color = Color.Black.copy(alpha = 0.16f)
+
+    // Canonical Structural Radii (12-14dp small controls, 18-22dp content/popups, 26-30dp surfaces)
+    val BarRadius: Dp = 24.dp
+    val DockRadius: Dp = 28.dp
+    val PopupRadius: Dp = 18.dp
+    val SheetRadius: Dp = 28.dp
+    val ControlRadius: Dp = 14.dp
+}
+
+/**
+ * Canonical Aether Glass Material Primitive.
+ *
+ * Haze captures the living backdrop and applies hardware RenderEffect blur on supported devices.
+ * On unsupported API/runtime it renders [AetherGlassTokens.FallbackTint] for guaranteed legibility.
+ *
+ * All floating chrome (top bar, dock, composer, menus, sheets, selection toolbar, controls)
+ * derives its physical material from this single source of truth.
  */
 @Composable
-fun AetherFrostedGlass(
+fun AetherGlass(
     frostState: AetherFrostState?,
     modifier: Modifier = Modifier,
     shape: Shape = AetherEmber.Shapes.L,
@@ -50,42 +106,17 @@ fun AetherFrostedGlass(
     emphasis: Float = 0f,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val colors = LocalAetherColors.current
-    val resolvedEmphasis = emphasis.coerceIn(0f, 1f)
-
-    val neutralVeil = when {
-        !colors.isDark -> Color(0xFFFBFAF8)
-        else -> Color(0xFF111116)
-    }
-    val tintAlpha = when {
-        !colors.isDark -> 0.08f + resolvedEmphasis * 0.04f
-        else -> 0.12f + resolvedEmphasis * 0.05f
-    }
-    val fallbackAlpha = when {
-        !colors.isDark -> 0.94f
-        else -> 0.82f
-    }
-    val style = remember(colors.isDark, resolvedEmphasis) {
+    // Without hardware backdrop blur the material has to fall back to a flat tone.
+    val style = remember {
         HazeStyle(
-            backgroundColor = neutralVeil,
-            tints = listOf(
-                HazeTint(neutralVeil.copy(alpha = tintAlpha))
-            ),
-            blurRadius = 24.dp,
-            noiseFactor = 0.06f,
-            fallbackTint = HazeTint(neutralVeil.copy(alpha = fallbackAlpha))
+            backgroundColor = Color.Transparent,
+            tints = emptyList(), // Zero color/white veil overlay!
+            blurRadius = AetherGlassTokens.BlurRadius,
+            noiseFactor = AetherGlassTokens.NoiseFactor,
+            fallbackTint = HazeTint(AetherGlassTokens.FallbackTint)
         )
     }
-    val edgeBrush = remember(colors.isDark, resolvedEmphasis) {
-        Brush.linearGradient(
-            colors = listOf(
-                Color.White.copy(alpha = if (colors.isDark) 0.18f else 0.45f),
-                Color.White.copy(alpha = if (colors.isDark) 0.08f else 0.15f),
-                if (colors.isDark) Color.White.copy(alpha = 0.04f)
-                else Color.Black.copy(alpha = 0.12f)
-            )
-        )
-    }
+
     val frostModifier = if (frostState != null) {
         Modifier.hazeEffect(state = frostState.hazeState, style = style)
     } else {
@@ -100,26 +131,114 @@ fun AetherFrostedGlass(
                 elevation = elevation,
                 shape = shape,
                 clip = false,
-                ambientColor = Color.Black.copy(alpha = if (colors.isDark) 0.20f else 0.14f),
-                spotColor = Color.Black.copy(alpha = if (colors.isDark) 0.25f else 0.18f)
+                ambientColor = AetherGlassTokens.AmbientShadowColor,
+                spotColor = AetherGlassTokens.SpotShadowColor
             )
             .clip(shape)
             .then(frostModifier)
             .drawWithCache {
-                val specular = Brush.verticalGradient(
-                    colorStops = arrayOf(
-                        0f to Color.White.copy(alpha = if (colors.isDark) 0.08f else 0.15f),
-                        0.24f to Color.Transparent,
-                        0.76f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = if (colors.isDark) 0.06f else 0.04f)
-                    )
-                )
                 onDrawWithContent {
-                    drawRect(specular)
+                    drawRect(AetherGlassTokens.SpecularBrush)
                     drawContent()
                 }
             }
-            .border(BorderStroke(1.dp, edgeBrush), shape),
+            .border(BorderStroke(AetherGlassTokens.BorderWidth, AetherGlassTokens.BorderBrush), shape),
         content = content
     )
 }
+
+/**
+ * Convenience structural variants for AetherGlass.
+ */
+object AetherGlassVariants {
+    @Composable
+    fun Bar(
+        frostState: AetherFrostState?,
+        modifier: Modifier = Modifier,
+        shape: Shape = RoundedCornerShape(AetherGlassTokens.BarRadius),
+        elevation: Dp = 6.dp,
+        emphasis: Float = 0f,
+        content: @Composable BoxScope.() -> Unit
+    ) = AetherGlass(
+        frostState = frostState,
+        modifier = modifier,
+        shape = shape,
+        elevation = elevation,
+        emphasis = emphasis,
+        content = content
+    )
+
+    @Composable
+    fun Popup(
+        frostState: AetherFrostState? = null,
+        modifier: Modifier = Modifier,
+        shape: Shape = RoundedCornerShape(AetherGlassTokens.PopupRadius),
+        elevation: Dp = 8.dp,
+        emphasis: Float = 0.2f,
+        content: @Composable BoxScope.() -> Unit
+    ) = AetherGlass(
+        frostState = frostState,
+        modifier = modifier,
+        shape = shape,
+        elevation = elevation,
+        emphasis = emphasis,
+        content = content
+    )
+
+    @Composable
+    fun Sheet(
+        frostState: AetherFrostState? = null,
+        modifier: Modifier = Modifier,
+        shape: Shape = RoundedCornerShape(
+            topStart = AetherGlassTokens.SheetRadius,
+            topEnd = AetherGlassTokens.SheetRadius
+        ),
+        elevation: Dp = 12.dp,
+        emphasis: Float = 0.25f,
+        content: @Composable BoxScope.() -> Unit
+    ) = AetherGlass(
+        frostState = frostState,
+        modifier = modifier,
+        shape = shape,
+        elevation = elevation,
+        emphasis = emphasis,
+        content = content
+    )
+
+    @Composable
+    fun Control(
+        frostState: AetherFrostState? = null,
+        modifier: Modifier = Modifier,
+        shape: Shape = CircleShape,
+        elevation: Dp = 4.dp,
+        emphasis: Float = 0.1f,
+        content: @Composable BoxScope.() -> Unit
+    ) = AetherGlass(
+        frostState = frostState,
+        modifier = modifier,
+        shape = shape,
+        elevation = elevation,
+        emphasis = emphasis,
+        content = content
+    )
+}
+
+/**
+ * Direct alias to [AetherGlass] for seamless migration across existing call-sites.
+ */
+@Composable
+fun AetherFrostedGlass(
+    frostState: AetherFrostState?,
+    modifier: Modifier = Modifier,
+    shape: Shape = AetherEmber.Shapes.L,
+    elevation: Dp = 6.dp,
+    emphasis: Float = 0f,
+    content: @Composable BoxScope.() -> Unit
+) = AetherGlass(
+    frostState = frostState,
+    modifier = modifier,
+    shape = shape,
+    elevation = elevation,
+    emphasis = emphasis,
+    content = content
+)

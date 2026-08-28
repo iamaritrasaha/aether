@@ -40,7 +40,8 @@ class PresenceAndFilterTest {
         type: ChatType,
         directUser: User? = null,
         unread: Int = 0,
-        order: Long = 100L
+        order: Long = 100L,
+        isForum: Boolean = false
     ) = Chat(
         id = id,
         title = "Chat $id",
@@ -51,8 +52,34 @@ class PresenceAndFilterTest {
         avatarInitials = "C",
         avatarGradient = listOf(Color.Red, Color.Blue),
         directUser = directUser,
-        order = order
+        order = order,
+        isForum = isForum
     )
+
+    // --- personal-chat classification (Home milestone) ------------------------
+
+    @Test
+    fun personalChatClassificationIncludesOnlyDirectAndSecretHumanChats() {
+        val direct = chat("1", ChatType.DIRECT, user("1", Presence.ONLINE))
+        val secret = chat("2", ChatType.SECRET, user("2", Presence.OFFLINE))
+        val group = chat("3", ChatType.GROUP)
+        val channel = chat("4", ChatType.CHANNEL)
+        val saved = chat("5", ChatType.SAVED_MESSAGES)
+        val bot = chat("6", ChatType.DIRECT, user("6", Presence.ONLINE, isBot = true))
+        val deleted = chat("7", ChatType.DIRECT, user("7", Presence.ONLINE, isDeleted = true))
+        val service = chat("777000", ChatType.DIRECT, user("777000", Presence.ONLINE))
+        val forum = chat("8", ChatType.GROUP, isForum = true)
+
+        assertTrue(direct.isPersonalChat)
+        assertTrue(secret.isPersonalChat)
+        assertFalse(group.isPersonalChat)
+        assertFalse(channel.isPersonalChat)
+        assertFalse(saved.isPersonalChat)
+        assertFalse(bot.isPersonalChat)
+        assertFalse(deleted.isPersonalChat)
+        assertFalse(service.isPersonalChat)
+        assertFalse(forum.isPersonalChat)
+    }
 
     // --- presence mapping stays truthful -------------------------------------
 

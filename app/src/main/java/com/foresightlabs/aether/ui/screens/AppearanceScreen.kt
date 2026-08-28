@@ -30,11 +30,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Tune
@@ -72,7 +69,6 @@ import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFrac
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AccentColorChoice
 import com.foresightlabs.aether.ui.theme.AetherEmber
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.AtmosphereWeatherService
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
@@ -570,59 +566,6 @@ fun AppearanceScreen(
                     }
                 }
 
-                // Theme Mode Section (Dark, OLED, Light, Auto)
-                item {
-                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
-                    Text(
-                        text = "THEME MODE",
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = AetherEmber.Colors.AtmosphereTextSecondary,
-                        letterSpacing = 1.0.sp,
-                        modifier = Modifier.padding(start = AetherEmber.Spacing.Space24, bottom = AetherEmber.Spacing.Space8)
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = AetherEmber.Spacing.Space16),
-                        horizontalArrangement = Arrangement.spacedBy(AetherEmber.Spacing.Space8)
-                    ) {
-                        ThemeModeCard(
-                            mode = AppThemeMode.DARK,
-                            label = "Ember Dark",
-                            icon = Icons.Default.DarkMode,
-                            isSelected = themeState.themeMode == AppThemeMode.DARK,
-                            onClick = { themeState.setAndPersistThemeMode(AppThemeMode.DARK) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        ThemeModeCard(
-                            mode = AppThemeMode.OLED,
-                            label = "OLED",
-                            icon = Icons.Default.DarkMode,
-                            isSelected = themeState.themeMode == AppThemeMode.OLED,
-                            onClick = { themeState.setAndPersistThemeMode(AppThemeMode.OLED) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        ThemeModeCard(
-                            mode = AppThemeMode.LIGHT,
-                            label = "Light",
-                            icon = Icons.Default.LightMode,
-                            isSelected = themeState.themeMode == AppThemeMode.LIGHT,
-                            onClick = { themeState.setAndPersistThemeMode(AppThemeMode.LIGHT) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        ThemeModeCard(
-                            mode = AppThemeMode.SYSTEM,
-                            label = "Auto",
-                            icon = Icons.Default.PhoneAndroid,
-                            isSelected = themeState.themeMode == AppThemeMode.SYSTEM,
-                            onClick = { themeState.setAndPersistThemeMode(AppThemeMode.SYSTEM) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
 
                 // Accent Color Section
                 item {
@@ -910,47 +853,6 @@ private fun PaletteCard(
     }
 }
 
-@Composable
-private fun ThemeModeCard(
-    mode: AppThemeMode,
-    label: String,
-    icon: ImageVector,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .clip(AetherEmber.Shapes.M)
-            .background(
-                if (isSelected) LocalAtmosphere.current.accent.copy(alpha = 0.28f)
-                else Color(0x35000000)
-            )
-            .border(
-                width = if (isSelected) 1.5.dp else 1.dp,
-                color = if (isSelected) LocalAtmosphere.current.accent else Color(0x28FFFFFF),
-                shape = AetherEmber.Shapes.M
-            )
-            .clickable { onClick() }
-            .padding(vertical = AetherEmber.Spacing.Space12),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = if (isSelected) LocalAtmosphere.current.accent else AetherEmber.Colors.AtmosphereTextSecondary,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
-        Text(
-            text = label,
-            fontFamily = ManropeFontFamily,
-            fontSize = 11.5.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            color = Color.White
-        )
-    }
-}
 
 @Composable
 private fun DensityOption(

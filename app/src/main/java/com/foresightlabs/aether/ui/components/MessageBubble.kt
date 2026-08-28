@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.Pause
@@ -80,7 +81,12 @@ import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageStatus
 import com.foresightlabs.aether.domain.model.MessageType
 import com.foresightlabs.aether.domain.model.Reaction
-import com.foresightlabs.aether.ui.design.AetherAccent
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
@@ -100,9 +106,11 @@ fun MessageBubble(
     isHighlighted: Boolean = false,
     onPollVote: (Message, List<Int>) -> Unit = { _, _ -> },
     isSelected: Boolean = false,
+    isSelectionActive: Boolean = false,
     /** Non-null only while a multi-selection is running. */
     onSelectToggle: (() -> Unit)? = null,
-    onStopLiveLocation: ((Message) -> Unit)? = null
+    onStopLiveLocation: ((Message) -> Unit)? = null,
+    onRetry: ((Message) -> Unit)? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
     val colors = LocalAetherColors.current
@@ -112,21 +120,23 @@ fun MessageBubble(
     val replyThreshold = -180f // Drag left to reply
     val isOutgoing = message.isOutgoing
     val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
-    val metaColor = if (isOutgoing) contentColor.copy(alpha = .78f) else colors.textTertiary
+    // Both bubbles carry graphite type on a light tone, so the timestamp is the
+    // same ink held back rather than a second colour.
+    val metaColor = contentColor.copy(alpha = .45f)
 
     val bubbleShape = if (isOutgoing) {
         RoundedCornerShape(
-            topStart = 20.dp,
-            topEnd = 20.dp,
-            bottomStart = 20.dp,
-            bottomEnd = 6.dp
+            topStart = 15.dp,
+            topEnd = 15.dp,
+            bottomStart = 15.dp,
+            bottomEnd = 5.dp
         )
     } else {
         RoundedCornerShape(
-            topStart = 20.dp,
-            topEnd = 20.dp,
-            bottomStart = 6.dp,
-            bottomEnd = 20.dp
+            topStart = 15.dp,
+            topEnd = 15.dp,
+            bottomStart = 5.dp,
+            bottomEnd = 15.dp
         )
     }
 
@@ -203,26 +213,31 @@ fun MessageBubble(
         label = "jump_highlight"
     )
 
+    val selectionAlpha by animateFloatAsState(
+        targetValue = if (isSelectionActive && !isSelected) 0.65f else 1f,
+        animationSpec = tween(durationMillis = 180),
+        label = "message_selection_alpha"
+    )
+
+    val focusBorderModifier = if (isSelected) {
+        val borderColor = if (isOutgoing) Color(0x40FFFFFF) else Color(0x32000000)
+        Modifier.border(0.75.dp, borderColor, bubbleShape)
+    } else Modifier
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 2.dp)
-            .then(
-                if (onSelectToggle != null) {
-                    Modifier.clickable { onSelectToggle() }
-                } else {
-                    Modifier
-                }
-            )
-            .then(
+            .padding(horizontal = 14.dp, vertical = 1.dp)
+            .graphicsLayer {
+                alpha = selectionAlpha
                 if (isSelected) {
-                    Modifier
-                        .clip(AetherEmber.Shapes.L)
-                        .background(colors.accent.copy(alpha = 0.20f))
-                } else {
-                    Modifier
+                    translationY = -1.5f
                 }
-            )
+            }
+            .semantics {
+                selected = isSelected
+                stateDescription = if (isSelected) "Selected" else "Not selected"
+            }
             .then(
                 if (highlightAlpha > 0.01f) {
                     Modifier
@@ -296,11 +311,32 @@ fun MessageBubble(
                         }
                     )
                 },
-            horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start
+            horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            if (!isOutgoing && isSelected) {
+                Box(
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF2C2C34))
+                        .border(1.dp, colors.background, CircleShape)
+                        .testTag("message_check_${message.id}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = Color(0xFFF2F2F5),
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
+            }
+
             Column(
                 horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
-                modifier = Modifier.widthIn(max = 280.dp)
+                modifier = Modifier.widthIn(max = 258.dp)
             ) {
                 // Main Bubble Container
                 Box(
@@ -308,15 +344,19 @@ fun MessageBubble(
                         .clip(bubbleShape)
                         .then(
                             if (isOutgoing) {
-                                Modifier.background(Brush.linearGradient(listOf(colors.bubbleOutgoing, colors.bubbleOutgoingEnd)))
+                                Modifier.background(colors.bubbleOutgoing)
                             } else {
-                                Modifier
-                                    .background(colors.bubbleIncoming)
-                                    .border(1.dp, colors.border, bubbleShape)
+                                Modifier.background(colors.bubbleIncoming)
                             }
                         )
+                        .then(focusBorderModifier)
                         .pointerInput(message.id) {
                             detectTapGestures(
+                                onTap = {
+                                    if (onSelectToggle != null) {
+                                        onSelectToggle()
+                                    }
+                                },
                                 onLongPress = {
                                     onLongPress(message)
                                 }
@@ -326,7 +366,7 @@ fun MessageBubble(
                             if (message.type == MessageType.IMAGE) {
                                 Modifier.padding(4.dp)
                             } else {
-                                Modifier.padding(horizontal = 11.dp, vertical = 7.dp)
+                                Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
                             }
                         )
                         .testTag("message_bubble_${message.id}")
@@ -457,8 +497,8 @@ fun MessageBubble(
                                     text = message.text,
                                     fontFamily = ManropeFontFamily,
                                     color = contentColor,
-                                    fontSize = 15.sp,
-                                    lineHeight = 20.5.sp,
+                                    fontSize = 13.5.sp,
+                                    lineHeight = 18.sp,
                                     fontWeight = FontWeight.Medium
                                 )
                                 message.linkPreview?.let { preview ->
@@ -466,13 +506,35 @@ fun MessageBubble(
                                     LinkPreviewCard(preview = preview, isOutgoing = isOutgoing)
                                 }
                             }
+                            MessageType.UNSUPPORTED -> {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = metaColor,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = message.text.ifBlank { "Unsupported message" },
+                                        fontFamily = ManropeFontFamily,
+                                        color = contentColor.copy(alpha = 0.85f),
+                                        fontSize = 13.sp,
+                                        lineHeight = 17.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
                             else -> {
                                 AetherRichText(
                                     value = message.richText,
                                     style = TextStyle(
                                         fontFamily = ManropeFontFamily,
-                                        fontSize = 15.sp,
-                                        lineHeight = 20.5.sp,
+                                        fontSize = 13.5.sp,
+                                        lineHeight = 18.sp,
                                         fontWeight = FontWeight.Medium
                                     ),
                                     color = contentColor,
@@ -486,7 +548,10 @@ fun MessageBubble(
 
                         // Message Metadata (Timestamp, Edited, Read status)
                         if (message.type != MessageType.IMAGE) {
-                            Spacer(modifier = Modifier.height(4.dp))
+                            // The stamp tucks up against the last line rather than
+                            // sitting on a row of its own, which is what keeps a
+                            // one-word message a one-word bubble.
+                            Spacer(modifier = Modifier.height(1.dp))
                             Row(
                                 modifier = Modifier.align(Alignment.End),
                                 verticalAlignment = Alignment.CenterVertically
@@ -503,8 +568,8 @@ fun MessageBubble(
                                 Text(
                                     text = message.timestamp,
                                     fontFamily = ManropeFontFamily,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Normal,
                                     color = metaColor
                                 )
 
@@ -515,7 +580,7 @@ fun MessageBubble(
                                             Icon(
                                                 imageVector = Icons.Default.Schedule,
                                                 contentDescription = "Sending",
-                                                tint = Color(0xCCFFFFFF),
+                                                tint = metaColor,
                                                 modifier = Modifier.size(12.dp)
                                             )
                                         }
@@ -523,7 +588,7 @@ fun MessageBubble(
                                             Icon(
                                                 imageVector = Icons.Default.Check,
                                                 contentDescription = "Sent",
-                                                tint = Color(0xCCFFFFFF),
+                                                tint = metaColor,
                                                 modifier = Modifier.size(13.dp)
                                             )
                                         }
@@ -531,17 +596,27 @@ fun MessageBubble(
                                             Icon(
                                                 imageVector = Icons.Default.DoneAll,
                                                 contentDescription = "Read",
-                                                tint = Color.White,
+                                                tint = colors.accent,
                                                 modifier = Modifier.size(14.dp)
                                             )
                                         }
                                         MessageStatus.FAILED -> {
-                                            Icon(
-                                                imageVector = Icons.Default.Schedule,
-                                                contentDescription = "Failed",
-                                                tint = Color(0xFFFFD1D1),
-                                                modifier = Modifier.size(12.dp)
-                                            )
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier
+                                                    .clip(AetherEmber.Shapes.Pill)
+                                                    .clickable(enabled = onRetry != null) {
+                                                        onRetry?.invoke(message)
+                                                    }
+                                                    .padding(horizontal = 2.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Schedule,
+                                                    contentDescription = "Failed, tap to retry",
+                                                    tint = Color(0xFFEF4444),
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -568,6 +643,26 @@ fun MessageBubble(
                             )
                         }
                     }
+                }
+            }
+
+            if (isOutgoing && isSelected) {
+                Box(
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF2C2C34))
+                        .border(1.dp, colors.background, CircleShape)
+                        .testTag("message_check_${message.id}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = Color(0xFFF2F2F5),
+                        modifier = Modifier.size(11.dp)
+                    )
                 }
             }
         }
@@ -808,14 +903,12 @@ private fun ReactionBadge(
 ) {
     val colors = LocalAetherColors.current
     val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
-    val bg = if (reaction.userReacted) colors.accent else colors.surfaceElevated
-    val borderColor = if (reaction.userReacted) colors.accent else colors.border
+    val bg = if (reaction.userReacted) colors.accent else colors.bubbleIncoming
 
     Row(
         modifier = Modifier
             .clip(CircleShape)
             .background(bg)
-            .border(1.dp, borderColor, CircleShape)
             .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically

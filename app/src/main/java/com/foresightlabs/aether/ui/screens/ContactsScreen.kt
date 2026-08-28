@@ -65,6 +65,7 @@ import com.foresightlabs.aether.ui.design.AetherBackButton
 import com.foresightlabs.aether.ui.design.AetherFloatingHeader
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.design.AetherIconButton
+import com.foresightlabs.aether.ui.components.AetherSearchPill
 import com.foresightlabs.aether.ui.design.AetherSurface
 import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
 import com.foresightlabs.aether.ui.theme.AetherEmber
@@ -136,27 +137,15 @@ fun ContactsScreen(
                 modifier = Modifier.fillMaxSize()
                     .padding(top = aetherFloatingHeaderContentTopPadding())
               ) {
-                // Search Bar
-                OutlinedTextField(
+                // Search Bar (Canonical Neutral Glass Pill)
+                AetherSearchPill(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("Search contacts…", color = Color(0x99FFFFFF)) },
-                    leadingIcon = {
-                        Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = Color(0xAAFFFFFF))
-                    },
+                    placeholder = "Search contacts…",
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = AetherEmber.Shapes.Pill,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = atmosphere.accent,
-                        unfocusedBorderColor = Color(0x28FFFFFF),
-                        focusedContainerColor = Color(0x35000000),
-                        unfocusedContainerColor = Color(0x25000000)
-                    ),
-                    singleLine = true
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .testTag("contacts_search_bar")
                 )
 
                 if (isLoading) {
@@ -177,7 +166,7 @@ fun ContactsScreen(
                         contentPadding = PaddingValues(bottom = 32.dp)
                     ) {
                         // Contextual discovery invitation card when device contacts haven't been synced
-                        if (!hasDeviceContactsLoaded && searchQuery.isBlank()) {
+                        if (com.foresightlabs.aether.AetherFeatureFlags.DEVICE_CONTACTS_SYNC_ENABLED && !hasDeviceContactsLoaded && searchQuery.isBlank()) {
                             item(key = "discovery_invite_card") {
                                 AetherSurface(
                                     modifier = Modifier
@@ -277,7 +266,7 @@ fun ContactsScreen(
                     )
                 },
                 actions = {
-                    if (!hasDeviceContactsLoaded) {
+                    if (com.foresightlabs.aether.AetherFeatureFlags.DEVICE_CONTACTS_SYNC_ENABLED && !hasDeviceContactsLoaded) {
                         AetherIconButton(
                             icon = Icons.Default.PersonAdd,
                             contentDescription = "Find people you know",

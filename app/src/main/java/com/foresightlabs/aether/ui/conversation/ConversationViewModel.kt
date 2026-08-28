@@ -18,6 +18,7 @@ import com.foresightlabs.aether.domain.search.ConversationSearchState
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageType
+import com.foresightlabs.aether.domain.model.AnimationItem
 import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
 import kotlinx.coroutines.Job
@@ -355,6 +356,42 @@ class ConversationViewModel(
         }
     }
 
+    fun sendAnimationFile(fileId: Int, caption: String = "", replyToId: String? = null) {
+        viewModelScope.launch {
+            val result = telegram.sendAnimationFile(
+                chatId = activeChatId,
+                fileId = fileId,
+                caption = caption,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun sendAnimation(
+        animationPath: String,
+        caption: String = "",
+        duration: Int = 0,
+        width: Int = 0,
+        height: Int = 0,
+        replyToId: String? = null
+    ) {
+        viewModelScope.launch {
+            val result = telegram.sendAnimation(
+                chatId = activeChatId,
+                animationPath = animationPath,
+                caption = caption,
+                duration = duration,
+                width = width,
+                height = height,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
     fun sendVideoNote(
         videoPath: String,
         duration: Int = 0,
@@ -459,6 +496,21 @@ class ConversationViewModel(
         viewModelScope.launch {
             val result = calls.initiateCall(targetUserId)
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun copyMessageLink(message: Message, onLinkResolved: (String) -> Unit) {
+        viewModelScope.launch {
+            val messageId = message.id.toLongOrNull() ?: return@launch
+            val result = telegram.getMessageLink(activeChatId, messageId)
+            val link = result.getOrNull() ?: run {
+                val formattedChatId = if (activeChatId < 0) {
+                    val raw = activeChatId.toString()
+                    if (raw.startsWith("-100")) raw.removePrefix("-100") else raw.removePrefix("-")
+                } else activeChatId.toString()
+                "https://t.me/c/$formattedChatId/$messageId"
+            }
+            onLinkResolved(link)
         }
     }
 
@@ -773,6 +825,17 @@ class ConversationViewModel(
             telegram.getStickerSet(setId).onSuccess { set ->
                 onLoaded(set)
             }
+        }
+    }
+
+    // --- Saved Animations / GIFs ----------------------------------------------
+
+    private val _savedAnimations = MutableStateFlow<List<AnimationItem>>(emptyList())
+    val savedAnimations: StateFlow<List<AnimationItem>> = _savedAnimations.asStateFlow()
+
+    fun loadSavedAnimations() {
+        viewModelScope.launch {
+            telegram.getSavedAnimations().onSuccess { _savedAnimations.value = it }
         }
     }
 

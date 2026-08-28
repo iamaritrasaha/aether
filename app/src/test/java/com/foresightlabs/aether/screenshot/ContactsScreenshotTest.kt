@@ -19,7 +19,6 @@ import com.foresightlabs.aether.domain.model.User
 import com.foresightlabs.aether.ui.screens.ContactsScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
@@ -188,7 +187,7 @@ class ContactsScreenshotTest {
             name = "contacts-dark",
             contacts = list,
             hasDeviceContactsLoaded = true,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.DAY)
         )
     }
 
@@ -239,36 +238,6 @@ class ContactsScreenshotTest {
             contacts = emptyList(),
             hasDeviceContactsLoaded = false,
             state = themeState(TimeAtmospherePalette.EVENING)
-        )
-    }
-
-    @Test
-    fun contactsPopulatedLight() {
-        capture(
-            name = "contacts-light",
-            contacts = listOf(
-                DiscoveredContact(
-                    name = "Aarav Sharma With A Long Contact Name",
-                    phone = "+1 555 0101",
-                    isTelegramUser = true,
-                    telegramUser = User(
-                        id = "101",
-                        name = "Aarav Sharma With A Long Contact Name",
-                        username = "aarav",
-                        avatarInitials = "AS",
-                        avatarGradient = listOf(Color(0xFF3B82F6), Color(0xFF1D4ED8)),
-                        phone = "+1 555 0101",
-                        presence = Presence.ONLINE
-                    )
-                ),
-                DiscoveredContact(
-                    name = "Marcus Vance",
-                    phone = "+1 555 0104",
-                    isTelegramUser = false
-                )
-            ),
-            hasDeviceContactsLoaded = true,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.LIGHT }
         )
     }
 }

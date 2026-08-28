@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -60,7 +61,14 @@ import com.foresightlabs.aether.domain.model.CallOutcome
 import com.foresightlabs.aether.ui.components.AetherAtmosphericBackground
 import com.foresightlabs.aether.ui.components.AetherAvatar
 import com.foresightlabs.aether.ui.design.AetherAccent
+import com.foresightlabs.aether.ui.design.AetherBackButton
+import com.foresightlabs.aether.ui.design.AetherFloatingHeader
+import com.foresightlabs.aether.ui.design.AetherIconButton
+import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
+import com.foresightlabs.aether.ui.design.rememberAetherFloatingHeaderScrollFraction
+import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AetherEmber
+import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.OnlineGreen
 import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
@@ -103,75 +111,20 @@ fun CallsScreen(
         }
     }
 
-    AetherAtmosphericBackground(
-        modifier = modifier.fillMaxSize(),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
+    val frostState = rememberAetherFrostState()
+    val listState = rememberLazyListState()
+    val headerScrollFraction = rememberAetherFloatingHeaderScrollFraction(listState)
+
+    Box(modifier = modifier.fillMaxSize()) {
+        AetherAtmosphericBackground(
+            modifier = Modifier.fillMaxSize(),
+            heroFraction = 1f,
+            frostState = frostState
         ) {
-            // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x28000000))
-                        .border(1.dp, Color(0x20FFFFFF), CircleShape)
-                        .clickable { onBack() }
-                        .testTag("calls_back_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-
-                Text(
-                    text = "Calls",
-                    fontFamily = SpaceGroteskFontFamily,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x28000000))
-                        .border(1.dp, Color(0x20FFFFFF), CircleShape)
-                        .clickable { onRefresh() }
-                        .testTag("calls_refresh_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Refresh",
-                        tint = Color.White,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-            }
-
-            // Body
             Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .clip(AetherEmber.Shapes.RisingSheet)
-                    .background(AetherEmber.Colors.Background)
-                    .border(1.dp, Color(0x14FFFFFF), AetherEmber.Shapes.RisingSheet)
+                    .fillMaxSize()
+                    .padding(top = aetherFloatingHeaderContentTopPadding())
             ) {
                 when (historyState) {
                     is CallHistoryUiState.Loading -> {
@@ -267,8 +220,6 @@ fun CallsScreen(
                     }
 
                     is CallHistoryUiState.Content -> {
-                        val listState = rememberLazyListState()
-
                         val shouldLoadMore by remember {
                             derivedStateOf {
                                 val lastVisibleItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()
@@ -284,7 +235,8 @@ fun CallsScreen(
 
                         LazyColumn(
                             state = listState,
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(bottom = 32.dp)
                         ) {
                             itemsIndexed(
                                 items = historyState.items,
@@ -318,6 +270,27 @@ fun CallsScreen(
                 }
             }
         }
+
+        AetherFloatingHeader(
+            title = "Calls",
+            modifier = Modifier.align(Alignment.TopCenter),
+            scrollFraction = headerScrollFraction,
+            frostState = frostState,
+            navigation = {
+                AetherBackButton(
+                    onClick = onBack,
+                    modifier = Modifier.testTag("calls_back_button")
+                )
+            },
+            actions = {
+                AetherIconButton(
+                    icon = Icons.Default.Refresh,
+                    contentDescription = "Refresh",
+                    onClick = onRefresh,
+                    modifier = Modifier.testTag("calls_refresh_button")
+                )
+            }
+        )
 
         // Permission Rationale Modal
         if (showPermissionRationale) {

@@ -22,12 +22,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.unit.dp
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.AetherMotion
 import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import com.foresightlabs.aether.ui.theme.aetherDuration
+import com.foresightlabs.aether.ui.design.AetherFloatingHeaderDefaults
 import com.foresightlabs.aether.ui.design.AetherFrostState
 import com.foresightlabs.aether.ui.design.aetherFrostSource
 
@@ -150,7 +153,9 @@ fun AetherAtmosphericBackground(
                 center = glowCenter
             )
 
-            // Atmospheric depth pooling toward the falloff edge.
+            // A trace of atmospheric depth toward the falloff edge. Held light on
+            // purpose: the message canvas is meant to stay luminous the whole way
+            // down rather than sinking into a dark corner.
             val depthCenter = Offset(
                 width * (0.92f - driftOffset * 0.5f),
                 luminousHeight * (0.88f - driftOffset * 0.3f)
@@ -159,8 +164,8 @@ fun AetherAtmosphericBackground(
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        shadow.copy(alpha = 0.62f),
-                        shadow.copy(alpha = 0.24f),
+                        shadow.copy(alpha = 0.22f),
+                        shadow.copy(alpha = 0.08f),
                         Color.Transparent
                     ),
                     center = depthCenter,
@@ -170,28 +175,50 @@ fun AetherAtmosphericBackground(
                 center = depthCenter
             )
 
-            // Soft localized atmospheric scrim behind upper text to guarantee
-            // exceptional readability across all palettes and weather conditions
-            drawRect(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0x38000000),
-                        Color(0x20000000),
-                        Color(0x0A000000),
-                        Color.Transparent
-                    ),
-                    startY = 0f,
-                    endY = luminousHeight * 0.85f
-                ),
-                size = size.copy(height = luminousHeight)
-            )
-
             // The gradient always covers the viewport. heroFraction compresses the
             // luminous transition behind Home's sheet; it never creates a dark seam.
+            drawAetherContrastBed()
         }
 
         content()
     }
+}
+
+/**
+ * The controlled-dark-atmosphere contrast bed.
+ *
+ * Aether's glass stays strictly transparent — it never tints itself to stay
+ * readable. Instead, every atmospheric backdrop darkens itself locally in the
+ * band where floating frosted chrome (headers, Home's hero controls) always
+ * sits, so text and icons drawn on that glass keep enough contrast no matter
+ * how luminous the palette or weather underneath gets. It fades out well
+ * before the region typically reads as a rectangle, so it blends into the
+ * atmosphere rather than reading as a panel.
+ *
+ * This is drawn as part of the same source Haze captures for the frost above
+ * it, so the darkening is exactly what the glass ends up showing through —
+ * not a separate layer the blur can miss.
+ */
+private fun DrawScope.drawAetherContrastBed() {
+    val bedHeight = (
+        AetherFloatingHeaderDefaults.TopGap +
+            AetherFloatingHeaderDefaults.ExpandedHeight +
+            40.dp
+        ).toPx().coerceAtMost(size.height)
+
+    drawRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color(0x40000000), // ~25% at the very top edge, behind chrome
+                Color(0x26000000),
+                Color(0x12000000),
+                Color.Transparent
+            ),
+            startY = 0f,
+            endY = bedHeight
+        ),
+        size = size.copy(height = bedHeight)
+    )
 }
 
 /**

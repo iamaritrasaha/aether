@@ -429,11 +429,11 @@ private fun DrawScope.drawCelestialSun(
         )
     }
 
-    // 3. Inner Diffuse Corona Ring
+    // 3. Inner Diffuse Corona Ring — a warm glow, not a white flash.
     drawCircle(
         brush = Brush.radialGradient(
             colors = listOf(
-                Color(0xFFFFFFFF).copy(alpha = 0.90f * bodyAlpha),
+                Color(0xFFFFF3DC).copy(alpha = 0.82f * bodyAlpha),
                 haloColor.copy(alpha = 0.65f * bodyAlpha),
                 Color.Transparent
             ),
@@ -444,18 +444,18 @@ private fun DrawScope.drawCelestialSun(
         radius = innerCoronaRadius
     )
 
-    // 4. Luminous Warm Sun Core (Ivory/Gold)
+    // 4. Warm Sun Core (Ivory/Gold) — soft glow, never a white blast.
     val coreGradient = if (isGolden) {
-        listOf(Color(0xFFFFFDF5), Color(0xFFFFCC80), Color(0xFFFF9E3D))
+        listOf(Color(0xFFFFEBC2), Color(0xFFFFCC80), Color(0xFFFF9E3D))
     } else {
-        listOf(Color(0xFFFFFFFF), Color(0xFFFFE8B2), Color(0xFFFFD166))
+        listOf(Color(0xFFFFF3DC), Color(0xFFFFE8B2), Color(0xFFFFD166))
     }
     drawCircle(
         brush = Brush.radialGradient(
             colors = listOf(
-                coreGradient[0].copy(alpha = 0.98f * bodyAlpha),
-                coreGradient[1].copy(alpha = 0.92f * bodyAlpha),
-                coreGradient[2].copy(alpha = 0.85f * bodyAlpha)
+                coreGradient[0].copy(alpha = 0.92f * bodyAlpha),
+                coreGradient[1].copy(alpha = 0.88f * bodyAlpha),
+                coreGradient[2].copy(alpha = 0.82f * bodyAlpha)
             ),
             center = sunCenter,
             radius = coreRadius

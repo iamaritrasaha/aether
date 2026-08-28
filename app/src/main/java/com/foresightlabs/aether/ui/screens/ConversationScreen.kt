@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -26,14 +28,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.foresightlabs.aether.ui.design.AetherFrostState
+import com.foresightlabs.aether.ui.design.AetherGlassMenuItem
+import com.foresightlabs.aether.ui.design.AetherGlassPopup
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.CircularProgressIndicator
@@ -54,13 +63,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -81,8 +98,9 @@ import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
 import com.foresightlabs.aether.ui.components.LiveLocationShareSheet
 import com.foresightlabs.aether.ui.components.VenueShareSheet
-import com.foresightlabs.aether.ui.components.StickerPickerSheet
 import com.foresightlabs.aether.ui.components.ScheduledMessagesSheet
+import com.foresightlabs.aether.domain.model.AnimationItem
+import com.foresightlabs.aether.ui.components.ComposerDockMode
 import com.foresightlabs.aether.ui.components.VideoNoteRecorderSheet
 import androidx.compose.material.icons.filled.Schedule
 import com.foresightlabs.aether.ui.components.LocationShareSheet
@@ -91,6 +109,17 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
+import com.foresightlabs.aether.ui.design.AetherAccent
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import com.foresightlabs.aether.domain.search.ConversationSearchState
 import com.foresightlabs.aether.ui.components.AetherSearchPill
 import androidx.activity.compose.BackHandler
@@ -102,6 +131,9 @@ import com.foresightlabs.aether.domain.messages.MessageActionPolicy
 import kotlinx.coroutines.delay
 import com.foresightlabs.aether.domain.text.AetherEntity
 import com.foresightlabs.aether.domain.text.ReplyQuote
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.material3.ripple
 import com.foresightlabs.aether.domain.text.EntityAction
 import com.foresightlabs.aether.domain.messages.MessageAction
 import com.foresightlabs.aether.domain.messages.MessageCapabilities
@@ -109,23 +141,26 @@ import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageType
 import com.foresightlabs.aether.ui.components.AetherAtmosphericBackground
 import com.foresightlabs.aether.ui.components.AetherAvatar
-import com.foresightlabs.aether.ui.components.AttachmentSheet
 import com.foresightlabs.aether.ui.components.MediaViewer
 import com.foresightlabs.aether.ui.components.MessageBubble
 import com.foresightlabs.aether.ui.components.MessageComposer
 import com.foresightlabs.aether.ui.components.MessageContextMenu
-import com.foresightlabs.aether.ui.design.AetherBackButton
 import com.foresightlabs.aether.ui.design.AetherFloatingHeader
 import com.foresightlabs.aether.ui.design.AetherFloatingHeaderDefaults
 import com.foresightlabs.aether.ui.design.AetherGlass
 import com.foresightlabs.aether.ui.design.AetherIconButton
+import com.foresightlabs.aether.ui.design.aetherChatAvatar
+import com.foresightlabs.aether.ui.design.LocalSceneHeightCache
+import com.foresightlabs.aether.ui.design.LocalSceneOwnsDock
+import com.foresightlabs.aether.ui.design.LocalSceneTransitionProgress
+import com.foresightlabs.aether.ui.design.edgePx
 import com.foresightlabs.aether.ui.design.aetherFloatingHeaderContentTopPadding
+import com.foresightlabs.aether.ui.design.aetherFrostSource
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
-import com.foresightlabs.aether.ui.theme.OnlineGreen
 import android.Manifest
 import android.content.pm.PackageManager
 import android.widget.Toast
@@ -187,10 +222,14 @@ fun ConversationScreen(
     favoriteStickers: List<StickerItem> = emptyList(),
     onLoadStickers: () -> Unit = {},
     onLoadStickerSetDetails: (Long, (StickerSetInfo) -> Unit) -> Unit = { _, _ -> },
+    savedAnimations: List<AnimationItem> = emptyList(),
+    onLoadSavedAnimations: () -> Unit = {},
+    onSendAnimation: (Int) -> Unit = {},
     onLoadScheduled: suspend () -> List<Message> = { emptyList() },
     onSendScheduledNow: (Message) -> Unit = {},
     onRescheduleMessage: (Message, Int) -> Unit = { _, _ -> },
     onPollVote: (Message, List<Int>) -> Unit = { _, _ -> },
+    onCopyMessageLink: (Message) -> Unit = {},
     /** Pinned messages Telegram reports for this chat, beyond those loaded. */
     pinnedFromServer: List<Message> = emptyList(),
     onJumpToMessage: (String) -> Unit = {},
@@ -216,14 +255,17 @@ fun ConversationScreen(
     var infoMessage by remember { mutableStateOf<Message?>(null) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var deleteConfirmMessages by remember { mutableStateOf<List<Message>?>(null) }
     // Grouping is derived once per message-list change, not per frame.
     val entries = remember(messages) { MessageGrouping.group(messages) }
     var showContactSheet by remember { mutableStateOf(false) }
     var showLocationSheet by remember { mutableStateOf(false) }
     var showLiveLocationSheet by remember { mutableStateOf(false) }
     var showVenueSheet by remember { mutableStateOf(false) }
-    var showStickerPicker by remember { mutableStateOf(false) }
     var showScheduledSheet by remember { mutableStateOf(false) }
+    var dockMode by remember { mutableStateOf(ComposerDockMode.COLLAPSED) }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var replacingMediaMessage by remember { mutableStateOf<Message?>(null) }
     var resolvedLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var locationError by remember { mutableStateOf<String?>(null) }
@@ -235,7 +277,7 @@ fun ConversationScreen(
     LaunchedEffect(jumpTarget, entries) {
         val target = jumpTarget ?: return@LaunchedEffect
         // Index within the list as it is actually laid out: album members collapse
-        // into one row, and the intro card and date divider precede them.
+        // into one row, and the date divider precedes them at index 0.
         val entryIndex = entries.indexOfFirst { entry ->
             when (entry) {
                 is ConversationEntry.Single -> entry.message.id == target
@@ -243,8 +285,7 @@ fun ConversationScreen(
             }
         }
         if (entryIndex < 0) return@LaunchedEffect
-        val leadingItems = (if (messages.size <= 2) 1 else 0) + 1
-        val index = entryIndex + leadingItems
+        val index = entryIndex + 1
         highlightedMessageId = target
         runCatching { listState.animateScrollToItem(index) }
         onJumpConsumed()
@@ -255,8 +296,6 @@ fun ConversationScreen(
 
     var selectedMediaForViewer by remember { mutableStateOf<MediaItem?>(null) }
     var isMediaViewerVisible by remember { mutableStateOf(false) }
-
-    var isAttachmentSheetVisible by remember { mutableStateOf(false) }
     var showVideoNoteRecorder by remember { mutableStateOf(false) }
 
     var cameraTempFile by remember { mutableStateOf<File?>(null) }
@@ -469,13 +508,7 @@ fun ConversationScreen(
             AetherFloatingHeader(
                 title = if (resolveError == null) "Opening conversation" else "Conversation unavailable",
                 modifier = Modifier.align(Alignment.TopCenter),
-                frostState = frostState,
-                navigation = {
-                    AetherBackButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("conversation_back_button")
-                    )
-                }
+                frostState = frostState
             )
         }
         return
@@ -493,350 +526,75 @@ fun ConversationScreen(
     val pinnedMessage = pinnedMessages.getOrNull(pinnedCursor)
     val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
-    Box(modifier = modifier.fillMaxSize()) {
-        AetherAtmosphericBackground(
-            modifier = Modifier.fillMaxSize(),
-            heroFraction = 1f,
-            frostState = frostState
+    // Two physical regions with a real depth relationship.
+    //
+    // The footer is the base layer: it fills the whole window, including behind
+    // the gesture inset, so nothing of the atmosphere is left below it. The
+    // conversation canvas is drawn on top of it and stops short of the bottom,
+    // with softly rounded lower corners — so the footer is genuinely *behind* the
+    // chat rather than a band painted next to it, and the canvas reads as resting
+    // over a recessed dark section.
+    val sceneOwnsDock = LocalSceneOwnsDock.current
+    val dockColor = LocalAetherColors.current.background
+    val density = LocalDensity.current
+
+    // Mirrors Home's structure exactly: a rear layer (here, just the composer
+    // pinned to the bottom) and a foreground canvas panel drawn on top of it,
+    // aligned TopCenter with its own zIndex — not a Column where the canvas
+    // takes "whatever weight leaves" and the composer follows it. Two sibling
+    // panels sharing one alignment scheme is what lets the canvas and Home's
+    // hero read the same explicit height from the same shared formula during
+    // the morph, rather than two shapes that only resemble each other.
+    var dockHeightPx by remember { mutableIntStateOf(0) }
+    val sceneProgress = LocalSceneTransitionProgress.current
+    val heightCache = LocalSceneHeightCache.current
+    val atRest = sceneProgress == null || sceneProgress > 0.98f
+
+    // Staggered conversation entry: elements resolve continuously as progress moves
+    // from 0.0 to 1.0 (Home to Conversation).
+    val p = sceneProgress?.coerceIn(0f, 1f) ?: 1f
+
+    // 1. Identity Header begins resolving into view once the lavender panel has
+    // expanded past 0.30, gently descending to its rest position.
+    val headerProgress = if (sceneProgress == null) 1f else ((p - 0.30f) / 0.50f).coerceIn(0f, 1f)
+    val headerAlpha = headerProgress
+    val headerTranslationY = if (sceneProgress == null) 0f else with(density) { (18.dp.toPx() * (1f - headerProgress)) }
+
+    // 2. Message stream fades in and lifts into place from 0.45 to 0.95.
+    val messagesProgress = if (sceneProgress == null) 1f else ((p - 0.45f) / 0.50f).coerceIn(0f, 1f)
+    val messagesAlpha = messagesProgress
+    val messagesTranslationY = if (sceneProgress == null) 0f else with(density) { (20.dp.toPx() * (1f - messagesProgress)) }
+
+    // 3. Composer dock in the exposed rear layer resolves from 0.50 to 1.00.
+    val composerProgress = if (sceneProgress == null) 1f else ((p - 0.50f) / 0.45f).coerceIn(0f, 1f)
+    val composerAlpha = composerProgress
+    val composerTranslationY = if (sceneProgress == null) 0f else with(density) { (14.dp.toPx() * (1f - composerProgress)) }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            // Same surface as Home's, painted by the scene above the graph when
+            // there is one. See LocalSceneOwnsDock.
+            .then(if (sceneOwnsDock) Modifier else Modifier.background(dockColor))
+            .imePadding()
+    ) {
+        val containerHeightPx = with(density) { maxHeight.toPx() }
+        val morphedCanvasPx = if (!atRest && heightCache != null) {
+            heightCache.edgePx(sceneProgress!!, containerHeightPx)
+        } else null
+
+        // --- The rear layer: the composer, pinned to the bottom ------
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .graphicsLayer {
+                    alpha = composerAlpha
+                    translationY = composerTranslationY
+                }
+                .onSizeChanged { dockHeightPx = it.height }
+                .testTag("conversation_dock")
         ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(
-                        top = aetherFloatingHeaderContentTopPadding(
-                            extraGap = if (pinnedMessage == null) {
-                                AetherFloatingHeaderDefaults.ContentGap
-                            } else {
-                                60.dp
-                            }
-                        )
-                    ),
-                contentPadding = PaddingValues(
-                    bottom = bottomInset + 88.dp
-                ),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                // Atmospheric Conversation Intro Card (if message count is small)
-                if (messages.size <= 2) {
-                    item(key = "conversation_intro_card") {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 24.dp, vertical = 20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            AetherAvatar(
-                                initials = chat.avatarInitials,
-                                gradient = chat.avatarGradient,
-                                size = 68.dp,
-                                isOnline = chat.directUser?.isOnline ?: false,
-                                chatType = chat.type,
-                                photoPath = chat.photoPath,
-                                showGlowingRim = true
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = chat.title,
-                                fontFamily = SpaceGroteskFontFamily,
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = chat.directUser?.username?.ifBlank { "" }?.let { "@$it" }
-                                    ?: (if (chat.memberCount > 0) "${chat.memberCount} members" else "Direct Chat"),
-                                fontFamily = ManropeFontFamily,
-                                fontSize = 13.sp,
-                                color = Color(0xCCFFFFFF)
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
-                            val isSecret = chat.type == com.foresightlabs.aether.domain.model.ChatType.SECRET
-                            Row(
-                                modifier = Modifier
-                                    .clip(AetherEmber.Shapes.Pill)
-                                    .background(Color(0x35000000))
-                                    .border(1.dp, Color(0x22FFFFFF), AetherEmber.Shapes.Pill)
-                                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Lock,
-                                    contentDescription = "Security",
-                                    tint = if (isSecret) OnlineGreen else Color(0xDDFFFFFF),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = if (isSecret) "End-to-End Encrypted" else "Telegram Cloud Chat",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color(0xEEFFFFFF)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Date Divider Header
-                item(key = "date_divider") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .clip(AetherEmber.Shapes.Pill)
-                                .background(Color(0x35000000))
-                                .border(0.5.dp, Color(0x28FFFFFF), AetherEmber.Shapes.Pill)
-                                .padding(horizontal = 16.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = "Today",
-                                fontFamily = ManropeFontFamily,
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xF5FFFFFF)
-                            )
-                        }
-                    }
-                }
-
-                // Message Bubbles, with grouped media collapsed into one cluster.
-                items(entries, key = { it.key }) { entry ->
-                    if (entry is ConversationEntry.Album) {
-                        AlbumEntryRow(
-                            album = entry,
-                            onLongPress = {
-                                onRequestCapabilities(entry.anchor)
-                                selectedContextMenuMessage = entry.anchor
-                                isContextMenuVisible = true
-                            },
-                            onMediaClick = { media ->
-                                selectedMediaForViewer = media
-                                isMediaViewerVisible = true
-                            }
-                        )
-                        return@items
-                    }
-                    val msg = entry.anchor
-                    MessageBubble(
-                        message = msg,
-                        onSwipeToReply = { replyTarget ->
-                            replyingToMessage = replyTarget
-                        },
-                        onLongPress = { targetMsg ->
-                            if (isSelecting) {
-                                selectedIds = selectedIds.toggle(targetMsg.id)
-                            } else {
-                                // Ask Telegram what may be done with it before
-                                // offering anything; the menu opens with whatever
-                                // has arrived.
-                                onRequestCapabilities(targetMsg)
-                                selectedContextMenuMessage = targetMsg
-                                isContextMenuVisible = true
-                            }
-                        },
-                        isSelected = msg.id in selectedIds,
-                        onSelectToggle = if (isSelecting) {
-                            {
-                                onRequestCapabilities(msg)
-                                selectedIds = selectedIds.toggle(msg.id)
-                            }
-                        } else {
-                            null
-                        },
-                        onMediaClick = { media ->
-                            selectedMediaForViewer = media
-                            isMediaViewerVisible = true
-                        },
-                        onReactionClick = { targetMsg, emoji ->
-                            onAddReaction(targetMsg, emoji)
-                        },
-                        onEntityAction = { action -> handleEntityAction(context, action, onOpenUsername) },
-                        isHighlighted = msg.id == highlightedMessageId,
-                        onPollVote = onPollVote,
-                        onStopLiveLocation = onStopLiveLocation
-                    )
-                }
-            }
-        }
-
-        // --- LAYER 3 (TOP): SHARED FLOATING CONVERSATION HEADER ---
-        AetherFloatingHeader(
-            modifier = Modifier.align(Alignment.TopCenter),
-                frostState = frostState
-            ) {
-                AetherBackButton(
-                    onClick = onBack,
-                    modifier = Modifier.testTag("conversation_back_button")
-                )
-
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(AetherEmber.Shapes.S)
-                        .clickable { onNavigateToProfile() }
-                        .padding(horizontal = 4.dp)
-                        .testTag("conversation_header_profile"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    AetherAvatar(
-                        initials = chat.avatarInitials,
-                        gradient = chat.avatarGradient,
-                        size = 40.dp,
-                        isOnline = chat.directUser?.isOnline ?: false,
-                        chatType = chat.type,
-                        photoPath = chat.photoPath,
-                        hasUnseenPulse = chat.hasUnseenPulse
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = chat.title,
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colors.textPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (chat.directUser?.isOnline == true) {
-                                Box(
-                                    modifier = Modifier.size(6.dp).clip(CircleShape).background(OnlineGreen)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "online",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 12.sp,
-                                    color = OnlineGreen,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            } else {
-                                Text(
-                                    text = chat.directUser?.lastSeenText
-                                        ?: if (chat.memberCount > 0) "${chat.memberCount} members" else "offline",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 12.sp,
-                                    color = colors.textTertiary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
-
-                AetherIconButton(
-                    icon = Icons.Default.Search,
-                    contentDescription = "Search this conversation",
-                    onClick = onOpenSearch,
-                    modifier = Modifier.testTag("conversation_search_button")
-                )
-                AetherIconButton(
-                    icon = Icons.Default.Palette,
-                    contentDescription = "Chat appearance",
-                    onClick = onNavigateToChatAppearance,
-                    modifier = Modifier.testTag("conversation_appearance_button")
-                )
-                AetherIconButton(
-                    icon = Icons.Default.Call,
-                    contentDescription = "Audio Call",
-                    onClick = onStartVoiceCall
-                )
-                AetherIconButton(
-                    icon = Icons.Default.Schedule,
-                    contentDescription = "Scheduled Messages",
-                    onClick = { showScheduledSheet = true },
-                    modifier = Modifier.testTag("conversation_scheduled_button")
-                )
-                AetherIconButton(
-                    icon = Icons.Default.Info,
-                    contentDescription = "Info",
-                    onClick = onNavigateToProfile,
-                    modifier = Modifier.testTag("conversation_more_button")
-                )
-            }
-
-            if (pinnedMessage != null) {
-                AetherGlass(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .statusBarsPadding()
-                        .padding(
-                            start = AetherFloatingHeaderDefaults.HorizontalMargin,
-                            end = AetherFloatingHeaderDefaults.HorizontalMargin,
-                            top = AetherFloatingHeaderDefaults.TopGap +
-                                AetherFloatingHeaderDefaults.ExpandedHeight +
-                                AetherFloatingHeaderDefaults.ContentGap
-                        )
-                        .fillMaxWidth(),
-                    shape = AetherEmber.Shapes.M
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                // Jumping loads the surrounding window when the pin
-                                // is older than anything currently held.
-                                onJumpToMessage(pinnedMessage.id)
-                                // A second tap moves to the next pin, the way
-                                // Telegram cycles a stack of them.
-                                if (pinnedMessages.size > 1) {
-                                    pinnedCursor = (pinnedCursor + 1) % pinnedMessages.size
-                                }
-                            }
-                            .testTag("pinned_banner")
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PushPin,
-                            contentDescription = "Pinned",
-                            tint = colors.accent,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (pinnedMessages.size > 1) {
-                                    "Pinned · ${pinnedCursor + 1} of ${pinnedMessages.size}"
-                                } else {
-                                    "Pinned message"
-                                },
-                                fontFamily = ManropeFontFamily,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colors.accent
-                            )
-                            Text(
-                                text = pinnedMessage.text.ifBlank { "Media" },
-                                fontFamily = ManropeFontFamily,
-                                fontSize = 12.sp,
-                                color = colors.textSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        if (canUnpin) {
-                            AetherIconButton(
-                                icon = Icons.Default.Close,
-                                contentDescription = "Unpin message",
-                                onClick = { onUnpinMessage(pinnedMessage) },
-                                modifier = Modifier.testTag("pinned_unpin")
-                            )
-                        }
-                    }
-                }
-            }
-
-            // --- LAYER 3 (BOTTOM): TRULY FLOATING COMPOSER DOCK ---
             MessageComposer(
                 replyingTo = replyingToMessage,
                 onDismissReply = {
@@ -844,21 +602,114 @@ fun ConversationScreen(
                     replyQuote = null
                 },
                 replyQuote = replyQuote,
+                dockMode = dockMode,
+                onDockModeChange = { mode ->
+                    if (mode.isExpanded) {
+                        keyboardController?.hide()
+                        focusManager.clearFocus()
+                        if (mode.isPicker) {
+                            onLoadStickers()
+                            onLoadSavedAnimations()
+                        }
+                    }
+                    dockMode = mode
+                },
+                onToggleAttachment = {
+                    if (dockMode == ComposerDockMode.ATTACHMENTS) {
+                        dockMode = ComposerDockMode.COLLAPSED
+                    } else {
+                        keyboardController?.hide()
+                        focusManager.clearFocus()
+                        dockMode = ComposerDockMode.ATTACHMENTS
+                    }
+                },
+                onTogglePicker = {
+                    if (dockMode.isPicker) {
+                        dockMode = ComposerDockMode.COLLAPSED
+                    } else {
+                        keyboardController?.hide()
+                        focusManager.clearFocus()
+                        onLoadStickers()
+                        onLoadSavedAnimations()
+                        dockMode = ComposerDockMode.EMOJI
+                    }
+                },
+                onInputFocus = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                },
+                onSelectGallery = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                    photoPickerLauncher.launch("image/*")
+                },
+                onSelectCamera = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                    val hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                    if (hasCameraPermission) {
+                        val file = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
+                        cameraTempFile = file
+                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                        cameraLauncher.launch(uri)
+                    } else {
+                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                },
+                onSelectVideoNote = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                    showVideoNoteRecorder = true
+                },
+                onSelectFile = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                    docPickerLauncher.launch(arrayOf("*/*"))
+                },
+                onSelectAudio = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                    docPickerLauncher.launch(arrayOf("audio/*"))
+                },
+                onSelectLocation = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                    val granted = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (granted) {
+                        showLocationSheet = true
+                    } else {
+                        locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                    }
+                },
+                onSelectVenue = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                    val granted = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (granted) {
+                        showVenueSheet = true
+                    } else {
+                        locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                    }
+                },
+                onSelectContact = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                    showContactSheet = true
+                },
                 onSendMessage = { text, formatting ->
+                    dockMode = ComposerDockMode.COLLAPSED
                     onSendMessage(text, replyingToMessage, formatting, replyQuote)
                     replyingToMessage = null
                     replyQuote = null
                 },
                 onTextChanged = onComposerChanged,
                 enabled = canSend,
-                onOpenAttachmentSheet = {
-                    isAttachmentSheetVisible = true
-                },
-                onOpenStickerPicker = {
-                    onLoadStickers()
-                    showStickerPicker = true
-                },
+                installedStickerSets = installedStickerSets,
+                recentStickers = recentStickers,
+                favoriteStickers = favoriteStickers,
+                onLoadStickerSetDetails = onLoadStickerSetDetails,
+                onSendSticker = onSendSticker,
+                savedAnimations = savedAnimations,
+                onSendAnimation = onSendAnimation,
                 onVoiceNoteRecorded = {
+                    dockMode = ComposerDockMode.COLLAPSED
                     if (isRecordingAudio) {
                         val recordResult = audioRecorder.stopRecording()
                         isRecordingAudio = false
@@ -878,68 +729,219 @@ fun ConversationScreen(
                         }
                     }
                 },
-                onOpenVideoNote = { showVideoNoteRecorder = true },
-                modifier = Modifier.align(Alignment.BottomCenter)
+                onOpenVideoNote = {
+                    dockMode = ComposerDockMode.COLLAPSED
+                    showVideoNoteRecorder = true
+                },
+                selectedMessages = messages.filter { it.id in selectedIds },
+                capabilities = messageCapabilities,
+                onClearSelection = { selectedIds = emptySet() },
+                onReplySelected = { msg ->
+                    replyingToMessage = msg
+                    replyQuote = null
+                },
+                onEditSelected = { msg ->
+                    editingMessage = msg
+                },
+                onCopySelected = { chosen ->
+                    clipboardManager.setText(
+                        AnnotatedString(chosen.joinToString("\n\n") { it.text })
+                    )
+                },
+                onForwardSelected = { chosen ->
+                    forwardingMessages = chosen
+                },
+                onDeleteSelected = { chosen ->
+                    deleteConfirmMessages = chosen
+                }
             )
+        }
 
-        // Attachment Sheet Overlay
-        AttachmentSheet(
-            isVisible = isAttachmentSheetVisible,
-            onDismiss = { isAttachmentSheetVisible = false },
-            onOptionSelected = { option ->
-                when (option) {
-                    "Gallery" -> photoPickerLauncher.launch("image/*")
-                    "Camera" -> {
-                        val hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-                        if (hasCameraPermission) {
-                            val file = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-                            cameraTempFile = file
-                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                            cameraLauncher.launch(uri)
-                        } else {
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                        }
+        // --- The foreground layer: the canvas -------------------------
+        // A panel lying over that rear layer, exactly like Home's hero —
+        // same alignment, same zIndex, same rounded-bottom-corner shape
+        // family, so the two read as one object at different heights
+        // rather than two screens that merely look alike.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .zIndex(1f)
+                .then(
+                    if (morphedCanvasPx != null) {
+                        Modifier.height(with(density) { morphedCanvasPx.toDp() })
+                    } else {
+                        Modifier.height(with(density) { (containerHeightPx - dockHeightPx).coerceAtLeast(0f).toDp() })
+                            .onSizeChanged { heightCache?.conversationRestPx = it.height.toFloat() }
                     }
-                    "Video Message" -> showVideoNoteRecorder = true
-                    "File", "Audio" -> docPickerLauncher.launch(arrayOf("*/*"))
-                    "Contact" -> showContactSheet = true
-                    "Location" -> {
-                        val granted = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.ACCESS_COARSE_LOCATION
-                        ) == PackageManager.PERMISSION_GRANTED
-                        if (granted) {
-                            showLocationSheet = true
-                        } else {
-                            locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-                        }
+                )
+                .clip(
+                    RoundedCornerShape(
+                        bottomStart = ConversationCanvasRadius,
+                        bottomEnd = ConversationCanvasRadius
+                    )
+                )
+                .testTag("conversation_canvas")
+        ) {
+        AetherAtmosphericBackground(
+            modifier = Modifier.fillMaxSize(),
+            heroFraction = 1f,
+            frostState = frostState
+        ) {}
+
+        LazyColumn(
+            state = listState,
+            // The list's own bounds stay the canvas's full size — it is not
+            // shrunk to start below the header. Only its *content* is inset
+            // via contentPadding, so the viewport genuinely extends behind
+            // the fixed frosted header and scrolled-past messages travel
+            // under the glass instead of being clipped off at its edge.
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    alpha = messagesAlpha
+                    translationY = messagesTranslationY
+                }
+                // Registered as its own haze source alongside the atmosphere
+                // Box above, so the header's blur is a real composite of both
+                // — messages passing underneath actually shape the glass,
+                // not just the static gradient behind them.
+                .aetherFrostSource(frostState)
+                .testTag("conversation_message_list"),
+            // Rests the first message below the header at rest, while still
+            // letting it scroll up behind the header as the list moves.
+            // Bottom padding clears the canvas's own rounded lower corners,
+            // so the newest message is never nicked by the curve.
+            contentPadding = PaddingValues(
+                top = conversationContentTopPadding(hasPinnedBanner = pinnedMessage != null),
+                bottom = ConversationCanvasRadius - AetherEmber.Spacing.Space8
+            ),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+
+
+            // Date Divider Header
+            item(key = "date_divider") {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(AetherEmber.Shapes.Pill)
+                            .background(Color(0x35000000))
+                            .border(0.5.dp, Color(0x28FFFFFF), AetherEmber.Shapes.Pill)
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "Today",
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xF5FFFFFF)
+                        )
                     }
-                    "Live Location" -> {
-                        val granted = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.ACCESS_COARSE_LOCATION
-                        ) == PackageManager.PERMISSION_GRANTED
-                        if (granted) {
-                            showLiveLocationSheet = true
-                        } else {
-                            locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-                        }
-                    }
-                    "Venue" -> {
-                        val granted = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.ACCESS_COARSE_LOCATION
-                        ) == PackageManager.PERMISSION_GRANTED
-                        if (granted) {
-                            showVenueSheet = true
-                        } else {
-                            locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-                        }
-                    }
-                    else -> {}
                 }
             }
+
+            // Message Bubbles, with grouped media collapsed into one cluster.
+            items(entries, key = { it.key }) { entry ->
+                if (entry is ConversationEntry.Album) {
+                    AlbumEntryRow(
+                        album = entry,
+                        onLongPress = {
+                            onRequestCapabilities(entry.anchor)
+                            selectedContextMenuMessage = entry.anchor
+                            isContextMenuVisible = true
+                        },
+                        onMediaClick = { media ->
+                            selectedMediaForViewer = media
+                            isMediaViewerVisible = true
+                        }
+                    )
+                    return@items
+                }
+                val msg = entry.anchor
+                MessageBubble(
+                    message = msg,
+                    onSwipeToReply = { replyTarget ->
+                        replyingToMessage = replyTarget
+                    },
+                    onLongPress = { targetMsg ->
+                        onRequestCapabilities(targetMsg)
+                        selectedIds = selectedIds.toggle(targetMsg.id)
+                    },
+                    isSelected = msg.id in selectedIds,
+                    isSelectionActive = isSelecting,
+                    onSelectToggle = if (isSelecting) {
+                        {
+                            onRequestCapabilities(msg)
+                            selectedIds = selectedIds.toggle(msg.id)
+                        }
+                    } else {
+                        null
+                    },
+                    onMediaClick = { media ->
+                        selectedMediaForViewer = media
+                        isMediaViewerVisible = true
+                    },
+                    onReactionClick = { targetMsg, emoji ->
+                        onAddReaction(targetMsg, emoji)
+                    },
+                    onEntityAction = { action -> handleEntityAction(context, action, onOpenUsername) },
+                    isHighlighted = msg.id == highlightedMessageId,
+                    onPollVote = onPollVote,
+                    onStopLiveLocation = onStopLiveLocation,
+                    onRetry = onRetryMessage
+                )
+                } // items
+            } // LazyColumn
+
+        // --- The identity of the conversation, and nothing else ------------
+        // A direct sibling of the atmosphere it frosts, not a sibling of the
+        // canvas Box that wraps it — the glass header only ever reads the
+        // living gradient correctly when it shares the same immediate parent
+        // as the hazeSource registering that gradient. Putting the header
+        // outside this Box (a cousin of the atmosphere instead of a sibling)
+        // is what turned it into a flat, opaque panel before. It still stays
+        // above the message column via its own zIndex — composition order
+        // alone no longer decides it once any sibling sets zIndex explicitly.
+        ConversationIdentityHeader(
+            chat = chat,
+            searchState = searchState,
+            onOpenSearch = onOpenSearch,
+            onCloseSearch = onCloseSearch,
+            onSearchQueryChange = onSearchQueryChange,
+            onSearchOlder = onSearchOlder,
+            onSearchNewer = onSearchNewer,
+            onOpenProfile = onNavigateToProfile,
+            pinned = pinnedMessage,
+            pinnedCount = pinnedMessages.size,
+            pinnedIndex = pinnedCursor,
+            canUnpin = canUnpin,
+            onPinnedClick = {
+                // Jumping loads the surrounding window when the pin is older than
+                // anything currently held.
+                pinnedMessage?.let { onJumpToMessage(it.id) }
+                // A second tap moves to the next pin, the way Telegram cycles a
+                // stack of them.
+                if (pinnedMessages.size > 1) {
+                    pinnedCursor = (pinnedCursor + 1) % pinnedMessages.size
+                }
+            },
+            onUnpin = { pinnedMessage?.let(onUnpinMessage) },
+            frostState = frostState,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .zIndex(2f)
+                .graphicsLayer {
+                    alpha = headerAlpha
+                    translationY = headerTranslationY
+                }
         )
+        } // canvas Box
 
         MessageInfoSheet(
             message = infoMessage,
@@ -1035,18 +1037,6 @@ fun ConversationScreen(
             )
         }
 
-        StickerPickerSheet(
-            isVisible = showStickerPicker,
-            installedSets = installedStickerSets,
-            recentStickers = recentStickers,
-            favoriteStickers = favoriteStickers,
-            onLoadSetDetails = onLoadStickerSetDetails,
-            onDismiss = { showStickerPicker = false },
-            onSendSticker = { fileId, emoji ->
-                onSendSticker(fileId, emoji)
-            }
-        )
-
         ScheduledMessagesSheet(
             isVisible = showScheduledSheet,
             onDismiss = { showScheduledSheet = false },
@@ -1055,6 +1045,10 @@ fun ConversationScreen(
             onReschedule = onRescheduleMessage,
             onDelete = { msg -> onDeleteMessage(msg, false) }
         )
+
+        BackHandler(enabled = dockMode != ComposerDockMode.COLLAPSED) {
+            dockMode = ComposerDockMode.COLLAPSED
+        }
 
         VideoNoteRecorderSheet(
             isVisible = showVideoNoteRecorder,
@@ -1069,45 +1063,14 @@ fun ConversationScreen(
         if (isSelecting) {
             // Back leaves selection before it leaves the conversation.
             BackHandler { selectedIds = emptySet() }
-
-            SelectionToolbar(
-                selection = messages.filter { it.id in selectedIds },
-                capabilities = messageCapabilities,
-                onDismiss = { selectedIds = emptySet() },
-                onAction = { action ->
-                    val chosen = messages.filter { it.id in selectedIds }
-                    when (action) {
-                        MessageAction.COPY -> clipboardManager.setText(
-                            AnnotatedString(chosen.joinToString("\n\n") { it.text })
-                        )
-                        MessageAction.FORWARD -> forwardingMessages = chosen
-                        MessageAction.DELETE_FOR_ME -> chosen.forEach { onDeleteMessage(it, false) }
-                        MessageAction.DELETE_FOR_EVERYONE -> chosen.forEach { onDeleteMessage(it, true) }
-                        else -> Unit
-                    }
-                    selectedIds = emptySet()
-                },
-                modifier = Modifier.align(Alignment.TopCenter)
-            )
         }
 
-        if (searchState.isActive) {
-            ConversationSearchBar(
-                state = searchState,
-                onQueryChange = onSearchQueryChange,
-                onOlder = onSearchOlder,
-                onNewer = onSearchNewer,
-                onClose = onCloseSearch,
-                modifier = Modifier.align(Alignment.TopCenter)
-            )
-        }
+        BackHandler(enabled = searchState.isActive) { onCloseSearch() }
 
-        // Context Menu Overlay
+        // Context Menu Overlay for Message
         MessageContextMenu(
             message = selectedContextMenuMessage,
-            capabilities = selectedContextMenuMessage
-                ?.let { messageCapabilities[it.id] }
-                ?: MessageCapabilities.Unknown,
+            capabilities = selectedContextMenuMessage?.let { messageCapabilities[it.id] } ?: MessageCapabilities.Unknown,
             isVisible = isContextMenuVisible,
             onDismiss = {
                 isContextMenuVisible = false
@@ -1121,20 +1084,19 @@ fun ConversationScreen(
             onAction = { action ->
                 val target = selectedContextMenuMessage ?: return@MessageContextMenu
                 when (action) {
-                    MessageAction.SELECT -> selectedIds = setOf(target.id)
                     MessageAction.REPLY -> {
                         replyingToMessage = target
                         replyQuote = null
                     }
                     MessageAction.QUOTE_REPLY -> {
                         replyingToMessage = target
-                        // Quoting the whole text is the honest default until Aether
-                        // offers in-bubble text selection; the position is real, so
-                        // the quote stays attached if the original is edited.
                         replyQuote = ReplyQuote.from(target.richText, 0, target.text.length)
                     }
-                    MessageAction.COPY -> clipboardManager.setText(AnnotatedString(target.text))
+                    MessageAction.COPY -> {
+                        clipboardManager.setText(AnnotatedString(target.text))
+                    }
                     MessageAction.FORWARD -> forwardingMessages = listOf(target)
+                    MessageAction.SELECT -> selectedIds = setOf(target.id)
                     MessageAction.EDIT -> editingMessage = target
                     MessageAction.REPLACE_MEDIA -> {
                         replacingMediaMessage = target
@@ -1149,13 +1111,9 @@ fun ConversationScreen(
                     MessageAction.PIN, MessageAction.UNPIN -> onPinMessage(target)
                     MessageAction.DELETE_FOR_ME -> onDeleteMessage(target, false)
                     MessageAction.DELETE_FOR_EVERYONE -> onDeleteMessage(target, true)
-                    // Offered only when Telegram reports the capability, and only
-                    // once Aether can actually carry them out.
                     MessageAction.INFO -> infoMessage = target
-                    // Offered only when Telegram reports the capability, and only
-                    // once Aether can actually carry them out.
-                    MessageAction.SAVE,
-                    MessageAction.COPY_LINK -> Unit
+                    MessageAction.COPY_LINK -> onCopyMessageLink(target)
+                    MessageAction.SAVE -> Unit
                 }
             }
         )
@@ -1181,6 +1139,7 @@ fun ConversationScreen(
                         }
                     }
                     forwardingMessages = emptyList()
+                    selectedIds = emptySet()
                 }
             )
         }
@@ -1193,6 +1152,26 @@ fun ConversationScreen(
                 onSave = { newText ->
                     editingMessage?.let { onEditMessage(it, newText) }
                     editingMessage = null
+                }
+            )
+        }
+
+        // Delete Confirmation Modal for Single/Multi Selection
+        if (deleteConfirmMessages != null) {
+            val toDelete = deleteConfirmMessages!!
+            DeleteConfirmationModal(
+                count = toDelete.size,
+                canDeleteForAll = toDelete.any { messageCapabilities[it.id]?.canBeDeletedForAllUsers == true },
+                onDismiss = { deleteConfirmMessages = null },
+                onDeleteForMe = {
+                    toDelete.forEach { onDeleteMessage(it, false) }
+                    selectedIds = emptySet()
+                    deleteConfirmMessages = null
+                },
+                onDeleteForEveryone = {
+                    toDelete.forEach { onDeleteMessage(it, true) }
+                    selectedIds = emptySet()
+                    deleteConfirmMessages = null
                 }
             )
         }
@@ -1551,6 +1530,15 @@ private fun handleEntityAction(
  * guess when nothing is available.
  */
 private fun lastKnownCoarseLocation(context: android.content.Context): Pair<Double, Double>? {
+    val hasLocationPermission = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+    if (!hasLocationPermission) return null
+
     val manager = context.getSystemService(android.location.LocationManager::class.java)
         ?: return null
     val providers = listOf(
@@ -1565,102 +1553,204 @@ private fun lastKnownCoarseLocation(context: android.content.Context): Pair<Doub
 }
 
 /**
- * Actions for a multi-selection.
- *
- * The action list is the *intersection* of what every selected message supports, so
- * one protected message removes Forward for the whole selection rather than
- * producing a partial forward that silently drops it.
- *
- * A message whose capabilities have not arrived yet contributes nothing, which
- * correctly narrows the intersection rather than widening it on an assumption.
+ * Clean, quiet deletion confirmation modal for single or multi-message deletion.
  */
 @Composable
-private fun SelectionToolbar(
-    selection: List<Message>,
-    capabilities: Map<String, MessageCapabilities>,
+private fun DeleteConfirmationModal(
+    count: Int,
+    canDeleteForAll: Boolean,
     onDismiss: () -> Unit,
-    onAction: (MessageAction) -> Unit,
+    onDeleteForMe: () -> Unit,
+    onDeleteForEveryone: () -> Unit
+) {
+    val colors = LocalAetherColors.current
+    Dialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xFF1B1B22))
+                .border(0.5.dp, Color(0x28FFFFFF), RoundedCornerShape(24.dp))
+                .padding(20.dp)
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    text = if (count == 1) "Delete Message" else "Delete $count Messages",
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+
+                Text(
+                    text = if (canDeleteForAll) {
+                        "Are you sure you want to delete the selected message(s)?"
+                    } else {
+                        "Are you sure you want to delete the selected message(s) for yourself?"
+                    },
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 14.sp,
+                    color = colors.textSecondary,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                if (canDeleteForAll) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFFEF4444).copy(alpha = 0.15f))
+                            .clickable {
+                                onDeleteForEveryone()
+                                onDismiss()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Delete for everyone",
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFEF4444)
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (canDeleteForAll) Color(0x18FFFFFF) else Color(0xFFEF4444).copy(alpha = 0.15f))
+                        .clickable {
+                            onDeleteForMe()
+                            onDismiss()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Delete for me",
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (canDeleteForAll) colors.textPrimary else Color(0xFFEF4444)
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onDismiss() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Cancel",
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.textSecondary
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** How softly the conversation canvas turns its lower corners onto the footer. */
+private val ConversationCanvasRadius = 28.dp
+private val ConversationPinnedHeight = 44.dp
+
+/**
+ * Top inset the message stream needs so its newest content is never hidden behind
+ * the header, or behind the pinned strip when one is showing.
+ */
+@Composable
+private fun conversationContentTopPadding(hasPinnedBanner: Boolean): Dp =
+    WindowInsets.statusBars.asPaddingValues().calculateTopPadding() +
+        AetherFloatingHeaderDefaults.TopGap +
+        AetherFloatingHeaderDefaults.ExpandedHeight +
+        (if (hasPinnedBanner) ConversationPinnedHeight + AetherEmber.Spacing.Space8 else 0.dp) +
+        AetherEmber.Spacing.Space8
+
+/**
+ * Mac-like restrained optical control for in-conversation search.
+ *
+ * Compact circular control, thin/clean magnifying-glass icon, visually light,
+ * low-contrast neutral backing, subtle depth border.
+ * 48dp touch target, ~40dp visible circular lens, ~20dp icon.
+ */
+@Composable
+fun ConversationSearchButton(
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalAetherColors.current
-    val actions = remember(selection, capabilities) {
-        MessageActionPolicy.actionsForSelection(
-            selection.map { message ->
-                message to (capabilities[message.id] ?: MessageCapabilities.Unknown)
-            }
-        )
-    }
-
-    Row(
+    Box(
         modifier = modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .clip(AetherEmber.Shapes.L)
-            .background(colors.surface)
-            .border(1.dp, colors.border, AetherEmber.Shapes.L)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .testTag("selection_toolbar"),
-        verticalAlignment = Alignment.CenterVertically
+            .size(48.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(bounded = false, radius = 24.dp),
+                onClick = onClick
+            )
+            .semantics { this.contentDescription = "Search in conversation" }
+            .testTag("conversation_search_button"),
+        contentAlignment = Alignment.Center
     ) {
-        AetherIconButton(
-            icon = Icons.Default.Close,
-            contentDescription = "Cancel selection",
-            onClick = onDismiss,
-            modifier = Modifier.testTag("selection_cancel")
-        )
-        Text(
-            text = "${selection.size} selected",
-            fontFamily = ManropeFontFamily,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = colors.textPrimary,
+        Box(
             modifier = Modifier
-                .weight(1f)
-                .padding(start = 4.dp)
-                .testTag("selection_count")
-        )
-        actions.forEach { action ->
-            AetherIconButton(
-                icon = selectionIcon(action),
-                contentDescription = selectionLabel(action),
-                onClick = { onAction(action) },
-                modifier = Modifier.testTag("selection_action_${action.name.lowercase()}")
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(Color(0x22FFFFFF))
+                .border(
+                    width = 0.5.dp,
+                    color = Color(0x18FFFFFF),
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = null,
+                tint = colors.atmosphereTextPrimary.copy(alpha = 0.88f),
+                modifier = Modifier.size(20.dp)
             )
         }
     }
 }
 
-private fun selectionLabel(action: MessageAction): String = when (action) {
-    MessageAction.COPY -> "Copy"
-    MessageAction.FORWARD -> "Forward"
-    MessageAction.SAVE -> "Save"
-    MessageAction.DELETE_FOR_ME -> "Delete for me"
-    MessageAction.DELETE_FOR_EVERYONE -> "Delete for everyone"
-    else -> action.name.lowercase()
-}
-
-private fun selectionIcon(action: MessageAction) = when (action) {
-    MessageAction.COPY -> Icons.Default.ContentCopy
-    MessageAction.FORWARD -> Icons.AutoMirrored.Filled.Send
-    MessageAction.SAVE -> Icons.Default.Download
-    else -> Icons.Default.Delete
-}
-
 /**
- * Search bar for one conversation.
+ * Frosted Floating Identity & Search Header.
  *
- * Result counts and the position label come from the server's answer, so "3 of 128"
- * means there really are 128 matches — not 128 loaded rows. The empty state is shown
- * only once a search has actually completed.
+ * Uses Aether's canonical frosted glass primitive. The header smoothly morphs between
+ * resting conversation identity mode and active in-chat search mode.
+ * Leaving is handled cleanly by the system gesture and BackHandler.
  */
 @Composable
-private fun ConversationSearchBar(
-    state: ConversationSearchState,
-    onQueryChange: (String) -> Unit,
-    onOlder: () -> Unit,
-    onNewer: () -> Unit,
-    onClose: () -> Unit,
+fun ConversationIdentityHeader(
+    chat: Chat,
+    searchState: ConversationSearchState = ConversationSearchState.Idle,
+    onOpenSearch: () -> Unit = {},
+    onCloseSearch: () -> Unit = {},
+    onSearchQueryChange: (String) -> Unit = {},
+    onSearchOlder: () -> Unit = {},
+    onSearchNewer: () -> Unit = {},
+    onOpenProfile: () -> Unit = {},
+    pinned: Message? = null,
+    pinnedCount: Int = 0,
+    pinnedIndex: Int = 0,
+    canUnpin: Boolean = false,
+    onPinnedClick: () -> Unit = {},
+    onUnpin: () -> Unit = {},
+    frostState: AetherFrostState? = null,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalAetherColors.current
@@ -1668,66 +1758,278 @@ private fun ConversationSearchBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .clip(AetherEmber.Shapes.L)
-            .background(colors.surface)
-            .border(1.dp, colors.border, AetherEmber.Shapes.L)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .testTag("conversation_search_bar")
+            .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
+            .padding(
+                start = AetherFloatingHeaderDefaults.HorizontalMargin,
+                top = AetherFloatingHeaderDefaults.TopGap,
+                end = AetherFloatingHeaderDefaults.HorizontalMargin
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AetherSearchPill(
-                value = state.query,
-                onValueChange = onQueryChange,
-                placeholder = "Search in conversation",
-                requestFocus = true,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("conversation_search_field")
-            )
-            AetherIconButton(
-                icon = Icons.Default.Close,
-                contentDescription = "Close search",
-                onClick = onClose,
-                modifier = Modifier.testTag("conversation_search_close")
-            )
-        }
-
-        Row(
+        AetherGlass(
+            frostState = frostState,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .height(AetherFloatingHeaderDefaults.ExpandedHeight),
+            shape = AetherFloatingHeaderDefaults.Shape,
+            elevation = 6.dp
         ) {
-            Text(
-                text = when {
-                    state.isLoading -> "Searching…"
-                    state.error != null -> state.error
-                    state.isEmptyResult -> "No messages found"
-                    else -> state.positionLabel.orEmpty()
+            AnimatedContent(
+                targetState = searchState.isActive,
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(140))
                 },
-                fontFamily = ManropeFontFamily,
-                fontSize = 12.5.sp,
-                color = if (state.error != null) Color(0xFFEF4444) else colors.textSecondary,
+                label = "conversation_header_mode",
+                modifier = Modifier.fillMaxSize()
+            ) { isSearch ->
+                if (!isSearch) {
+                    // Normal Identity Mode
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 10.dp, end = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Avatar + Title + Status (tapping opens Profile)
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(AetherEmber.Shapes.M)
+                                .clickable { onOpenProfile() }
+                                .padding(vertical = 4.dp, horizontal = 4.dp)
+                                .testTag("conversation_header_profile"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AetherAvatar(
+                                initials = chat.avatarInitials,
+                                gradient = chat.avatarGradient,
+                                size = 40.dp,
+                                isOnline = chat.directUser?.isOnline ?: false,
+                                chatType = chat.type,
+                                photoPath = chat.photoPath,
+                                hasUnseenPulse = chat.hasUnseenPulse,
+                                modifier = Modifier.aetherChatAvatar(chat.id)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = chat.title,
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 16.5.sp,
+                                    lineHeight = 19.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = (-0.4).sp,
+                                    color = colors.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = when {
+                                        chat.directUser?.isOnline == true -> "online"
+                                        chat.directUser?.lastSeenText != null -> chat.directUser.lastSeenText
+                                        chat.memberCount > 0 -> "${chat.memberCount} members"
+                                        else -> "offline"
+                                    },
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = colors.textSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        // Mac-like restrained optical search button
+                        ConversationSearchButton(
+                            onClick = onOpenSearch
+                        )
+                    }
+                } else {
+                    // Search Mode
+                    val focusRequester = remember { FocusRequester() }
+                    val keyboard = LocalSoftwareKeyboardController.current
+
+                    LaunchedEffect(Unit) {
+                        focusRequester.requestFocus()
+                        keyboard?.show()
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 14.dp, end = 6.dp)
+                            .testTag("conversation_search_bar"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = null,
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(19.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (searchState.query.isEmpty()) {
+                                Text(
+                                    text = "Search in conversation",
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 14.5.sp,
+                                    color = colors.textSecondary.copy(alpha = 0.65f)
+                                )
+                            }
+                            BasicTextField(
+                                value = searchState.query,
+                                onValueChange = onSearchQueryChange,
+                                singleLine = true,
+                                textStyle = TextStyle(
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 14.5.sp,
+                                    color = colors.textPrimary
+                                ),
+                                cursorBrush = SolidColor(AetherAccent.current),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(focusRequester)
+                                    .testTag("conversation_search_field")
+                            )
+                        }
+
+                        if (searchState.hasResults) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 2.dp)
+                            ) {
+                                Text(
+                                    text = searchState.positionLabel.orEmpty(),
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.textSecondary,
+                                    modifier = Modifier.testTag("conversation_search_status")
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                AetherIconButton(
+                                    icon = Icons.Default.KeyboardArrowUp,
+                                    contentDescription = "Older result",
+                                    onClick = onSearchOlder,
+                                    enabled = searchState.canGoOlder,
+                                    size = 34.dp,
+                                    iconSize = 18.dp,
+                                    modifier = Modifier.testTag("conversation_search_older")
+                                )
+                                AetherIconButton(
+                                    icon = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Newer result",
+                                    onClick = onSearchNewer,
+                                    enabled = searchState.canGoNewer,
+                                    size = 34.dp,
+                                    iconSize = 18.dp,
+                                    modifier = Modifier.testTag("conversation_search_newer")
+                                )
+                            }
+                        } else if (searchState.isEmptyResult) {
+                            Text(
+                                text = "No messages found",
+                                fontFamily = ManropeFontFamily,
+                                fontSize = 12.sp,
+                                color = colors.textSecondary,
+                                modifier = Modifier
+                                    .padding(horizontal = 6.dp)
+                                    .testTag("conversation_search_status")
+                            )
+                        } else if (searchState.isLoading) {
+                            Text(
+                                text = "Searching…",
+                                fontFamily = ManropeFontFamily,
+                                fontSize = 12.sp,
+                                color = colors.textSecondary,
+                                modifier = Modifier
+                                    .padding(horizontal = 6.dp)
+                                    .testTag("conversation_search_status")
+                            )
+                        }
+
+                        AetherIconButton(
+                            icon = Icons.Default.Close,
+                            contentDescription = "Close search",
+                            onClick = {
+                                keyboard?.hide()
+                                onCloseSearch()
+                            },
+                            size = 40.dp,
+                            iconSize = 18.dp,
+                            modifier = Modifier.testTag("conversation_search_close")
+                        )
+                    }
+                }
+            }
+        }
+
+        // Pinned Message Banner directly beneath the frosted floating header
+        if (pinned != null && !searchState.isActive) {
+            Spacer(modifier = Modifier.height(6.dp))
+            AetherGlass(
+                frostState = frostState,
                 modifier = Modifier
-                    .weight(1f)
-                    .testTag("conversation_search_status")
-            )
-            AetherIconButton(
-                icon = Icons.Default.KeyboardArrowUp,
-                contentDescription = "Older result",
-                onClick = onOlder,
-                enabled = state.canGoOlder,
-                modifier = Modifier.testTag("conversation_search_older")
-            )
-            AetherIconButton(
-                icon = Icons.Default.KeyboardArrowDown,
-                contentDescription = "Newer result",
-                onClick = onNewer,
-                enabled = state.canGoNewer,
-                modifier = Modifier.testTag("conversation_search_newer")
-            )
+                    .fillMaxWidth()
+                    .height(ConversationPinnedHeight),
+                shape = RoundedCornerShape(16.dp),
+                elevation = 4.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { onPinnedClick() }
+                        .padding(horizontal = 12.dp)
+                        .testTag("pinned_banner"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PushPin,
+                        contentDescription = "Pinned",
+                        tint = colors.textSecondary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = if (pinnedCount > 1) {
+                            "Pinned ${pinnedIndex + 1} of $pinnedCount · ${pinned.text.ifBlank { "Media" }}"
+                        } else {
+                            pinned.text.ifBlank { "Pinned media" }
+                        },
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (canUnpin) {
+                        AetherIconButton(
+                            icon = Icons.Default.Close,
+                            contentDescription = "Unpin message",
+                            onClick = onUnpin,
+                            size = 32.dp,
+                            iconSize = 16.dp,
+                            tint = colors.textSecondary,
+                            modifier = Modifier.testTag("pinned_unpin")
+                        )
+                    }
+                }
+            }
         }
     }
 }

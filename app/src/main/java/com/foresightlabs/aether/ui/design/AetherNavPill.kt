@@ -35,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -62,11 +63,11 @@ data class AetherNavItem(
 )
 
 object AetherNavPillDefaults {
-    val Height: Dp = 52.dp
-    val OuterHorizontalPadding: Dp = 40.dp
-    val IconSize: Dp = 20.dp
-    val DestinationSlotSize: Dp = 44.dp
-    val SelectionLensSize: Dp = 38.dp
+    val Height: Dp = 62.dp
+    val OuterHorizontalPadding: Dp = 36.dp
+    val IconSize: Dp = 22.dp
+    val DestinationSlotSize: Dp = 48.dp
+    val SelectionLensSize: Dp = 44.dp
 }
 
 /**
@@ -94,7 +95,7 @@ fun AetherNavPill(
             ),
         contentAlignment = Alignment.Center
     ) {
-        AetherFrostedGlass(
+        AetherGlass(
             frostState = frostState,
             modifier = Modifier
                 .wrapContentWidth()
@@ -107,7 +108,7 @@ fun AetherNavPill(
                 modifier = Modifier
                     .wrapContentWidth()
                     .height(AetherNavPillDefaults.Height)
-                    .padding(horizontal = AetherEmber.Spacing.Space8),
+                    .padding(horizontal = AetherEmber.Spacing.Space12),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 items.forEach { item ->
@@ -134,43 +135,36 @@ private fun AetherNavSlot(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
-        targetValue = if (pressed && !reducedMotion) 0.97f else 1f,
+        targetValue = if (pressed && !reducedMotion) 0.94f else 1f,
         animationSpec = if (reducedMotion) snap() else AetherMotion.Stiff,
         label = "nav_press_scale"
     )
-    val lensEmphasis by animateFloatAsState(
-        targetValue = when {
-            selected && pressed -> 0.60f
-            selected -> 0.42f
-            else -> 0f
-        },
-        animationSpec = if (reducedMotion) snap() else AetherMotion.Stiff,
-        label = "nav_lens_emphasis"
-    )
+
     val iconTint by animateColorAsState(
         targetValue = when {
-            selected && colors.isDark -> Color.White
-            selected -> colors.textPrimary
-            pressed -> colors.textPrimary
-            else -> colors.textSecondary.copy(alpha = 0.65f)
+            selected -> Color.White
+            else -> colors.textTertiary
         },
         animationSpec = spec,
-        label = "nav_tint"
+        label = "nav_icon_tint"
     )
 
-    val pillShape = RoundedCornerShape(percent = 50)
+    val lensEmphasis by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = if (reducedMotion) snap() else tween(duration, easing = AetherMotion.ControlEasing),
+        label = "nav_lens_emphasis"
+    )
+
     Box(
         modifier = modifier
-            .fillMaxHeight()
-            .clip(pillShape)
+            .size(AetherNavPillDefaults.DestinationSlotSize)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
                 onClick = item.onClick
             )
-            .semantics {
-                contentDescription = item.contentDescription
-                role = Role.Tab
+            .semantics(mergeDescendants = true) {
+                this.contentDescription = item.contentDescription
                 this.selected = selected
             },
         contentAlignment = Alignment.Center
@@ -199,33 +193,32 @@ private fun AetherNavSlot(
                 Box(
                     modifier = Modifier
                         .size(AetherNavPillDefaults.SelectionLensSize)
-                        .clip(CircleShape)
-                        .background(
-                            if (colors.isDark) Color.White.copy(alpha = 0.10f + lensEmphasis * 0.06f)
-                            else Color.White.copy(alpha = 0.40f + lensEmphasis * 0.15f)
+                        .shadow(
+                            elevation = 2.dp,
+                            shape = CircleShape,
+                            ambientColor = Color.Black.copy(alpha = 0.14f),
+                            spotColor = Color.Black.copy(alpha = 0.18f)
                         )
+                        .clip(CircleShape)
                         .drawWithCache {
                             val specular = Brush.verticalGradient(
                                 colorStops = arrayOf(
-                                    0f to Color.White.copy(alpha = if (colors.isDark) 0.18f else 0.40f),
+                                    0f to Color.White.copy(alpha = 0.08f),
                                     0.45f to Color.Transparent,
-                                    1f to Color.Black.copy(alpha = if (colors.isDark) 0.08f else 0.05f)
+                                    1f to Color.White.copy(alpha = 0.01f)
                                 )
                             )
                             onDrawWithContent {
-                                drawContent()
                                 drawRect(specular)
+                                drawContent()
                             }
                         }
                         .border(
-                            width = 1.dp,
-                            brush = Brush.linearGradient(
-                                colors = listOf(
-                                    Color.White.copy(alpha = if (colors.isDark) 0.35f else 0.60f),
-                                    Color.White.copy(alpha = if (colors.isDark) 0.15f else 0.25f),
-                                    if (colors.isDark) Color.White.copy(alpha = 0.08f)
-                                    else Color.Black.copy(alpha = 0.10f)
-                                )
+                            width = 0.75.dp,
+                            brush = Brush.verticalGradient(
+                                0f to Color.White.copy(alpha = 0.22f),
+                                0.5f to Color.White.copy(alpha = 0.08f),
+                                1f to Color.White.copy(alpha = 0.02f)
                             ),
                             shape = CircleShape
                         )

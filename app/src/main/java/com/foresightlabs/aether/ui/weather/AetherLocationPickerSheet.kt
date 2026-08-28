@@ -57,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.data.preferences.ManualWeatherLocation
 import com.foresightlabs.aether.data.preferences.WeatherLocationMode
+import com.foresightlabs.aether.ui.design.AetherGlass
+import com.foresightlabs.aether.ui.design.AetherGlassTokens
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.LocalAtmosphere
@@ -144,32 +146,37 @@ fun AetherLocationPickerSheet(
         }
     }
 
-    val sheetShape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)
+    val sheetShape = RoundedCornerShape(
+        topStart = AetherGlassTokens.SheetRadius,
+        topEnd = AetherGlassTokens.SheetRadius
+    )
 
-    Column(
+    AetherGlass(
+        frostState = null,
+        shape = sheetShape,
+        elevation = 12.dp,
+        emphasis = 0.25f,
         modifier = modifier
             .fillMaxWidth()
-            .clip(sheetShape)
-            .background(colors.surface)
-            .border(1.dp, colors.border, sheetShape)
             .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 12.dp)
             .testTag("location_picker_sheet")
     ) {
-        // Sheet Handle
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
-            contentAlignment = Alignment.Center
-        ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Sheet Handle
             Box(
                 modifier = Modifier
-                    .size(width = 36.dp, height = 4.dp)
-                    .clip(RoundedCornerShape(percent = 50))
-                    .background(colors.surfaceHighlight)
-            )
-        }
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 36.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(colors.surfaceHighlight)
+                )
+            }
 
         Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space8))
 
@@ -503,6 +510,7 @@ fun AetherLocationPickerSheet(
             }
         }
     }
+}
 }
 
 /**

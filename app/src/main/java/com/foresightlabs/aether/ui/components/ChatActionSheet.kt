@@ -60,6 +60,12 @@ import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
 
+import com.foresightlabs.aether.ui.design.AetherGlassMenuDefaults
+import com.foresightlabs.aether.ui.design.AetherGlassMenuDivider
+import com.foresightlabs.aether.ui.design.AetherGlassMenuItem
+import com.foresightlabs.aether.ui.design.AetherGlassMenuSurface
+import androidx.compose.foundation.shape.RoundedCornerShape
+
 /**
  * Long-press actions for a conversation row.
  *
@@ -85,139 +91,102 @@ fun ChatActionSheet(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f))
+            .background(Color.Black.copy(alpha = 0.65f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { onDismiss() }
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = 24.dp)
+            .testTag("chat_action_scrim"),
         contentAlignment = Alignment.Center
     ) {
         AnimatedVisibility(
             visible = true,
             enter = scaleIn(
-                initialScale = 0.88f,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
-            ) + fadeIn(),
-            exit = scaleOut(targetScale = 0.9f) + fadeOut()
+                initialScale = 0.95f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
+            ) + fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)),
+            exit = scaleOut(targetScale = 0.96f) + fadeOut()
         ) {
-            Column(
+            AetherGlassMenuSurface(
+                frostState = null,
+                shape = RoundedCornerShape(AetherGlassMenuDefaults.SheetRadius),
+                elevation = 10.dp,
+                emphasis = 0.25f,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(AetherEmber.Shapes.L)
-                    .background(colors.surface)
-                    .border(1.dp, colors.border, AetherEmber.Shapes.L)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) { /* keep taps inside the sheet */ }
-                    .padding(vertical = 8.dp)
-                    .verticalScroll(rememberScrollState())
                     .testTag("chat_action_sheet")
             ) {
-                Text(
-                    text = chat.title,
-                    fontFamily = SpaceGroteskFontFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 17.sp,
-                    color = colors.textPrimary,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
-                )
-
-                if (confirmation != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
                     Text(
-                        text = confirmation.body,
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 14.sp,
-                        color = colors.textSecondary,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                        text = chat.title,
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp,
+                        color = colors.textPrimary,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
                     )
-                    ChatActionRow(
-                        icon = iconFor(pendingAction!!),
-                        title = confirmation.confirmLabel,
-                        tint = DestructiveTint,
-                        testTag = "chat_action_confirm",
-                        onClick = {
-                            onAction(pendingAction!!)
-                            onDismiss()
-                        }
-                    )
-                    ChatActionRow(
-                        icon = Icons.Default.Person,
-                        title = "Cancel",
-                        testTag = "chat_action_cancel",
-                        onClick = { pendingAction = null }
-                    )
-                    return@Column
-                }
 
-                var dividerDrawn = false
-                actions.forEach { action ->
-                    if (action in destructive && !dividerDrawn) {
-                        dividerDrawn = true
-                        HorizontalDivider(
-                            color = colors.divider,
-                            thickness = 0.5.dp,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    if (confirmation != null) {
+                        Text(
+                            text = confirmation.body,
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 14.sp,
+                            color = colors.textSecondary,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
                         )
-                    }
-                    ChatActionRow(
-                        icon = iconFor(action),
-                        title = titleFor(action, chat),
-                        tint = if (action in destructive) DestructiveTint else null,
-                        testTag = "chat_action_${action.name.lowercase()}",
-                        onClick = {
-                            if (ChatActionPolicy.confirmation(chat, action) != null) {
-                                pendingAction = action
-                            } else {
-                                onAction(action)
+                        AetherGlassMenuItem(
+                            icon = iconFor(pendingAction!!),
+                            title = confirmation.confirmLabel,
+                            isDestructive = true,
+                            testTag = "chat_action_confirm",
+                            onClick = {
+                                onAction(pendingAction!!)
                                 onDismiss()
                             }
+                        )
+                        AetherGlassMenuItem(
+                            icon = Icons.Default.Person,
+                            title = "Cancel",
+                            testTag = "chat_action_cancel",
+                            onClick = { pendingAction = null }
+                        )
+                    } else {
+                        var dividerDrawn = false
+                        actions.forEach { action ->
+                            if (action in destructive && !dividerDrawn) {
+                                dividerDrawn = true
+                                AetherGlassMenuDivider()
+                            }
+                            AetherGlassMenuItem(
+                                icon = iconFor(action),
+                                title = titleFor(action, chat),
+                                isDestructive = action in destructive,
+                                testTag = "chat_action_${action.name.lowercase()}",
+                                onClick = {
+                                    if (ChatActionPolicy.confirmation(chat, action) != null) {
+                                        pendingAction = action
+                                    } else {
+                                        onAction(action)
+                                        onDismiss()
+                                    }
+                                }
+                            )
                         }
-                    )
+                    }
                 }
             }
         }
     }
 }
-
-@Composable
-private fun ChatActionRow(
-    icon: ImageVector,
-    title: String,
-    tint: Color? = null,
-    testTag: String,
-    onClick: () -> Unit
-) {
-    val colors = LocalAetherColors.current
-    val itemTint = tint ?: colors.textPrimary
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            // Comfortably above the 44dp minimum target once padding is applied.
-            .padding(horizontal = 20.dp, vertical = 14.dp)
-            .testTag(testTag),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = itemTint,
-            modifier = Modifier.size(20.dp)
-        )
-        Text(
-            text = title,
-            fontFamily = ManropeFontFamily,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            color = itemTint
-        )
-    }
-}
-
-private val DestructiveTint = Color(0xFFEF4444)
 
 private fun titleFor(action: ChatAction, chat: Chat): String = when (action) {
     ChatAction.MARK_READ -> "Mark as read"

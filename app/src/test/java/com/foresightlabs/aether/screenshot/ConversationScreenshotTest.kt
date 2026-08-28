@@ -25,7 +25,6 @@ import com.foresightlabs.aether.domain.model.User
 import com.foresightlabs.aether.ui.screens.ConversationScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
@@ -119,6 +118,56 @@ class ConversationScreenshotTest {
         file.outputStream().use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
         bitmap.recycle()
         assertTrue("no pixels written for $name", file.length() > 0)
+    }
+
+    /**
+     * Short messages, which is where the tonal inversion is easiest to read and
+     * where a bubble most obviously must not inflate into a card.
+     */
+    @Test
+    fun conversationWithShortMessages() {
+        val user = User(
+            id = "103",
+            name = "Ishani Roy",
+            username = "ishani",
+            avatarInitials = "IR",
+            avatarGradient = listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9)),
+            phone = "+1 555 0103",
+            presence = Presence.ONLINE
+        )
+        val shortChat = Chat(
+            id = "103",
+            title = "Ishani Roy",
+            type = ChatType.DIRECT,
+            lastMessageText = "ok",
+            lastMessageTime = "10:42 AM",
+            avatarInitials = "IR",
+            avatarGradient = listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9)),
+            directUser = user
+        )
+        fun line(id: String, text: String, time: String, outgoing: Boolean) = Message(
+            id = id,
+            chatId = "103",
+            senderId = if (outgoing) "me" else "103",
+            senderName = if (outgoing) "You" else "Ishani Roy",
+            text = text,
+            timestamp = time,
+            isOutgoing = outgoing,
+            status = if (outgoing) MessageStatus.READ else MessageStatus.SENT
+        )
+        capture(
+            name = "conversation-short-messages",
+            chat = shortChat,
+            messages = listOf(
+                line("1", "It's called Winds of Tomorrow", "10:09 PM", false),
+                line("2", "That sounds amazing!", "10:10 PM", true),
+                line("3", "Where can I watch it?", "10:10 PM", true),
+                line("4", "It's on Netflix", "10:13 PM", false),
+                line("5", "If you don't have account", "10:14 PM", false),
+                line("6", "Hello", "10:20 PM", true),
+                line("7", "No problem", "10:24 PM", false)
+            )
+        )
     }
 
     @Test
@@ -216,31 +265,25 @@ class ConversationScreenshotTest {
             name = "conversation-rich-messaging",
             chat = chat,
             messages = messages,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.DAY)
         )
         capture(
             name = "conversation-frosted-header",
             chat = chat,
             messages = messages,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.DAY)
         )
         capture(
             name = "conversation-dark",
             chat = chat,
             messages = messages,
-            state = themeState(TimeAtmospherePalette.NIGHT).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.NIGHT)
         )
         capture(
             name = "conversation-header-liquid-glass",
             chat = chat,
             messages = messages,
-            state = themeState(TimeAtmospherePalette.NIGHT).apply { themeMode = AppThemeMode.DARK }
-        )
-        capture(
-            name = "conversation-light",
-            chat = chat,
-            messages = messages,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.LIGHT }
+            state = themeState(TimeAtmospherePalette.NIGHT)
         )
         capture(
             name = "conversation-long-name",
@@ -249,14 +292,13 @@ class ConversationScreenshotTest {
                 directUser = directUser.copy(name = "Professor Ishani Roy Venkataraghavan")
             ),
             messages = messages,
-            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR)
         )
         capture(
             name = "conversation-font-scale-150",
             chat = chat,
             messages = messages,
             state = themeState(TimeAtmospherePalette.DAY).apply {
-                themeMode = AppThemeMode.LIGHT
                 fontScale = 1.5f
             }
         )

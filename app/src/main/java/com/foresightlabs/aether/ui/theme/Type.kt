@@ -4,29 +4,41 @@ import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.R
 
 /**
- * Manrope Variable font family
+ * Both faces ship as a single variable file. Declaring a weight without also
+ * setting the `wght` axis leaves every style resolving to the file's default
+ * instance, which is why "Bold" used to render as light text. Each entry names
+ * its axis value explicitly so the weights Aether asks for are the weights that
+ * actually get drawn.
  */
-val ManropeFontFamily = FontFamily(
-    Font(R.font.manrope, weight = FontWeight.Normal),
-    Font(R.font.manrope, weight = FontWeight.Medium),
-    Font(R.font.manrope, weight = FontWeight.SemiBold),
-    Font(R.font.manrope, weight = FontWeight.Bold),
-    Font(R.font.manrope, weight = FontWeight.ExtraBold)
+@OptIn(ExperimentalTextApi::class)
+private fun variableFont(resId: Int, weight: FontWeight) = Font(
+    resId = resId,
+    weight = weight,
+    variationSettings = FontVariation.Settings(FontVariation.weight(weight.weight))
 )
 
-/**
- * Space Grotesk Variable font family for optional hero editorial headings
- */
+/** Manrope variable font family. */
+val ManropeFontFamily = FontFamily(
+    variableFont(R.font.manrope, FontWeight.Normal),
+    variableFont(R.font.manrope, FontWeight.Medium),
+    variableFont(R.font.manrope, FontWeight.SemiBold),
+    variableFont(R.font.manrope, FontWeight.Bold),
+    variableFont(R.font.manrope, FontWeight.ExtraBold)
+)
+
+/** Space Grotesk variable font family, for hero headings. */
 val SpaceGroteskFontFamily = FontFamily(
-    Font(R.font.space_grotesk, weight = FontWeight.Normal),
-    Font(R.font.space_grotesk, weight = FontWeight.Medium),
-    Font(R.font.space_grotesk, weight = FontWeight.SemiBold),
-    Font(R.font.space_grotesk, weight = FontWeight.Bold)
+    variableFont(R.font.space_grotesk, FontWeight.Normal),
+    variableFont(R.font.space_grotesk, FontWeight.Medium),
+    variableFont(R.font.space_grotesk, FontWeight.SemiBold),
+    variableFont(R.font.space_grotesk, FontWeight.Bold)
 )
 
 /** Semantic Aether type roles. Screens choose meaning, never arbitrary measurements. */

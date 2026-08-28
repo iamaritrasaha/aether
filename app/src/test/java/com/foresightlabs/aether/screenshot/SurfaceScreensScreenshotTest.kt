@@ -21,7 +21,6 @@ import com.foresightlabs.aether.ui.screens.ProfileScreen
 import com.foresightlabs.aether.ui.screens.SearchScreen
 import com.foresightlabs.aether.ui.screens.SettingsScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
@@ -57,18 +56,17 @@ class SurfaceScreensScreenshotTest {
         ) { Files.createTempDirectory("aether-header-render").resolve("prefs.preferences_pb").toFile() }
     )
 
-    private fun theme(mode: AppThemeMode) = AppThemeState().apply {
-        themeMode = mode
+    private fun theme() = AppThemeState().apply {
         atmosphereMode = AtmosphereMode.MANUAL
         manualAtmosphere = TimeAtmospherePalette.DAY
     }
 
-    private fun capture(name: String, screen: Screen, mode: AppThemeMode) {
+    private fun capture(name: String, screen: Screen) {
         if (!installed) {
             installed = true
             composeRule.setContent { scenario.value?.let { key(it.name) { Render(it) } } }
         }
-        composeRule.runOnUiThread { scenario.value = Scenario(name, screen, theme(mode)) }
+        composeRule.runOnUiThread { scenario.value = Scenario(name, screen, theme()) }
         composeRule.waitForIdle()
         Shadows.shadowOf(Looper.getMainLooper()).idle()
         val view = composeRule.activity.window.decorView
@@ -106,33 +104,27 @@ class SurfaceScreensScreenshotTest {
         onRegister = { _, _ -> }, onResendCode = {}
     )
 
-    @Test fun profileDarkAndLight() {
-        capture("profile-dark", Screen.PROFILE, AppThemeMode.DARK)
-        capture("profile-header-liquid-glass", Screen.PROFILE, AppThemeMode.DARK)
-        capture("profile-light", Screen.PROFILE, AppThemeMode.LIGHT)
+    @Test fun profile() {
+        capture("profile", Screen.PROFILE)
+        capture("profile-header-liquid-glass", Screen.PROFILE)
     }
 
-    @Test fun settingsDarkAndLight() {
-        capture("settings-dark", Screen.SETTINGS, AppThemeMode.DARK)
-        capture("settings-frosted-header", Screen.SETTINGS, AppThemeMode.DARK)
-        capture("settings-light", Screen.SETTINGS, AppThemeMode.LIGHT)
-        capture("settings-oled", Screen.SETTINGS, AppThemeMode.OLED)
+    @Test fun settings() {
+        capture("settings", Screen.SETTINGS)
+        capture("settings-frosted-header", Screen.SETTINGS)
     }
 
     @Test fun chatAppearanceFloatingHeader() {
-        capture("chat-appearance", Screen.CHAT_APPEARANCE, AppThemeMode.DARK)
-        capture("chat-appearance-light", Screen.CHAT_APPEARANCE, AppThemeMode.LIGHT)
+        capture("chat-appearance", Screen.CHAT_APPEARANCE)
     }
 
-    @Test fun searchFloatingHeaderDarkAndLight() {
-        capture("search-dark", Screen.SEARCH, AppThemeMode.DARK)
-        capture("search-light", Screen.SEARCH, AppThemeMode.LIGHT)
+    @Test fun searchFloatingHeader() {
+        capture("search", Screen.SEARCH)
     }
 
     @Test fun authStateMatrix() {
-        capture("auth-phone-dark", Screen.AUTH_PHONE, AppThemeMode.DARK)
-        capture("auth-phone-light", Screen.AUTH_PHONE, AppThemeMode.LIGHT)
-        capture("auth-verification", Screen.AUTH_CODE, AppThemeMode.DARK)
-        capture("auth-registration", Screen.AUTH_REGISTRATION, AppThemeMode.DARK)
+        capture("auth-phone", Screen.AUTH_PHONE)
+        capture("auth-verification", Screen.AUTH_CODE)
+        capture("auth-registration", Screen.AUTH_REGISTRATION)
     }
 }

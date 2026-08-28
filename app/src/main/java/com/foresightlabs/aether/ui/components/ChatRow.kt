@@ -47,10 +47,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.ChatType
 import com.foresightlabs.aether.domain.model.MessageStatus
 import com.foresightlabs.aether.ui.design.AetherAccent
+import com.foresightlabs.aether.ui.design.aetherChatAvatar
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalReducedMotion
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
@@ -63,27 +73,79 @@ fun ChatRow(
     chat: Chat,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    onLongPress: (() -> Unit)? = null
+    onLongPress: (() -> Unit)? = null,
+    isSelected: Boolean = false,
+    isSelectionActive: Boolean = false,
+    /**
+     * Lets this row's avatar carry across into the conversation it opens. Only
+     * the conversation list asks for it; the row reused inside pickers does not,
+     * so two rows can never claim the same face.
+     */
+    sharedAvatar: Boolean = false
 ) {
     val colors = LocalAetherColors.current
+    val haptic = LocalHapticFeedback.current
+
+    val rowWashColor by animateColorAsState(
+        targetValue = if (isSelected) {
+            Color(0x18FFFFFF)
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(durationMillis = 180),
+        label = "chat_row_selection_wash"
+    )
+
+    val rowAlpha by animateFloatAsState(
+        targetValue = if (isSelectionActive && !isSelected) 0.68f else 1f,
+        animationSpec = tween(durationMillis = 180),
+        label = "chat_row_selection_alpha"
+    )
+
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 1.5.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(rowWashColor)
             .then(
                 if (onLongPress == null) {
-                    Modifier.clickable { onClick() }
+                    Modifier.clickable {
+                        if (isSelectionActive) {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                        onClick()
+                    }
                 } else {
                     Modifier.combinedClickable(
-                        onClick = onClick,
-                        onLongClick = onLongPress
+                        onClick = {
+                            if (isSelectionActive) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+                            onClick()
+                        },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onLongPress()
+                        }
                     )
                 }
             )
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .graphicsLayer {
+                alpha = rowAlpha
+                if (isSelected) {
+                    translationY = -1.5f
+                }
+            }
+            .padding(horizontal = 10.dp, vertical = 9.5.dp)
+            .semantics {
+                selected = isSelected
+                stateDescription = if (isSelected) "Selected" else "Not selected"
+            }
             .testTag("chat_row_${chat.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Avatar with optional Pinned Star Badge overlay
+        // Avatar with optional Selection Check Badge or Pinned Star Badge overlay
         Box(
             modifier = Modifier.size(50.dp),
             contentAlignment = Alignment.Center
@@ -92,12 +154,33 @@ fun ChatRow(
                 initials = chat.avatarInitials,
                 gradient = chat.avatarGradient,
                 size = 50.dp,
-                isOnline = chat.directUser?.isOnline ?: false,
+                isOnline = (chat.directUser?.isOnline ?: false) && !isSelected,
                 chatType = chat.type,
-                photoPath = chat.photoPath
+                photoPath = chat.photoPath,
+                modifier = Modifier.aetherChatAvatar(chat.id.takeIf { sharedAvatar })
             )
 
-            if (chat.isPinned) {
+            if (isSelected) {
+                // Subtle check badge superseding presence dot during selection
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 2.dp, y = 2.dp)
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF2C2C34))
+                        .border(1.5.dp, colors.background, CircleShape)
+                        .testTag("chat_row_check_${chat.id}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = Color(0xFFF2F2F5),
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
+            } else if (chat.isPinned) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -138,7 +221,8 @@ fun ChatRow(
                         text = chat.title,
                         fontFamily = ManropeFontFamily,
                         fontSize = 15.5.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.2).sp,
                         color = colors.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -196,14 +280,14 @@ fun ChatRow(
                     Text(
                         text = chat.lastMessageTime,
                         fontFamily = ManropeFontFamily,
-                        fontSize = 11.5.sp,
-                        color = if (chat.unreadCount > 0) AetherAccent.current else colors.textTertiary,
-                        fontWeight = if (chat.unreadCount > 0) FontWeight.SemiBold else FontWeight.Medium
+                        fontSize = 11.sp,
+                        color = colors.textMuted,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(3.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             // Subtitle & Unread Badge Row
             Row(
@@ -222,14 +306,14 @@ fun ChatRow(
                                 Text(
                                     text = "Draft: ",
                                     fontFamily = ManropeFontFamily,
-                                    fontSize = 13.5.sp,
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFFEF4444)
                                 )
                                 Text(
                                     text = chat.draftText,
                                     fontFamily = ManropeFontFamily,
-                                    fontSize = 13.5.sp,
+                                    fontSize = 13.sp,
                                     color = colors.textSecondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -262,7 +346,7 @@ fun ChatRow(
                             }
                             Text(
                                 text = annotatedString,
-                                fontSize = 13.5.sp,
+                                fontSize = 13.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -271,8 +355,9 @@ fun ChatRow(
                             Text(
                                 text = chat.lastMessageText,
                                 fontFamily = ManropeFontFamily,
-                                fontSize = 13.5.sp,
-                                color = colors.textSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = colors.textTertiary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -375,7 +460,7 @@ private fun TypingIndicator(typingText: String) {
         Text(
             text = typingText,
             fontFamily = ManropeFontFamily,
-            fontSize = 13.5.sp,
+            fontSize = 13.sp,
             fontStyle = FontStyle.Italic,
             fontWeight = FontWeight.Medium,
             color = AetherAccent.current

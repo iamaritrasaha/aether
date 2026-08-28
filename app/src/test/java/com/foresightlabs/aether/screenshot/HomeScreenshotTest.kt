@@ -10,20 +10,15 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalInspectionMode
-import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.semantics.SemanticsNode
-import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.ConnectionStatus
-import com.foresightlabs.aether.ui.design.SheetAnchor
 import com.foresightlabs.aether.ui.screens.HomeScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
@@ -61,8 +56,7 @@ class HomeScreenshotTest {
         val chats: List<Chat>,
         val theme: AppThemeState,
         val isLoading: Boolean,
-        val withCurrentUser: Boolean,
-        val selectedDockKey: String
+        val withCurrentUser: Boolean
     )
 
     private val scenario = mutableStateOf<Scenario?>(null)
@@ -85,12 +79,10 @@ class HomeScreenshotTest {
         name: String,
         chats: List<Chat>,
         state: AppThemeState,
-        anchor: SheetAnchor = SheetAnchor.RESTING,
         isLoading: Boolean = false,
-        withCurrentUser: Boolean = true,
-        selectedDockKey: String = "chats"
+        withCurrentUser: Boolean = true
     ) {
-        val next = Scenario(name, chats, state, isLoading, withCurrentUser, selectedDockKey)
+        val next = Scenario(name, chats, state, isLoading, withCurrentUser)
         if (!contentInstalled) {
             contentInstalled = true
             composeRule.setContent {
@@ -101,9 +93,6 @@ class HomeScreenshotTest {
             }
         }
         composeRule.runOnUiThread { scenario.value = next }
-        composeRule.waitForIdle()
-
-        moveSheetTo(anchor)
         composeRule.waitForIdle()
 
         writePng(name)
@@ -126,52 +115,10 @@ class HomeScreenshotTest {
                     onChatClick = {},
                     onNavigateToCalls = {},
                     onNavigateToSettings = {},
-                    onNewMessageClick = {},
-                    dockSelectedKey = active.selectedDockKey
+                    onNewMessageClick = {}
                 )
             }
         }
-    }
-
-    private fun assertDockGeometry(selectedKey: String): Pair<Float, Float> {
-        val keys = listOf("chats", "pulse", "calls", "settings")
-        val slots = keys.map {
-            composeRule.onNodeWithTag("nav_slot_$it", useUnmergedTree = true)
-                .fetchSemanticsNode().boundsInRoot
-        }
-        slots.drop(1).forEach { assertEquals(slots.first().width, it.width, 1f) }
-        val lens = composeRule.onNodeWithTag("nav_lens_$selectedKey", useUnmergedTree = true)
-            .fetchSemanticsNode().boundsInRoot
-        val icon = composeRule.onNodeWithTag("nav_icon_$selectedKey", useUnmergedTree = true)
-            .fetchSemanticsNode().boundsInRoot
-        assertEquals(lens.center.x, icon.center.x, 1f)
-        assertEquals(lens.center.y, icon.center.y, 1f)
-        assertTrue(lens.left <= icon.left && lens.top <= icon.top)
-        assertTrue(lens.right >= icon.right && lens.bottom >= icon.bottom)
-        val dock = composeRule.onNodeWithTag("home_dock").fetchSemanticsNode().boundsInRoot
-        return dock.width to dock.height
-    }
-
-    /** Drives the sheet through its own accessibility action, not a hand-set offset. */
-    private fun moveSheetTo(anchor: SheetAnchor) {
-        val label = when (anchor) {
-            SheetAnchor.EXPANDED -> "Expand conversations"
-            SheetAnchor.RESTING -> "Balance conversations"
-            SheetAnchor.PEEK -> "Collapse conversations"
-        }
-        val action = findCustomAction(composeRule.onRoot().fetchSemanticsNode(), label)
-        // The action for the position the sheet already occupies is absent by design.
-        action?.invoke()
-    }
-
-    private fun findCustomAction(node: SemanticsNode, label: String): (() -> Boolean)? {
-        node.config.getOrNull(SemanticsActions.CustomActions)
-            ?.firstOrNull { it.label == label }
-            ?.let { return it.action }
-        node.children.forEach { child ->
-            findCustomAction(child, label)?.let { return it }
-        }
-        return null
     }
 
     /**
@@ -207,78 +154,27 @@ class HomeScreenshotTest {
     }
 
     @Test
-    fun homeLightAcrossDayAndNight() {
-        listOf(TimeAtmospherePalette.DAY, TimeAtmospherePalette.NIGHT).forEach { palette ->
-            capture(
-                name = "home-light-${palette.name.lowercase()}",
-                chats = HomeFixtures.populated,
-                state = themeState(palette).apply { themeMode = AppThemeMode.LIGHT }
-            )
-        }
-    }
-
-    @Test
     fun homeAcrossMaterialModes() {
         capture(
             name = "home-dark-day",
             chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.DAY)
         )
         capture(
             name = "home-dark-night",
             chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.NIGHT).apply { themeMode = AppThemeMode.DARK }
-        )
-        capture(
-            name = "home-oled-night",
-            chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.NIGHT).apply { themeMode = AppThemeMode.OLED }
+            state = themeState(TimeAtmospherePalette.NIGHT)
         )
         capture(
             name = "dark-frosted-bars",
             chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
-        )
-        capture(
-            name = "light-frosted-bars",
-            chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.LIGHT }
-        )
-        capture(
-            name = "oled-frosted-bars",
-            chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.NIGHT).apply { themeMode = AppThemeMode.OLED }
+            state = themeState(TimeAtmospherePalette.DAY)
         )
         capture(
             name = "night-frosted-bars",
             chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.NIGHT).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.NIGHT)
         )
-    }
-
-    @Test
-    fun frostedDockSelectionGeometryAndRenders() {
-        val scenarios = listOf(
-            "chats" to "home-frosted-dock-chats",
-            "pulse" to "home-frosted-dock-pulse-selected",
-            "calls" to "home-frosted-dock-calls-selected",
-            "settings" to "home-frosted-dock-settings-selected"
-        )
-        var dockSize: Pair<Float, Float>? = null
-        scenarios.forEach { (key, name) ->
-            capture(
-                name = name,
-                chats = HomeFixtures.populated,
-                state = themeState(TimeAtmospherePalette.DAY),
-                selectedDockKey = key
-            )
-            val measured = assertDockGeometry(key)
-            dockSize?.let {
-                assertEquals(it.first, measured.first, 1f)
-                assertEquals(it.second, measured.second, 1f)
-            }
-            dockSize = measured
-        }
     }
 
     @Test
@@ -293,7 +189,7 @@ class HomeScreenshotTest {
     }
 
     @Test
-    fun homeWeatherHeroAcrossConditionsAtPeek() {
+    fun homeWeatherAcrossEveryCondition() {
         val conditions = listOf(
             WeatherCondition.CLEAR,
             WeatherCondition.PARTLY_CLOUDY,
@@ -306,33 +202,29 @@ class HomeScreenshotTest {
         )
         conditions.forEach { weather ->
             capture(
-                name = "home-weather-hero-${weather.name.lowercase().replace('_', '-')}",
+                name = "home-weather-scene-${weather.name.lowercase().replace('_', '-')}",
                 chats = HomeFixtures.populated,
-                state = themeState(TimeAtmospherePalette.DAY, weather = weather),
-                anchor = SheetAnchor.PEEK
+                state = themeState(TimeAtmospherePalette.DAY, weather = weather)
             )
         }
     }
 
     @Test
-    fun homeWeatherHeroNightAndGoldenHour() {
+    fun homeWeatherAtNightAndGoldenHour() {
         capture(
-            name = "home-weather-hero-clear-night",
+            name = "home-weather-scene-clear-night",
             chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.NIGHT, weather = WeatherCondition.CLEAR),
-            anchor = SheetAnchor.PEEK
+            state = themeState(TimeAtmospherePalette.NIGHT, weather = WeatherCondition.CLEAR)
         )
         capture(
-            name = "home-weather-hero-rain-night",
+            name = "home-weather-scene-rain-night",
             chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.NIGHT, weather = WeatherCondition.RAIN),
-            anchor = SheetAnchor.PEEK
+            state = themeState(TimeAtmospherePalette.NIGHT, weather = WeatherCondition.RAIN)
         )
         capture(
-            name = "home-weather-hero-golden-hour",
+            name = "home-weather-scene-golden-hour",
             chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = WeatherCondition.CLEAR),
-            anchor = SheetAnchor.PEEK
+            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = WeatherCondition.CLEAR)
         )
     }
 
@@ -344,25 +236,10 @@ class HomeScreenshotTest {
             state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = null)
         )
         capture(
-            name = "home-weather-hero-unavailable",
+            name = "home-weather-scene-unavailable",
             chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = null),
-            anchor = SheetAnchor.PEEK
+            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = null)
         )
-    }
-
-    // --- sheet positions -----------------------------------------------------
-
-    @Test
-    fun homeAtEverySheetPosition() {
-        SheetAnchor.entries.forEach { anchor ->
-            capture(
-                name = "home-sheet-${anchor.name.lowercase()}",
-                chats = HomeFixtures.populated,
-                state = themeState(TimeAtmospherePalette.EVENING),
-                anchor = anchor
-            )
-        }
     }
 
     // --- presence states -----------------------------------------------------

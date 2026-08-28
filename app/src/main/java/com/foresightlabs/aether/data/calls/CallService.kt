@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.annotation.SuppressLint
 import androidx.core.app.NotificationCompat
 import com.foresightlabs.aether.AetherApplication
 import com.foresightlabs.aether.MainActivity
@@ -14,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
+@SuppressLint("ForegroundServiceType")
 class CallService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null

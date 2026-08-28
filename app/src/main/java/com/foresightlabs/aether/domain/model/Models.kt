@@ -79,6 +79,18 @@ data class StickerSetInfo(
     val stickers: List<StickerItem> = emptyList()
 )
 
+@Immutable
+data class AnimationItem(
+    val fileId: Int,
+    val width: Int = 0,
+    val height: Int = 0,
+    val duration: Int = 0,
+    val fileName: String = "",
+    val mimeType: String = "video/mp4",
+    val thumbnailPath: String? = null,
+    val localPath: String? = null
+)
+
 /**
  * Truthful presence, mapped one-to-one from TDLib's own user status.
  *
@@ -262,7 +274,24 @@ data class Chat(
      * every topic together.
      */
     val isForum: Boolean = false
-)
+) {
+    /**
+     * Whether this chat is a 1:1 personal conversation between real human users.
+     *
+     * For the personal-messaging-first milestone, Home displays only personal chats.
+     * Groups, supergroups, channels, forums, bots, Saved Messages / self chat,
+     * deleted accounts, and Telegram system service notification chats are excluded
+     * from the primary Home feed.
+     */
+    val isPersonalChat: Boolean
+        get() = (type == ChatType.DIRECT || type == ChatType.SECRET) &&
+            type != ChatType.SAVED_MESSAGES &&
+            !isForum &&
+            directUser?.isBot != true &&
+            directUser?.isDeleted != true &&
+            id != "777000" &&
+            blockableUserId != 777000L
+}
 
 @Immutable
 data class StoryItem(

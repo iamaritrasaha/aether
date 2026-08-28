@@ -55,8 +55,8 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
             delay(SEARCH_DEBOUNCE_MS)
 
             launch {
-                val chats = telegram.searchChats(trimmed)
-                val contacts = telegram.searchContactChats(trimmed)
+                val chats = telegram.searchChats(trimmed).filter { it.isPersonalChat }
+                val contacts = telegram.searchContactChats(trimmed).filter { it.isPersonalChat }
                 _state.update { current ->
                     if (current.query.trim() != trimmed) return@update current
                     current.copy(
@@ -76,7 +76,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                                 message = telegram.mapFoundMessage(raw),
                                 chat = telegram.chat(raw.chatId)
                             )
-                        }
+                        }.filter { it.chat?.isPersonalChat != false }
                         _state.update { current ->
                             if (current.query.trim() != trimmed) return@update current
                             current.copy(
@@ -118,7 +118,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                             message = telegram.mapFoundMessage(raw),
                             chat = telegram.chat(raw.chatId)
                         )
-                    }
+                    }.filter { it.chat?.isPersonalChat != false }
                     _state.update { latest ->
                         val known = latest.messages.map { it.message.id }.toSet()
                         latest.copy(

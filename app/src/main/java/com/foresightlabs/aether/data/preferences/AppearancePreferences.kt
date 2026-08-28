@@ -3,7 +3,6 @@ package com.foresightlabs.aether.data.preferences
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import com.foresightlabs.aether.ui.theme.AccentColorChoice
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.MessageDensity
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
@@ -53,7 +52,6 @@ data class ManualWeatherLocation(
  */
 @Immutable
 data class AetherAppearancePreferences(
-    val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     val atmosphereMode: AtmosphereMode = AtmosphereMode.TIME_AND_WEATHER,
     val manualAtmosphere: TimeAtmospherePalette = TimeAtmospherePalette.GOLDEN_HOUR,
     val useAtmosphereAccent: Boolean = true,

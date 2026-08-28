@@ -31,7 +31,6 @@ import com.foresightlabs.aether.ui.design.AetherFloatingHeaderDefaults
 import com.foresightlabs.aether.ui.design.AetherIconButton
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.theme.AetherTheme
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
@@ -61,7 +60,6 @@ class AetherFloatingHeaderTest {
 
         composeRule.setContent {
             val themeState = AppThemeState().apply {
-                themeMode = AppThemeMode.DARK
                 atmosphereMode = AtmosphereMode.MANUAL
                 manualAtmosphere = TimeAtmospherePalette.DAY
             }
@@ -126,18 +124,17 @@ class AetherFloatingHeaderTest {
         composeRule.onNodeWithTag("header_back_btn").assertIsDisplayed()
         composeRule.onNodeWithTag("header_more_btn").assertIsDisplayed()
 
-        // Midway state (scrollFraction = 0.5f) -> 60dp
+        // Midway state (scrollFraction = 0.5f) -> 62dp
         scrollFraction.floatValue = 0.5f
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("header_surface").assertIsDisplayed()
-            .assertHeightIsEqualTo(60.dp)
+            .assertHeightIsEqualTo(62.dp)
     }
 
     @Test
     fun headerRendersCorrectlyAcrossAllScreenshotStates() {
         val themeState = mutableStateOf(AppThemeState().apply {
-            themeMode = AppThemeMode.DARK
             atmosphereMode = AtmosphereMode.MANUAL
             manualAtmosphere = TimeAtmospherePalette.DAY
         })
@@ -179,18 +176,15 @@ class AetherFloatingHeaderTest {
         }
 
         val scenarios = listOf(
-            Triple("header_expanded_day", AppThemeMode.DARK, TimeAtmospherePalette.DAY to 0f),
-            Triple("header_compacted_day", AppThemeMode.DARK, TimeAtmospherePalette.DAY to 1f),
-            Triple("header_golden_hour", AppThemeMode.DARK, TimeAtmospherePalette.GOLDEN_HOUR to 0f),
-            Triple("header_night", AppThemeMode.DARK, TimeAtmospherePalette.NIGHT to 0f),
-            Triple("header_light", AppThemeMode.LIGHT, TimeAtmospherePalette.DAY to 0f),
-            Triple("header_oled", AppThemeMode.OLED, TimeAtmospherePalette.NIGHT to 0f)
+            Pair("header_expanded_day", TimeAtmospherePalette.DAY to 0f),
+            Pair("header_compacted_day", TimeAtmospherePalette.DAY to 1f),
+            Pair("header_golden_hour", TimeAtmospherePalette.GOLDEN_HOUR to 0f),
+            Pair("header_night", TimeAtmospherePalette.NIGHT to 0f)
         )
 
-        for ((name, mode, atmosphereAndFraction) in scenarios) {
+        for ((name, atmosphereAndFraction) in scenarios) {
             val (palette, fraction) = atmosphereAndFraction
             themeState.value = AppThemeState().apply {
-                themeMode = mode
                 atmosphereMode = AtmosphereMode.MANUAL
                 manualAtmosphere = palette
             }

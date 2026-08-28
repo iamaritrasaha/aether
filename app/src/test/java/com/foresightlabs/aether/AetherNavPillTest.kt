@@ -34,7 +34,6 @@ import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.design.rememberAetherSheetState
 import com.foresightlabs.aether.ui.theme.AetherColors
 import com.foresightlabs.aether.ui.theme.AetherTheme
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.DarkBackground
@@ -78,11 +77,11 @@ class AetherNavPillTest {
 
     @Test
     fun dockDimensionsMatchTokens() {
-        assertEquals(52.dp, AetherNavPillDefaults.Height)
-        assertEquals(44.dp, AetherNavPillDefaults.DestinationSlotSize)
-        assertEquals(38.dp, AetherNavPillDefaults.SelectionLensSize)
-        assertEquals(20.dp, AetherNavPillDefaults.IconSize)
-        assertEquals(40.dp, AetherNavPillDefaults.OuterHorizontalPadding)
+        assertEquals(62.dp, AetherNavPillDefaults.Height)
+        assertEquals(48.dp, AetherNavPillDefaults.DestinationSlotSize)
+        assertEquals(44.dp, AetherNavPillDefaults.SelectionLensSize)
+        assertEquals(22.dp, AetherNavPillDefaults.IconSize)
+        assertEquals(36.dp, AetherNavPillDefaults.OuterHorizontalPadding)
     }
 
     @Test
@@ -98,18 +97,18 @@ class AetherNavPillTest {
 
         composeRule.onNodeWithTag("nav_slot_chats", useUnmergedTree = true)
             .assertIsDisplayed()
-            .assertWidthIsEqualTo(44.dp)
-            .assertHeightIsEqualTo(44.dp)
+            .assertWidthIsEqualTo(48.dp)
+            .assertHeightIsEqualTo(48.dp)
 
         composeRule.onNodeWithTag("nav_lens_chats", useUnmergedTree = true)
             .assertIsDisplayed()
-            .assertWidthIsEqualTo(38.dp)
-            .assertHeightIsEqualTo(38.dp)
+            .assertWidthIsEqualTo(44.dp)
+            .assertHeightIsEqualTo(44.dp)
 
         composeRule.onNodeWithTag("nav_icon_chats", useUnmergedTree = true)
             .assertIsDisplayed()
-            .assertWidthIsEqualTo(20.dp)
-            .assertHeightIsEqualTo(20.dp)
+            .assertWidthIsEqualTo(22.dp)
+            .assertHeightIsEqualTo(22.dp)
 
         // Unselected slots must not render a lens
         composeRule.onNodeWithTag("nav_lens_pulse", useUnmergedTree = true).assertDoesNotExist()
@@ -139,8 +138,8 @@ class AetherNavPillTest {
 
             composeRule.onNodeWithTag("nav_lens_$current", useUnmergedTree = true)
                 .assertIsDisplayed()
-                .assertWidthIsEqualTo(38.dp)
-                .assertHeightIsEqualTo(38.dp)
+                .assertWidthIsEqualTo(44.dp)
+                .assertHeightIsEqualTo(44.dp)
         }
     }
 
@@ -193,8 +192,8 @@ class AetherNavPillTest {
 
             composeRule.onNodeWithTag("nav_lens_pulse", useUnmergedTree = true)
                 .assertIsDisplayed()
-                .assertWidthIsEqualTo(38.dp)
-                .assertHeightIsEqualTo(38.dp)
+                .assertWidthIsEqualTo(44.dp)
+                .assertHeightIsEqualTo(44.dp)
         }
     }
 
@@ -204,7 +203,6 @@ class AetherNavPillTest {
 
         composeRule.setContent {
             val themeState = AppThemeState().apply {
-                themeMode = AppThemeMode.DARK
                 atmosphereMode = AtmosphereMode.MANUAL
                 manualAtmosphere = activePalette.value
             }
@@ -226,8 +224,8 @@ class AetherNavPillTest {
 
             composeRule.onNodeWithTag("nav_lens_settings", useUnmergedTree = true)
                 .assertIsDisplayed()
-                .assertWidthIsEqualTo(38.dp)
-                .assertHeightIsEqualTo(38.dp)
+                .assertWidthIsEqualTo(44.dp)
+                .assertHeightIsEqualTo(44.dp)
         }
     }
 
@@ -235,7 +233,6 @@ class AetherNavPillTest {
     fun goldenHourHomeDockOverSheetDoesNotSampleHiddenCrimson() {
         val selectedKey = mutableStateOf("chats")
         val themeState = AppThemeState().apply {
-            themeMode = AppThemeMode.DARK
             atmosphereMode = AtmosphereMode.MANUAL
             manualAtmosphere = TimeAtmospherePalette.GOLDEN_HOUR
         }
@@ -298,13 +295,13 @@ class AetherNavPillTest {
 
             composeRule.onNodeWithTag("nav_slot_$key", useUnmergedTree = true)
                 .assertIsDisplayed()
-                .assertWidthIsEqualTo(44.dp)
-                .assertHeightIsEqualTo(44.dp)
+                .assertWidthIsEqualTo(48.dp)
+                .assertHeightIsEqualTo(48.dp)
 
             composeRule.onNodeWithTag("nav_lens_$key", useUnmergedTree = true)
                 .assertIsDisplayed()
-                .assertWidthIsEqualTo(38.dp)
-                .assertHeightIsEqualTo(38.dp)
+                .assertWidthIsEqualTo(44.dp)
+                .assertHeightIsEqualTo(44.dp)
         }
     }
 
@@ -314,7 +311,6 @@ class AetherNavPillTest {
 
         composeRule.setContent {
             val themeState = AppThemeState().apply {
-                themeMode = AppThemeMode.DARK
                 atmosphereMode = AtmosphereMode.MANUAL
                 manualAtmosphere = activePalette.value
             }

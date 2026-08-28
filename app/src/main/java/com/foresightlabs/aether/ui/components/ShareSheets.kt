@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.foresightlabs.aether.ui.design.AetherGlass
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
@@ -334,12 +335,13 @@ private fun ShareSheetScaffold(
             .padding(horizontal = 24.dp),
         contentAlignment = Alignment.Center
     ) {
-        Column(
+        AetherGlass(
+            frostState = null,
+            shape = AetherEmber.Shapes.L,
+            elevation = 10.dp,
+            emphasis = 0.2f,
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(AetherEmber.Shapes.L)
-                .background(colors.surface)
-                .border(1.dp, colors.border, AetherEmber.Shapes.L)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
@@ -347,15 +349,19 @@ private fun ShareSheetScaffold(
                 .padding(20.dp)
                 .testTag(testTag)
         ) {
-            Text(
-                text = title,
-                fontFamily = SpaceGroteskFontFamily,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = colors.textPrimary
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            content()
+            Column(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = title,
+                    fontFamily = SpaceGroteskFontFamily,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                content()
+            }
         }
     }
 }

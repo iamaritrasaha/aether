@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.domain.model.Message
+import com.foresightlabs.aether.ui.design.AetherGlass
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
@@ -100,13 +101,14 @@ fun ScheduledMessagesSheet(
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
-                Box(
+                AetherGlass(
+                    frostState = null,
+                    shape = AetherEmber.Shapes.RisingSheet,
+                    elevation = 12.dp,
+                    emphasis = 0.25f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(440.dp)
-                        .clip(AetherEmber.Shapes.RisingSheet)
-                        .background(colors.surface)
-                        .border(1.dp, colors.border, AetherEmber.Shapes.RisingSheet)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -349,73 +351,76 @@ private fun RescheduleDialog(
             ) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Column(
+        AetherGlass(
+            frostState = null,
+            shape = RoundedCornerShape(18.dp),
+            elevation = 10.dp,
+            emphasis = 0.2f,
             modifier = Modifier
                 .width(320.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(colors.surface)
-                .border(1.dp, colors.border, RoundedCornerShape(18.dp))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) { /* keep taps inside */ }
                 .padding(20.dp)
         ) {
-            Text(
-                text = "Reschedule Message",
-                fontFamily = SpaceGroteskFontFamily,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                color = colors.textPrimary
-            )
-            Spacer(modifier = Modifier.height(14.dp))
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Reschedule Message",
+                    fontFamily = SpaceGroteskFontFamily,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+                Spacer(modifier = Modifier.height(14.dp))
 
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                options.forEach { (label, epochSec) ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(colors.surfaceElevated)
-                            .border(1.dp, colors.border, RoundedCornerShape(10.dp))
-                            .clickable { onConfirm(epochSec) }
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = label,
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = colors.textPrimary
-                        )
-                        Icon(
-                            imageVector = Icons.Default.Schedule,
-                            contentDescription = null,
-                            tint = colors.accent,
-                            modifier = Modifier.size(16.dp)
-                        )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    options.forEach { (label, epochSec) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(colors.surfaceElevated)
+                                .border(1.dp, colors.border, RoundedCornerShape(10.dp))
+                                .clickable { onConfirm(epochSec) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = label,
+                                fontFamily = ManropeFontFamily,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.textPrimary
+                            )
+                            Icon(
+                                imageVector = Icons.Default.Schedule,
+                                contentDescription = null,
+                                tint = colors.accent,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                Text(
-                    text = "Cancel",
-                    fontFamily = ManropeFontFamily,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.textSecondary,
-                    modifier = Modifier
-                        .clickable { onDismiss() }
-                        .padding(8.dp)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(
+                        text = "Cancel",
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.textSecondary,
+                        modifier = Modifier
+                            .clickable { onDismiss() }
+                            .padding(8.dp)
+                    )
+                }
             }
         }
     }

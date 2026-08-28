@@ -20,12 +20,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
-enum class AppThemeMode {
-    DARK,
-    LIGHT,
-    OLED,
-    SYSTEM
-}
+
 
 enum class AtmosphereMode(val displayName: String, val description: String) {
     STATIC("Static", "Fixed palette of your choice"),
@@ -42,75 +37,80 @@ enum class TimeAtmospherePalette(
     val glowColor: Color,
     val shadowColor: Color
 ) {
+    // Every palette's gradient now runs from a restrained lavender/mist bloom
+    // (colors[0], glow) down through graphite (colors[3], colors[4]) toward the
+    // deep base the rest of Aether sits on — controlled dark atmosphere, not the
+    // pastel-to-near-white ramps these used to be. Time-of-day is told apart by
+    // hue, not by how bright the sky is allowed to get.
     DAWN(
         displayName = "Dawn",
         timeLabel = "05:00 - 08:00",
-        primaryAccent = Color(0xFFFF8E72),
+        primaryAccent = Color(0xFFB79294),
         colors = listOf(
-            Color(0xFFFFB088),
-            Color(0xFFFF8E72),
-            Color(0xFFE56B8B),
-            Color(0xFFB04B99),
-            Color(0xFF6B2D5C)
+            Color(0xFF7C5A5F),
+            Color(0xFF65494D),
+            Color(0xFF503A3D),
+            Color(0xFF37292B),
+            Color(0xFF211A1B)
         ),
-        glowColor = Color(0xFFFFC2A6),
-        shadowColor = Color(0xFF4A1838)
+        glowColor = Color(0xFF916E73),
+        shadowColor = Color(0xFF1D1617)
     ),
     DAY(
         displayName = "Day",
         timeLabel = "08:00 - 16:30",
-        primaryAccent = Color(0xFF38BDF8),
+        primaryAccent = Color(0xFF7E97B4),
         colors = listOf(
-            Color(0xFF60A5FA),
-            Color(0xFF38BDF8),
-            Color(0xFF0284C7),
-            Color(0xFF2563EB),
-            Color(0xFF1E3A8A)
+            Color(0xFF546A83),
+            Color(0xFF44556A),
+            Color(0xFF364454),
+            Color(0xFF27303A),
+            Color(0xFF181D22)
         ),
-        glowColor = Color(0xFF93C5FD),
-        shadowColor = Color(0xFF0F172A)
+        glowColor = Color(0xFF687E97),
+        shadowColor = Color(0xFF15191E)
     ),
     GOLDEN_HOUR(
-        displayName = "Golden Hour (Ember)",
+        displayName = "Golden Hour",
         timeLabel = "16:30 - 19:30",
-        primaryAccent = Color(0xFFFF7038),
+        primaryAccent = Color(0xFFB89478),
         colors = listOf(
-            Color(0xFFFF9A4A),
-            Color(0xFFFF7038),
-            Color(0xFFF04425),
-            Color(0xFFE92D27),
-            Color(0xFFC90B27)
+            Color(0xFF836854),
+            Color(0xFF6A5444),
+            Color(0xFF544336),
+            Color(0xFF3A2F27),
+            Color(0xFF221D18)
         ),
-        glowColor = Color(0xFFFFAA5C),
-        shadowColor = Color(0xFF8B1225)
+        glowColor = Color(0xFF977C68),
+        shadowColor = Color(0xFF1E1915)
     ),
     EVENING(
         displayName = "Evening",
         timeLabel = "19:30 - 22:30",
-        primaryAccent = Color(0xFFD946EF),
+        primaryAccent = Color(0xFF9186B0),
         colors = listOf(
-            Color(0xFFE879F9),
-            Color(0xFFC026D3),
-            Color(0xFF8B5CF6),
-            Color(0xFF6366F1),
-            Color(0xFF1E1B4B)
+            Color(0xFF605483),
+            Color(0xFF4E446A),
+            Color(0xFF3E3654),
+            Color(0xFF2C273A),
+            Color(0xFF1B1822)
         ),
-        glowColor = Color(0xFFF0ABFC),
-        shadowColor = Color(0xFF3B0764)
+        glowColor = Color(0xFF746897),
+        shadowColor = Color(0xFF18151E)
     ),
     NIGHT(
         displayName = "Night",
         timeLabel = "22:30 - 05:00",
-        primaryAccent = Color(0xFF818CF8),
+        primaryAccent = Color(0xFF7C85A8),
         colors = listOf(
-            Color(0xFF818CF8),
-            Color(0xFF6366F1),
-            Color(0xFF4F46E5),
-            Color(0xFF312E81),
-            Color(0xFF0D0B18)
+            Color(0xFF515A85),
+            Color(0xFF42496C),
+            Color(0xFF343A55),
+            Color(0xFF26293B),
+            Color(0xFF181A23)
         ),
-        glowColor = Color(0xFFA5B4FC),
-        shadowColor = Color(0xFF030712)
+        glowColor = Color(0xFF656E9A),
+        shadowColor = Color(0xFF15161E)
     );
 
     companion object {
@@ -187,7 +187,6 @@ class AppThemeState(
     private val repository: AppearanceRepository? = null,
     private val coroutineScope: CoroutineScope? = null
 ) {
-    var themeMode by mutableStateOf(AppThemeMode.SYSTEM)
     var atmosphereMode by mutableStateOf(AtmosphereMode.TIME_AND_WEATHER)
     var manualAtmosphere by mutableStateOf(TimeAtmospherePalette.GOLDEN_HOUR)
     var weatherReading by mutableStateOf<WeatherReading>(WeatherReading.Idle)
@@ -196,7 +195,6 @@ class AppThemeState(
     var accentChoice by mutableStateOf(AccentColorChoice.MIST_BLUE)
     var messageDensity by mutableStateOf(MessageDensity.COMFORTABLE)
     var fontScale by mutableFloatStateOf(1.0f)
-    var useAmoledBlack by mutableStateOf(false)
     var weatherLocationMode by mutableStateOf(WeatherLocationMode.AUTOMATIC)
     var manualWeatherLocation by mutableStateOf<ManualWeatherLocation?>(null)
 
@@ -214,7 +212,6 @@ class AppThemeState(
     }
 
     private fun applyPreferences(prefs: AetherAppearancePreferences) {
-        themeMode = prefs.themeMode
         atmosphereMode = prefs.atmosphereMode
         manualAtmosphere = prefs.manualAtmosphere
         useAtmosphereAccent = prefs.useAtmosphereAccent
@@ -223,13 +220,6 @@ class AppThemeState(
         fontScale = prefs.fontScale
         weatherLocationMode = prefs.weatherLocationMode
         manualWeatherLocation = prefs.manualWeatherLocation
-    }
-
-    fun setAndPersistThemeMode(mode: AppThemeMode) {
-        themeMode = mode
-        coroutineScope?.launch {
-            repository?.updateThemeMode(mode)
-        }
     }
 
     fun setAndPersistAtmosphereMode(mode: AtmosphereMode) {

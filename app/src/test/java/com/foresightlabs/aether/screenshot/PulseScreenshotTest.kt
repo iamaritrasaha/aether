@@ -21,7 +21,6 @@ import com.foresightlabs.aether.ui.pulse.PulseViewerState
 import com.foresightlabs.aether.ui.screens.PulseScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
@@ -217,13 +216,13 @@ class PulseScreenshotTest {
             name = "pulse-populated",
             myPulse = myPulseFixture,
             pulses = samplePulses,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.DAY)
         )
         capture(
             name = "pulse-frosted-header",
             myPulse = myPulseFixture,
             pulses = samplePulses,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.DAY)
         )
     }
 
@@ -234,7 +233,7 @@ class PulseScreenshotTest {
             name = "pulse-frosted-header-narrow",
             myPulse = myPulseFixture,
             pulses = samplePulses,
-            state = themeState(TimeAtmospherePalette.DAY).apply { themeMode = AppThemeMode.DARK }
+            state = themeState(TimeAtmospherePalette.DAY)
         )
     }
 

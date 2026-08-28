@@ -19,8 +19,8 @@ enum class PresenceDensity {
 object PresenceStripTokens {
 
     fun avatarSize(density: PresenceDensity): Dp = when (density) {
-        PresenceDensity.COMFORTABLE -> 52.dp
-        PresenceDensity.COMPACT -> 44.dp
+        PresenceDensity.COMFORTABLE -> 60.dp
+        PresenceDensity.COMPACT -> 52.dp
     }
 
     fun itemSpacing(density: PresenceDensity): Dp = when (density) {
@@ -29,8 +29,8 @@ object PresenceStripTokens {
     }
 
     fun labelWidth(density: PresenceDensity): Dp = when (density) {
-        PresenceDensity.COMFORTABLE -> 56.dp
-        PresenceDensity.COMPACT -> 48.dp
+        PresenceDensity.COMFORTABLE -> 64.dp
+        PresenceDensity.COMPACT -> 56.dp
     }
 
     /**
@@ -40,8 +40,8 @@ object PresenceStripTokens {
      * cannot feed back into its own measurement.
      */
     fun verticalAllowance(density: PresenceDensity): Dp = when (density) {
-        PresenceDensity.COMFORTABLE -> 144.dp
-        PresenceDensity.COMPACT -> 124.dp
+        PresenceDensity.COMFORTABLE -> 152.dp
+        PresenceDensity.COMPACT -> 132.dp
     }
 }
 

@@ -4,13 +4,12 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
-// Aether themes change material semantics, not merely background colors.
 // Atmosphere typography and foreground-surface typography resolve independently.
-// Light mode uses graphite typography on porcelain surfaces while the atmosphere remains luminous.
-// Aether Ember Core Dark Surfaces (Near-black, never blue-black)
-val DarkBackground = Color(0xFF0A0A0B)
-val DarkSurface = Color(0xFF101011)
-val DarkSurfaceElevated = Color(0xFF171718)
+// Aether Ember Core Dark Surfaces — the controlled dark atmosphere's base family
+// (deep base / primary graphite / raised graphite), never blue-black.
+val DarkBackground = Color(0xFF090A0D)
+val DarkSurface = Color(0xFF111318)
+val DarkSurfaceElevated = Color(0xFF181A21)
 val DarkSurfaceGlass = Color(0xEA1C1B1B)
 val DarkSurfaceHighlight = Color(0xFF242323)
 val DarkBorder = Color(0x1AFFFFFF)
@@ -28,38 +27,15 @@ val AtmosphereTextSecondary = Color(0xF0FFFFFF)
 val AtmosphereTextTertiary = Color(0xD9FFFFFF)
 val AtmosphereTextMuted = Color(0xB8FFFFFF)
 
-// Message Bubble Colors
-val DarkBubbleOutgoing = Color(0xFFF04425)
-val DarkBubbleOutgoingEnd = Color(0xFFC90B27)
-val DarkBubbleOutgoingText = Color(0xFFFFFFFF)
-val DarkBubbleIncoming = Color(0x30FFFFFF)
-val DarkBubbleIncomingBorder = Color(0x26FFFFFF)
-val DarkBubbleIncomingText = Color(0xFFFFFFFF)
-
-// Core OLED Palette
-val OledBackground = Color(0xFF000000)
-val OledSurface = Color(0xFF0A0A0B)
-val OledSurfaceElevated = Color(0xFF101011)
-
-// Core Light Theme Palette (Clean warm editorial fallback)
-val LightBackground = Color(0xFFF7F6F3)
-val LightSurface = Color(0xFFFBFAF8)
-val LightSurfaceElevated = Color(0xFFF1F0ED)
-val LightSurfaceHighlight = Color(0xFFECEAE6)
-val LightBorder = Color(0x1F242329)
-val LightBorderSubtle = Color(0x14242329)
-
-// Porcelain surfaces need graphite, not dark-theme white typography.
-val LightTextPrimary = Color(0xFF171719)
-val LightTextSecondary = Color(0xFF4D4D52)
-val LightTextTertiary = Color(0xFF74747C)
-val LightTextMuted = Color(0xFF929299)
-
-val LightBubbleOutgoing = Color(0xFFFF7038)
-val LightBubbleOutgoingEnd = Color(0xFFF04425)
-val LightBubbleOutgoingText = Color(0xFFFFFFFF)
-val LightBubbleIncoming = Color(0xFFFFFFFF)
-val LightBubbleIncomingText = Color(0xFF141416)
+// The two directions are told apart by tone, not by colour: incoming is a pale
+// mist the atmosphere still shows through, outgoing is smoky graphite. Neither
+// is an accent slab, and both stay neutral so they belong to the sky behind them.
+val DarkBubbleOutgoing = Color(0xDB2C2C36)
+val DarkBubbleOutgoingEnd = Color(0xDB2C2C36)
+val DarkBubbleOutgoingText = Color(0xFFF4F4F7)
+val DarkBubbleIncoming = Color(0xC7EDECF2)
+val DarkBubbleIncomingBorder = Color(0x14FFFFFF)
+val DarkBubbleIncomingText = Color(0xFF1B1B21)
 
 // Accent Colors - Ember default
 val AccentEmber = Color(0xFFFF7038)
@@ -73,16 +49,16 @@ val UnreadBadge = Color(0xFFFF7038)
 
 @Immutable
 data class AetherColors(
-    val background: Color,
-    val surface: Color,
-    val surfaceElevated: Color,
-    val surfaceHighlight: Color,
+    val background: Color = DarkBackground,
+    val surface: Color = DarkSurface,
+    val surfaceElevated: Color = DarkSurfaceElevated,
+    val surfaceHighlight: Color = DarkSurfaceHighlight,
     val surfaceGlass: Color = DarkSurfaceGlass,
-    val border: Color,
-    val borderSubtle: Color,
-    val textPrimary: Color,
-    val textSecondary: Color,
-    val textTertiary: Color,
+    val border: Color = DarkBorder,
+    val borderSubtle: Color = DarkBorderSubtle,
+    val textPrimary: Color = DarkTextPrimary,
+    val textSecondary: Color = DarkTextSecondary,
+    val textTertiary: Color = DarkTextTertiary,
     val textMuted: Color = DarkTextMuted,
     val input: Color = DarkSurfaceHighlight,
     val divider: Color = DarkBorderSubtle,
@@ -90,43 +66,16 @@ data class AetherColors(
     val atmosphereTextSecondary: Color = AtmosphereTextSecondary,
     val atmosphereTextTertiary: Color = AtmosphereTextTertiary,
     val atmosphereTextMuted: Color = AtmosphereTextMuted,
-    val accent: Color,
-    val accentSubtle: Color,
-    val bubbleOutgoing: Color,
+    val accent: Color = AccentEmber,
+    val accentSubtle: Color = AccentEmberSubtle,
+    val bubbleOutgoing: Color = DarkBubbleOutgoing,
     val bubbleOutgoingEnd: Color = DarkBubbleOutgoingEnd,
-    val bubbleOutgoingText: Color,
-    val bubbleIncoming: Color,
-    val bubbleIncomingText: Color,
-    val isDark: Boolean,
-    val isOled: Boolean = false
+    val bubbleOutgoingText: Color = DarkBubbleOutgoingText,
+    val bubbleIncoming: Color = DarkBubbleIncoming,
+    val bubbleIncomingText: Color = DarkBubbleIncomingText,
+    val isDark: Boolean = true
 )
 
 val LocalAetherColors = staticCompositionLocalOf {
-    AetherColors(
-        background = DarkBackground,
-        surface = DarkSurface,
-        surfaceElevated = DarkSurfaceElevated,
-        surfaceHighlight = DarkSurfaceHighlight,
-        surfaceGlass = DarkSurfaceGlass,
-        border = DarkBorder,
-        borderSubtle = DarkBorderSubtle,
-        textPrimary = DarkTextPrimary,
-        textSecondary = DarkTextSecondary,
-        textTertiary = DarkTextTertiary,
-        textMuted = DarkTextMuted,
-        input = DarkSurfaceHighlight,
-        divider = DarkBorderSubtle,
-        atmosphereTextPrimary = AtmosphereTextPrimary,
-        atmosphereTextSecondary = AtmosphereTextSecondary,
-        atmosphereTextTertiary = AtmosphereTextTertiary,
-        atmosphereTextMuted = AtmosphereTextMuted,
-        accent = AccentEmber,
-        accentSubtle = AccentEmberSubtle,
-        bubbleOutgoing = DarkBubbleOutgoing,
-        bubbleOutgoingEnd = DarkBubbleOutgoingEnd,
-        bubbleOutgoingText = DarkBubbleOutgoingText,
-        bubbleIncoming = DarkBubbleIncoming,
-        bubbleIncomingText = DarkBubbleIncomingText,
-        isDark = true
-    )
+    AetherColors()
 }

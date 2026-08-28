@@ -36,6 +36,17 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.foresightlabs.aether.ui.design.AetherGlassMenuDefaults
+import com.foresightlabs.aether.ui.design.AetherGlassMenuSurface
+
 /**
  * Details Telegram actually exposes about one message.
  *
@@ -58,60 +69,76 @@ fun MessageInfoSheet(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f))
+            .background(Color.Black.copy(alpha = 0.65f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { onDismiss() }
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = 24.dp)
+            .testTag("message_info_scrim"),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(AetherEmber.Shapes.L)
-                .background(colors.surface)
-                .border(1.dp, colors.border, AetherEmber.Shapes.L)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) { /* keep taps inside the sheet */ }
-                .padding(20.dp)
-                .testTag("message_info_sheet")
+        AnimatedVisibility(
+            visible = true,
+            enter = scaleIn(
+                initialScale = 0.95f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
+            ) + fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)),
+            exit = scaleOut(targetScale = 0.96f) + fadeOut()
         ) {
-            Text(
-                text = "Message info",
-                fontFamily = SpaceGroteskFontFamily,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = colors.textPrimary
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            rows.forEach { (label, value) ->
-                Row(
+            AetherGlassMenuSurface(
+                frostState = null,
+                shape = RoundedCornerShape(AetherGlassMenuDefaults.SheetRadius),
+                elevation = 10.dp,
+                emphasis = 0.25f,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { /* keep taps inside sheet */ }
+                    .testTag("message_info_sheet")
+            ) {
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
                 ) {
                     Text(
-                        text = label,
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 13.sp,
-                        color = colors.textTertiary,
-                        modifier = Modifier.weight(1f)
+                        text = "Message info",
+                        fontFamily = SpaceGroteskFontFamily,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary
                     )
-                    Text(
-                        text = value,
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colors.textPrimary,
-                        modifier = Modifier
-                            .weight(1.6f)
-                            .testTag("message_info_${label.lowercase().replace(' ', '_')}")
-                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    rows.forEach { (label, value) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                fontFamily = ManropeFontFamily,
+                                fontSize = 13.5.sp,
+                                color = colors.textTertiary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = value,
+                                fontFamily = ManropeFontFamily,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.textPrimary,
+                                modifier = Modifier
+                                    .weight(1.6f)
+                                    .testTag("message_info_${label.lowercase().replace(' ', '_')}")
+                            )
+                        }
+                    }
                 }
             }
         }

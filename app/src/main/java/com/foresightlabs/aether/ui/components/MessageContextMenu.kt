@@ -61,6 +61,14 @@ import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 
+import com.foresightlabs.aether.ui.design.AetherGlass
+import com.foresightlabs.aether.ui.design.AetherGlassMenuDefaults
+import com.foresightlabs.aether.ui.design.AetherGlassMenuDivider
+import com.foresightlabs.aether.ui.design.AetherGlassMenuItem
+import com.foresightlabs.aether.ui.design.AetherGlassMenuSurface
+import com.foresightlabs.aether.ui.theme.LocalAetherColors
+import androidx.compose.foundation.shape.RoundedCornerShape
+
 /**
  * Long-press actions for a message.
  *
@@ -82,6 +90,8 @@ fun MessageContextMenu(
 ) {
     if (message == null || !isVisible) return
 
+    val colors = LocalAetherColors.current
+
     val actions = remember(message, capabilities, allowSelect) {
         MessageActionPolicy.actionsFor(message, capabilities, allowSelect = allowSelect)
     }
@@ -94,77 +104,78 @@ fun MessageContextMenu(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f))
+            .background(Color.Black.copy(alpha = 0.65f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { onDismiss() }
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = 24.dp)
+            .testTag("message_context_scrim"),
         contentAlignment = Alignment.Center
     ) {
         AnimatedVisibility(
             visible = isVisible,
             enter = scaleIn(
-                initialScale = 0.85f,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
-            ) + fadeIn(),
-            exit = scaleOut(targetScale = 0.9f) + fadeOut()
+                initialScale = 0.95f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
+            ) + fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)),
+            exit = scaleOut(targetScale = 0.96f) + fadeOut()
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth(0.92f)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { /* prevent backdrop tap */ },
+                modifier = Modifier.fillMaxWidth(0.92f),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // Emoji Reaction Strip
-                if (showReactionTray) Row(
-                    modifier = Modifier
-                        .clip(AetherEmber.Shapes.Pill)
-                        .background(AetherEmber.Colors.Surface)
-                        .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.Pill)
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    reactions.forEach { emoji ->
-                        var isPressed by remember { mutableStateOf(false) }
-                        val scale by animateFloatAsState(
-                            targetValue = if (isPressed) 1.35f else 1.0f,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-                            label = "reaction_scale"
-                        )
+                if (showReactionTray) {
+                    AetherGlass(
+                        frostState = null,
+                        shape = AetherEmber.Shapes.Pill,
+                        elevation = 8.dp,
+                        emphasis = 0.2f,
+                        modifier = Modifier.testTag("reaction_tray")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            reactions.forEach { emoji ->
+                                var isPressed by remember { mutableStateOf(false) }
+                                val scale by animateFloatAsState(
+                                    targetValue = if (isPressed) 1.25f else 1.0f,
+                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                                    label = "reaction_scale"
+                                )
 
-                        Text(
-                            text = emoji,
-                            fontSize = 24.sp,
-                            modifier = Modifier
-                                .scale(scale)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    isPressed = true
-                                    onReactionSelected(emoji)
-                                    onDismiss()
-                                }
-                                .padding(4.dp)
-                        )
+                                Text(
+                                    text = emoji,
+                                    fontSize = 24.sp,
+                                    modifier = Modifier
+                                        .scale(scale)
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) {
+                                            isPressed = true
+                                            onReactionSelected(emoji)
+                                            onDismiss()
+                                        }
+                                        .padding(4.dp)
+                                )
+                            }
+                        }
                     }
                 }
 
-                if (showReactionTray) Spacer(modifier = Modifier.height(16.dp))
+                if (showReactionTray) Spacer(modifier = Modifier.height(14.dp))
 
-                // Actions Menu Box (24dp rounded dark surface)
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(AetherEmber.Shapes.L)
-                        .background(AetherEmber.Colors.Surface)
-                        .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.L)
-                        .padding(vertical = 6.dp)
+                // Actions Menu Box (Unified Aether Glass)
+                AetherGlassMenuSurface(
+                    frostState = null,
+                    shape = RoundedCornerShape(AetherGlassMenuDefaults.SheetRadius),
+                    elevation = 10.dp,
+                    emphasis = 0.25f,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     actions.forEachIndexed { index, action ->
                         if (action == MessageAction.DELETE_FOR_ME ||
@@ -173,19 +184,13 @@ fun MessageContextMenu(
                             val isFirstDestructive = actions
                                 .indexOfFirst { it == MessageAction.DELETE_FOR_ME || it == MessageAction.DELETE_FOR_EVERYONE } == index
                             if (isFirstDestructive && index > 0) {
-                                HorizontalDivider(
-                                    color = AetherEmber.Colors.BorderSubtle,
-                                    thickness = 0.5.dp,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                                )
+                                AetherGlassMenuDivider()
                             }
                         }
-                        ContextMenuActionItem(
+                        AetherGlassMenuItem(
                             icon = iconFor(action),
                             title = titleFor(action),
-                            tint = if (action == MessageAction.DELETE_FOR_ME ||
-                                action == MessageAction.DELETE_FOR_EVERYONE
-                            ) DestructiveTint else null,
+                            isDestructive = action == MessageAction.DELETE_FOR_ME || action == MessageAction.DELETE_FOR_EVERYONE,
                             testTag = "message_action_${action.name.lowercase()}",
                             onClick = {
                                 onAction(action)
@@ -198,45 +203,6 @@ fun MessageContextMenu(
         }
     }
 }
-
-@Composable
-private fun ContextMenuActionItem(
-    icon: ImageVector,
-    title: String,
-    tint: Color? = null,
-    testTag: String,
-    onClick: () -> Unit
-) {
-    val itemTint = tint ?: Color.White
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(testTag)
-            .clickable { onClick() }
-            .padding(horizontal = 18.dp, vertical = 13.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            tint = itemTint,
-            modifier = Modifier.size(20.dp)
-        )
-
-        Spacer(modifier = Modifier.width(14.dp))
-
-        Text(
-            text = title,
-            fontFamily = ManropeFontFamily,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            color = itemTint
-        )
-    }
-}
-
-private val DestructiveTint = Color(0xFFEF4444)
 
 private fun titleFor(action: MessageAction): String = when (action) {
     MessageAction.REPLY -> "Reply"

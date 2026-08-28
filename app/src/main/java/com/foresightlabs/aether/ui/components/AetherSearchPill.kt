@@ -3,6 +3,7 @@ package com.foresightlabs.aether.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,6 +34,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.ui.theme.AetherEmber
@@ -57,12 +59,24 @@ fun AetherSearchPill(
     requestFocus: Boolean = false,
     onClick: (() -> Unit)? = null,
     onFocused: (() -> Unit)? = null,
-    onClearClick: (() -> Unit)? = null
+    onClearClick: (() -> Unit)? = null,
+    /**
+     * Placed directly on the Living Atmosphere rather than on a foreground surface.
+     * The field then reads as a quiet translucent lens instead of an opaque slab.
+     */
+    onAtmosphere: Boolean = false,
+    height: Dp = 46.dp
 ) {
-    val shape = AetherEmber.Shapes.Pill
+    val shape = RoundedCornerShape(if (onAtmosphere) 999.dp else 16.dp)
     val atmosphere = LocalAtmosphere.current
     val colors = LocalAetherColors.current
     val focusRequester = remember { FocusRequester() }
+
+    val fieldBackground = if (onAtmosphere) Color(0x1C000000) else colors.input
+    val fieldBorder = if (onAtmosphere) Color(0x24FFFFFF) else colors.borderSubtle
+    val leadingTint = if (onAtmosphere) colors.atmosphereTextTertiary else colors.textSecondary
+    val placeholderTint = if (onAtmosphere) colors.atmosphereTextMuted else colors.textTertiary
+    val valueTint = if (onAtmosphere) colors.atmosphereTextPrimary else colors.textPrimary
 
     LaunchedEffect(requestFocus) {
         if (requestFocus && !readOnly) {
@@ -73,10 +87,10 @@ fun AetherSearchPill(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(44.dp)
+            .height(height)
             .clip(shape)
-            .background(colors.input)
-            .border(1.dp, colors.border, shape)
+            .background(fieldBackground)
+            .border(0.75.dp, fieldBorder, shape)
             .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.CenterStart
@@ -88,17 +102,17 @@ fun AetherSearchPill(
             Icon(
                 imageVector = Icons.Default.Search,
                 contentDescription = null,
-                tint = colors.textSecondary,
-                modifier = Modifier.size(19.dp)
+                tint = leadingTint,
+                modifier = Modifier.size(18.dp)
             )
 
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(9.dp))
 
             Box(modifier = Modifier.weight(1f)) {
                 if (value.isEmpty()) {
                     Text(
                         text = placeholder,
-                        color = colors.textTertiary,
+                        color = placeholderTint,
                         fontFamily = ManropeFontFamily,
                         fontSize = 14.5.sp,
                         fontWeight = FontWeight.Medium
@@ -110,7 +124,7 @@ fun AetherSearchPill(
                         value = value,
                         onValueChange = onValueChange,
                         textStyle = TextStyle(
-                            color = colors.textPrimary,
+                            color = valueTint,
                             fontFamily = ManropeFontFamily,
                             fontSize = 14.5.sp,
                             fontWeight = FontWeight.Medium
@@ -139,7 +153,7 @@ fun AetherSearchPill(
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Clear search",
-                        tint = colors.textSecondary,
+                        tint = leadingTint,
                         modifier = Modifier.size(16.dp)
                     )
                 }

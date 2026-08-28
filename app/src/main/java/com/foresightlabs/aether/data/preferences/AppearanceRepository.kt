@@ -10,7 +10,6 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.foresightlabs.aether.ui.theme.AccentColorChoice
-import com.foresightlabs.aether.ui.theme.AppThemeMode
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.MessageDensity
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
@@ -44,7 +43,6 @@ class AppearanceRepository(
 ) {
 
     private object PreferencesKeys {
-        val THEME_MODE = stringPreferencesKey("theme_mode")
         val ATMOSPHERE_MODE = stringPreferencesKey("atmosphere_mode")
         val MANUAL_ATMOSPHERE = stringPreferencesKey("manual_atmosphere")
         val USE_ATMOSPHERE_ACCENT = booleanPreferencesKey("use_atmosphere_accent")
@@ -79,10 +77,6 @@ class AppearanceRepository(
         )
 
     private fun mapPreferences(prefs: Preferences): AetherAppearancePreferences {
-        val themeMode = runCatching {
-            prefs[PreferencesKeys.THEME_MODE]?.let { AppThemeMode.valueOf(it) }
-        }.getOrNull() ?: AppThemeMode.SYSTEM
-
         val atmosphereMode = runCatching {
             prefs[PreferencesKeys.ATMOSPHERE_MODE]?.let { AtmosphereMode.valueOf(it) }
         }.getOrNull() ?: AtmosphereMode.TIME_AND_WEATHER
@@ -133,7 +127,6 @@ class AppearanceRepository(
         } else null
 
         return AetherAppearancePreferences(
-            themeMode = themeMode,
             atmosphereMode = atmosphereMode,
             manualAtmosphere = manualAtmosphere,
             useAtmosphereAccent = resolvedUseAtmosphereAccent,
@@ -143,12 +136,6 @@ class AppearanceRepository(
             weatherLocationMode = weatherLocationMode,
             manualWeatherLocation = manualLocation
         )
-    }
-
-    suspend fun updateThemeMode(themeMode: AppThemeMode) {
-        dataStore.edit { prefs ->
-            prefs[PreferencesKeys.THEME_MODE] = themeMode.name
-        }
     }
 
     suspend fun updateAtmosphereMode(atmosphereMode: AtmosphereMode) {
@@ -233,7 +220,6 @@ class AppearanceRepository(
         val current = globalPreferences.value
         val updated = transform(current)
         dataStore.edit { prefs ->
-            prefs[PreferencesKeys.THEME_MODE] = updated.themeMode.name
             prefs[PreferencesKeys.ATMOSPHERE_MODE] = updated.atmosphereMode.name
             prefs[PreferencesKeys.MANUAL_ATMOSPHERE] = updated.manualAtmosphere.name
             prefs[PreferencesKeys.USE_ATMOSPHERE_ACCENT] = updated.useAtmosphereAccent
