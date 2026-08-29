@@ -19,7 +19,7 @@ sealed interface ConversationEntry {
 
     @Immutable
     data class Single(val message: Message) : ConversationEntry {
-        override val key: String get() = message.id
+        override val key: String get() = message.presentationKey ?: message.id
         override val anchor: Message get() = message
     }
 

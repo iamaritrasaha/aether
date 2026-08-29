@@ -50,6 +50,44 @@ class TelegramMappingTest {
   }
 
   @Test
+  fun emailAndRegistrationStatesKeepPinnedFields() {
+    val email = TelegramMappers.mapAuthState(TdApi.AuthorizationStateWaitEmailAddress(true, false))
+      as AuthUiState.EmailAddress
+    assertTrue(email.allowAppleId)
+    assertTrue(!email.allowGoogleId)
+
+    val emailCode = TelegramMappers.mapAuthState(
+      TdApi.AuthorizationStateWaitEmailCode(
+        false,
+        true,
+        TdApi.EmailAddressAuthenticationCodeInfo("m•••@example.com", 7),
+        TdApi.EmailAddressResetStateAvailable(0)
+      )
+    ) as AuthUiState.EmailCode
+    assertEquals("m•••@example.com", emailCode.addressPattern)
+    assertEquals(7, emailCode.codeLength)
+    assertTrue(emailCode.canReset)
+
+    val registration = TelegramMappers.mapAuthState(
+      TdApi.AuthorizationStateWaitRegistration(
+        TdApi.TermsOfService(TdApi.FormattedText("supplied terms", emptyArray()), 16, true)
+      )
+    ) as AuthUiState.Registration
+    assertEquals("supplied terms", registration.termsOfServiceText)
+    assertEquals(16, registration.minAge)
+    assertTrue(registration.showPopup)
+  }
+
+  @Test
+  fun pinnedAuthFunctionsExposeQrEmailRecoveryAndPasskeyContracts() {
+    assertTrue(TdApi.RequestQrCodeAuthentication(longArrayOf()).otherUserIds.isEmpty())
+    assertEquals("mail@example.com", TdApi.SetAuthenticationEmailAddress("mail@example.com").emailAddress)
+    assertTrue(TdApi.CheckAuthenticationEmailCode(TdApi.EmailAddressAuthenticationCode("123456")).code is TdApi.EmailAddressAuthenticationCode)
+    assertTrue(TdApi.RequestAuthenticationPasswordRecovery() is TdApi.RequestAuthenticationPasswordRecovery)
+    assertTrue(TdApi.GetAuthenticationPasskeyParameters() is TdApi.GetAuthenticationPasskeyParameters)
+  }
+
+  @Test
   fun messageContentMapsTextAndUnsupported() {
     val text = TdApi.MessageText(TdApi.FormattedText("hello", emptyArray()), null, null)
     assertEquals("hello" to MessageType.TEXT, TelegramMappers.mapContent(text))

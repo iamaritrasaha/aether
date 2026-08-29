@@ -6,6 +6,9 @@ import androidx.core.content.edit
 import com.foresightlabs.aether.BuildConfig
 import com.foresightlabs.aether.domain.calls.MediaConnectionState
 import com.foresightlabs.aether.domain.messages.MessageCapabilities
+import com.foresightlabs.aether.domain.messages.MessageMotionEvent
+import com.foresightlabs.aether.domain.messages.MessageMotionEventType
+import com.foresightlabs.aether.domain.messages.ConversationMotion
 import com.foresightlabs.aether.domain.messages.SendOptions
 import com.foresightlabs.aether.domain.messages.SendSchedule
 import com.foresightlabs.aether.domain.text.ReplyQuote
@@ -17,6 +20,7 @@ import com.foresightlabs.aether.domain.model.ForumTopicSummary
 import com.foresightlabs.aether.domain.model.ConnectionStatus
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageType
+import com.foresightlabs.aether.domain.model.ReplyPreview
 import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
 import com.foresightlabs.aether.domain.model.User
@@ -27,8 +31,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -40,6 +48,7 @@ import org.drinkless.tdlib.NativeLoader
 import org.drinkless.tdlib.TdApi
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 
 class TelegramClient(private val application: Application) {
@@ -77,6 +86,21 @@ class TelegramClient(private val application: Application) {
 
     private val _chatList = MutableStateFlow<List<Chat>>(emptyList())
     val chatList: StateFlow<List<Chat>> = _chatList.asStateFlow()
+
+    private val conversationEvents = MutableSharedFlow<MessageMotionEvent>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
+    )
+    private val conversationEventToken = AtomicLong(0L)
+
+    fun messageEvents(chatId: Long): Flow<MessageMotionEvent> =
+        conversationEvents.asSharedFlow().filter { it.chatId == chatId }
+
+    private fun publishMessageEvent(chatId: Long, messageId: Long, type: MessageMotionEventType) {
+        conversationEvents.tryEmit(
+            MessageMotionEvent(chatId, messageId.toString(), type, conversationEventToken.incrementAndGet())
+        )
+    }
 
     private val _pulses = MutableStateFlow<List<com.foresightlabs.aether.domain.model.UserPulse>>(emptyList())
     val pulses: StateFlow<List<com.foresightlabs.aether.domain.model.UserPulse>> = _pulses.asStateFlow()
@@ -159,6 +183,58 @@ class TelegramClient(private val application: Application) {
         return sendExpectOk(TdApi.CheckAuthenticationPassword(password))
     }
 
+    suspend fun submitPasswordRecoveryCode(code: String): Result<Unit> {
+        return sendExpectOk(TdApi.CheckAuthenticationPasswordRecoveryCode(code))
+    }
+
+    suspend fun requestPasswordRecovery(): Result<Unit> {
+        return sendExpectOk(TdApi.RequestAuthenticationPasswordRecovery())
+    }
+
+    suspend fun submitEmailAddress(email: String): Result<Unit> {
+        return sendExpectOk(TdApi.SetAuthenticationEmailAddress(email))
+    }
+
+    suspend fun submitEmailCode(code: String): Result<Unit> {
+        return sendExpectOk(
+            TdApi.CheckAuthenticationEmailCode(TdApi.EmailAddressAuthenticationCode(code))
+        )
+    }
+
+    suspend fun resetAuthenticationEmailAddress(): Result<Unit> {
+        return sendExpectOk(TdApi.ResetAuthenticationEmailAddress())
+    }
+
+    suspend fun requestQrCodeAuthentication(): Result<Unit> {
+        return sendExpectOk(TdApi.RequestQrCodeAuthentication(longArrayOf()))
+    }
+
+    suspend fun getAuthenticationPasskeyParameters(): Result<String> {
+        return when (val result = send(TdApi.GetAuthenticationPasskeyParameters())) {
+            is TdApi.Text -> Result.success(result.text)
+            is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+            else -> Result.failure(IllegalStateException("A passkey sign-in request could not be prepared."))
+        }
+    }
+
+    suspend fun submitPasskey(
+        credentialId: String,
+        clientData: String,
+        authenticatorData: ByteArray,
+        signature: ByteArray,
+        userHandle: ByteArray
+    ): Result<Unit> {
+        return sendExpectOk(
+            TdApi.CheckAuthenticationPasskey(
+                credentialId,
+                clientData,
+                authenticatorData,
+                signature,
+                userHandle
+            )
+        )
+    }
+
     suspend fun registerUser(firstName: String, lastName: String): Result<Unit> {
         return sendExpectOk(TdApi.RegisterUser(firstName, lastName, false))
     }
@@ -171,10 +247,6 @@ class TelegramClient(private val application: Application) {
         notificationManager?.clearAllNotifications()
         _authState.value = AuthUiState.LoggingOut
         return sendExpectOk(TdApi.LogOut())
-    }
-
-    fun resetAuthToPhone() {
-        _authState.value = AuthUiState.Phone()
     }
 
     fun chat(chatId: Long): Chat? = _chatList.value.firstOrNull { it.id == chatId.toString() }
@@ -2034,23 +2106,40 @@ class TelegramClient(private val application: Application) {
     }
 
     fun upsertConversation(chatId: Long, incoming: List<Message>, prepend: Boolean) {
+        val normalized = incoming.map { mapped ->
+            rawMessages[mapped.id.toLongOrNull() ?: return@map mapped]
+                ?.takeIf { it.chatId == chatId }
+                ?.let(::mapUiMessage)
+                ?: mapped
+        }
         conversationFlows.getOrPut(chatId) { MutableStateFlow(emptyList()) }.update { current ->
             val byId = LinkedHashMap<String, Message>()
             if (prepend) {
-                incoming.forEach { byId[it.id] = it }
+                normalized.forEach { byId[it.id] = it }
                 current.forEach { byId.putIfAbsent(it.id, it) }
             } else {
                 current.forEach { byId[it.id] = it }
-                incoming.forEach { byId[it.id] = it }
+                normalized.forEach { byId[it.id] = it }
             }
-            byId.values.sortedBy { it.dateSeconds.toLong() * 1_000_000 + (it.id.toLongOrNull() ?: 0L) }
+            byId.mapValues { (id, message) ->
+                val previous = current.firstOrNull { it.id == id }
+                if (message.presentationKey == null && previous?.presentationKey != null) {
+                    message.copy(presentationKey = previous.presentationKey)
+                } else message
+            }.values.sortedBy { it.dateSeconds.toLong() * 1_000_000 + (it.id.toLongOrNull() ?: 0L) }
         }
     }
 
     fun replaceMessage(chatId: Long, oldId: String, newMessage: Message) {
         conversationFlows[chatId]?.update { list ->
+            val old = list.firstOrNull { it.id == oldId }
+            val reconciled = if (newMessage.presentationKey == null && old?.presentationKey != null) {
+                newMessage.copy(presentationKey = old.presentationKey)
+            } else {
+                newMessage
+            }
             val without = list.filterNot { it.id == oldId || it.id == newMessage.id }
-            (without + newMessage).sortedBy { it.dateSeconds.toLong() * 1_000_000 + (it.id.toLongOrNull() ?: 0L) }
+            (without + reconciled).sortedBy { it.dateSeconds.toLong() * 1_000_000 + (it.id.toLongOrNull() ?: 0L) }
         }
     }
 
@@ -2065,6 +2154,11 @@ class TelegramClient(private val application: Application) {
      * its media finishes downloading without another round trip.
      */
     private val rawMessages = ConcurrentHashMap<Long, TdApi.Message>()
+
+    private data class ReplyTarget(val chatId: Long, val messageId: Long)
+
+    private val replyResolutionJobs = ConcurrentHashMap<ReplyTarget, Job>()
+    private val unavailableReplyTargets = ConcurrentHashMap.newKeySet<ReplyTarget>()
 
     /** Supergroup records, which carry the forum flag and member counts. */
     private val supergroups = ConcurrentHashMap<Long, TdApi.Supergroup>()
@@ -2089,18 +2183,18 @@ class TelegramClient(private val application: Application) {
             is TdApi.UpdateCall -> handleCallUpdate(update.call)
             is TdApi.UpdateAuthorizationState -> onAuth(update.authorizationState)
             is TdApi.UpdateConnectionState -> {
+                val previous = _connection.value
+                val next = TelegramMappers.mapConnection(update.state)
                 if (BuildConfig.DEBUG) {
-                    val stateName = when (update.state) {
-                        is TdApi.ConnectionStateWaitingForNetwork -> "WAITING_FOR_NETWORK"
-                        is TdApi.ConnectionStateConnecting -> "CONNECTING"
-                        is TdApi.ConnectionStateConnectingToProxy -> "CONNECTING_TO_PROXY"
-                        is TdApi.ConnectionStateReady -> "READY"
-                        is TdApi.ConnectionStateUpdating -> "UPDATING"
-                        else -> update.state?.javaClass?.simpleName ?: "UNKNOWN"
+                    if (previous != next) {
+                        android.util.Log.d(
+                            TAG,
+                            "CONNECTION_RAW from=${previous.name} to=${next.name} " +
+                                "elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
+                        )
                     }
-                    android.util.Log.d(TAG, "TDLIB_CONNECTION_STATE state=$stateName elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
                 }
-                _connection.value = TelegramMappers.mapConnection(update.state)
+                _connection.value = next
             }
             is TdApi.UpdateChatFolders -> {
                 // Telegram decides where the main list sits among the folders; it is
@@ -2194,6 +2288,7 @@ class TelegramClient(private val application: Application) {
                 requestUserPhoto(update.user)
                 if (update.user.id == myUserId) publishMe()
                 publishChats()
+                refreshAllReplyPreviews()
             }
             is TdApi.UpdateUserStatus -> {
                 users[update.userId]?.let { existing ->
@@ -2207,6 +2302,7 @@ class TelegramClient(private val application: Application) {
                 chats[update.chat.id] = update.chat
                 requestChatPhoto(update.chat)
                 publishChats()
+                refreshAllReplyPreviews()
             }
             is TdApi.UpdateChatLastMessage -> {
                 chats[update.chatId]?.let {
@@ -2220,6 +2316,7 @@ class TelegramClient(private val application: Application) {
             is TdApi.UpdateChatTitle -> {
                 chats[update.chatId]?.title = update.title
                 publishChats()
+                refreshAllReplyPreviews()
             }
             is TdApi.UpdateChatPhoto -> {
                 chats[update.chatId]?.photo = update.photo
@@ -2266,6 +2363,11 @@ class TelegramClient(private val application: Application) {
                 }
                 chats[msg.chatId]?.lastMessage = msg
                 upsertConversation(msg.chatId, listOf(mapUiMessage(msg)), prepend = false)
+                publishMessageEvent(
+                    msg.chatId,
+                    msg.id,
+                    if (msg.isOutgoing) MessageMotionEventType.NEW_OUTGOING else MessageMotionEventType.NEW_INCOMING
+                )
                 publishChats()
             }
             is TdApi.UpdateMessageContent -> {
@@ -2276,7 +2378,19 @@ class TelegramClient(private val application: Application) {
                 val cached = rawMessages[update.messageId]
                 if (cached != null && cached.chatId == update.chatId) {
                     cached.content = update.newContent
-                    replaceMessage(update.chatId, update.messageId.toString(), mapUiMessage(cached))
+                    val mapped = mapUiMessage(cached)
+                    replaceMessage(update.chatId, update.messageId.toString(), mapped)
+                    val type = when (mapped.type) {
+                        MessageType.IMAGE,
+                        MessageType.ALBUM,
+                        MessageType.ANIMATION,
+                        MessageType.VIDEO_NOTE,
+                        MessageType.AUDIO,
+                        MessageType.STICKER,
+                        MessageType.FILE -> MessageMotionEventType.MEDIA_UPDATED
+                        else -> MessageMotionEventType.EDITED
+                    }
+                    publishMessageEvent(update.chatId, update.messageId, type)
                 } else {
                     conversationFlows[update.chatId]?.update { list ->
                         list.map { current ->
@@ -2286,7 +2400,9 @@ class TelegramClient(private val application: Application) {
                             } else current
                         }
                     }
+                    publishMessageEvent(update.chatId, update.messageId, MessageMotionEventType.EDITED)
                 }
+                refreshReplyingMessages(ReplyTarget(update.chatId, update.messageId))
             }
             is TdApi.UpdateMessageInteractionInfo -> {
                 // Reaction counts and the "you reacted" flag, straight from Telegram.
@@ -2299,6 +2415,7 @@ class TelegramClient(private val application: Application) {
                         } else current
                     }
                 }
+                publishMessageEvent(update.chatId, update.messageId, MessageMotionEventType.REACTION_UPDATED)
             }
             is TdApi.UpdateMessageIsPinned -> {
                 rawMessages[update.messageId]?.isPinned = update.isPinned
@@ -2316,18 +2433,36 @@ class TelegramClient(private val application: Application) {
                         if (it.id == update.messageId.toString()) it.copy(isEdited = update.editDate > 0) else it
                     }
                 }
+                publishMessageEvent(update.chatId, update.messageId, MessageMotionEventType.EDITED)
+                refreshReplyingMessages(ReplyTarget(update.chatId, update.messageId))
             }
             is TdApi.UpdateMessageSendSucceeded -> {
                 replaceMessage(update.message.chatId, update.oldMessageId.toString(), mapUiMessage(update.message))
+                publishMessageEvent(update.message.chatId, update.message.id, MessageMotionEventType.SEND_CONFIRMED)
                 chats[update.message.chatId]?.lastMessage = update.message
                 publishChats()
             }
             is TdApi.UpdateMessageSendFailed -> {
                 replaceMessage(update.message.chatId, update.oldMessageId.toString(), mapUiMessage(update.message))
+                publishMessageEvent(update.message.chatId, update.message.id, MessageMotionEventType.FAILED)
             }
             is TdApi.UpdateDeleteMessages -> {
                 if (update.fromCache) return
-                removeMessages(update.chatId, update.messageIds.map { it.toString() }.toSet())
+                update.messageIds.forEach { messageId ->
+                    if (rawMessages[messageId]?.chatId == update.chatId) {
+                        rawMessages.remove(messageId)
+                    }
+                    unavailableReplyTargets.add(ReplyTarget(update.chatId, messageId))
+                    refreshReplyingMessages(ReplyTarget(update.chatId, messageId))
+                }
+                update.messageIds.forEach { publishMessageEvent(update.chatId, it, MessageMotionEventType.DELETED) }
+                // Keep the confirmed row alive for the short exit transition. The
+                // server has already confirmed deletion; this only gives the UI time
+                // to close the space without a visual snap.
+                scope.launch {
+                    delay(ConversationMotion.FAST_MS.toLong() + 80L)
+                    removeMessages(update.chatId, update.messageIds.map { it.toString() }.toSet())
+                }
             }
             is TdApi.UpdateFile -> onFile(update.file)
             is TdApi.UpdateHavePendingNotifications -> {
@@ -2810,13 +2945,16 @@ class TelegramClient(private val application: Application) {
         conversationFlows.forEach { (chatId, flow) ->
             val pending = flow.value.any { it.needsMedia() }
             if (!pending) return@forEach
+            val changedIds = mutableListOf<Long>()
             val remapped = flow.value.map { existing ->
                 if (!existing.needsMedia()) return@map existing
                 val raw = rawMessages[existing.id.toLongOrNull() ?: return@map existing]
                     ?: return@map existing
-                mapUiMessage(raw)
+                changedIds += raw.id
+                mapUiMessage(raw).copy(presentationKey = existing.presentationKey)
             }
             flow.value = remapped
+            changedIds.forEach { publishMessageEvent(chatId, it, MessageMotionEventType.MEDIA_UPDATED) }
         }
     }
 
@@ -3087,25 +3225,72 @@ class TelegramClient(private val application: Application) {
         return null
     }
 
-    private fun replyPreview(message: TdApi.Message): Message? {
+    private fun replyPreview(message: TdApi.Message): ReplyPreview? {
         val reply = message.replyTo as? TdApi.MessageReplyToMessage ?: return null
-        val (text, type) = TelegramMappers.mapContent(reply.content)
-        // A quote replaces the preview text: the point of quoting is that the reply
-        // is about that span, not about the whole message.
-        val quote = reply.quote
-        val quoted = quote?.text?.text?.takeIf { it.isNotBlank() }
-        return Message(
-            id = reply.messageId.toString(),
-            chatId = reply.chatId.toString(),
-            senderId = "",
-            senderName = "Message",
-            text = quoted ?: text.ifBlank { "Message" },
-            timestamp = "",
-            isOutgoing = false,
-            type = type,
-            formatted = quote?.let { TelegramMappers.mapFormattedText(it.text) },
-            isQuotedExcerpt = quoted != null
+        if (reply.messageId == 0L) return null
+        val targetChatId = reply.chatId.takeIf { it != 0L } ?: message.chatId
+        val target = rawMessages[reply.messageId]?.takeIf { it.chatId == targetChatId }
+        val targetKey = ReplyTarget(targetChatId, reply.messageId)
+        if (target == null && targetKey !in unavailableReplyTargets) {
+            requestReplyTarget(targetKey)
+        }
+        return TelegramMappers.mapReplyPreview(
+            reply = reply,
+            target = target,
+            users = users,
+            chats = chats,
+            myUserId = myUserId,
+            fallbackChatId = targetChatId,
+            isResolving = target == null && targetKey !in unavailableReplyTargets,
+            isNavigable = targetChatId == message.chatId
         )
+    }
+
+    /** Fetches each missing reply target at most once for the lifetime of this client. */
+    private fun requestReplyTarget(target: ReplyTarget) {
+        if (target.chatId == 0L || target.messageId == 0L) return
+        if (replyResolutionJobs.containsKey(target)) return
+        val job = scope.launch {
+            val result = send(TdApi.GetMessage(target.chatId, target.messageId))
+            if (result is TdApi.Message) {
+                rawMessages[result.id] = result
+                unavailableReplyTargets.remove(target)
+            } else {
+                unavailableReplyTargets.add(target)
+            }
+            refreshReplyingMessages(target)
+            replyResolutionJobs.remove(target)
+        }
+        replyResolutionJobs.putIfAbsent(target, job)?.let { job.cancel() }
+    }
+
+    /** Re-maps visible parents after a target arrives or is known to be unavailable. */
+    private fun refreshReplyingMessages(target: ReplyTarget) {
+        conversationFlows.forEach { (chatId, flow) ->
+            flow.update { messages ->
+                messages.map { current ->
+                    val parent = rawMessages[current.id.toLongOrNull() ?: return@map current]
+                        ?.takeIf { it.chatId == chatId }
+                    val reply = parent?.replyTo as? TdApi.MessageReplyToMessage
+                    val parentTarget = reply?.let {
+                        ReplyTarget(it.chatId.takeIf { id -> id != 0L } ?: chatId, it.messageId)
+                    }
+                    if (parent != null && parentTarget == target) mapUiMessage(parent) else current
+                }
+            }
+        }
+    }
+
+    private fun refreshAllReplyPreviews() {
+        conversationFlows.forEach { (chatId, flow) ->
+            flow.update { messages ->
+                messages.map { current ->
+                    val raw = rawMessages[current.id.toLongOrNull() ?: return@map current]
+                        ?.takeIf { it.chatId == chatId }
+                    if (raw?.replyTo is TdApi.MessageReplyToMessage) mapUiMessage(raw) else current
+                }
+            }
+        }
     }
 
     private fun refreshConversationStatuses(chatId: Long) {
@@ -3126,6 +3311,10 @@ class TelegramClient(private val application: Application) {
         photoPaths.clear()
         requestedFiles.clear()
         conversationFlows.clear()
+        rawMessages.clear()
+        replyResolutionJobs.values.forEach { it.cancel() }
+        replyResolutionJobs.clear()
+        unavailableReplyTargets.clear()
         myUserId = 0L
         chatsFullyLoaded = false
         _currentUser.value = null

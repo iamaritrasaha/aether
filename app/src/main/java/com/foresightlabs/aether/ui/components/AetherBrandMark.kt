@@ -81,9 +81,9 @@ fun AetherBrandMark(
                 path = orbitPath,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color(0x66FF9A4A),
-                        Color(0x99FF7038),
-                        Color(0x33F04425)
+                        colors.getOrElse(0) { Color.White }.copy(alpha = 0.40f),
+                        colors.getOrElse(1) { Color.White }.copy(alpha = 0.60f),
+                        colors.getOrElse(2) { Color.White }.copy(alpha = 0.20f)
                     ),
                     start = Offset(30f * scaleX, 28f * scaleY),
                     end = Offset(84f * scaleX, 74f * scaleY)
@@ -143,8 +143,8 @@ fun AetherBrandMark(
                 brush = Brush.linearGradient(
                     colors = listOf(
                         Color(0xFFFFFFFF),
-                        Color(0xE6FFD5BA),
-                        Color(0x80FFA07A)
+                        colors.getOrElse(0) { Color.White }.copy(alpha = 0.90f),
+                        colors.getOrElse(1) { Color.White }.copy(alpha = 0.50f)
                     ),
                     start = Offset(42f * scaleX, 50f * scaleY),
                     end = Offset(71f * scaleX, 55f * scaleY)

@@ -80,8 +80,7 @@ import com.foresightlabs.aether.ui.components.AetherSearchPill
 import com.foresightlabs.aether.domain.chats.ChatAction
 import com.foresightlabs.aether.ui.components.ChatActionSheet
 import com.foresightlabs.aether.ui.components.ChatRow
-import com.foresightlabs.aether.ui.design.AetherStatusMote
-import com.foresightlabs.aether.ui.design.AetherStatusMoteState
+import com.foresightlabs.aether.ui.design.AetherConnectionMote
 import com.foresightlabs.aether.ui.design.AetherEmptyState
 import com.foresightlabs.aether.ui.design.LocalSceneHeightCache
 import com.foresightlabs.aether.ui.design.LocalSceneOwnsDock
@@ -527,56 +526,55 @@ private fun HomeHeroControls(
     onSearchQueryChange: (String) -> Unit,
     onNavigateToSettings: () -> Unit
 ) {
-    Row(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
                 start = AetherEmber.Spacing.Space20,
                 end = AetherEmber.Spacing.Space12,
                 top = AetherEmber.Spacing.Space8
-            ),
-        verticalAlignment = Alignment.CenterVertically
+            )
     ) {
-        AetherSearchPill(
-            value = searchQuery,
-            onValueChange = onSearchQueryChange,
-            placeholder = "Search",
-            onAtmosphere = true,
-            height = 40.dp,
-            modifier = Modifier
-                .width(178.dp)
-                .testTag("home_top_search")
-        )
+        val compactMote = maxWidth < 380.dp
+        val reservedMoteWidth = if (compactMote) 96.dp else 132.dp
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AetherSearchPill(
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                placeholder = "Search",
+                onAtmosphere = true,
+                height = 40.dp,
+                modifier = Modifier
+                    .width(178.dp)
+                    .testTag("home_top_search")
+            )
 
-        Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.weight(1f))
 
-        // A tiny ambient reading of Aether's real Telegram connection state —
-        // not a control, and deliberately quiet enough that Search, Settings
-        // and the greeting are what actually register at a glance.
-        AetherStatusMote(
-            state = connection.toAetherMoteState(),
-            modifier = Modifier.testTag("home_status_mote")
-        )
+            // The wrapper reserves the expanded center space, so Search and Settings
+            // do not move when the mote grows into its status capsule. The mote's
+            // visible glyph remains small while its semantic hit area remains 48dp.
+            Box(
+                modifier = Modifier.width(reservedMoteWidth),
+                contentAlignment = Alignment.Center
+            ) {
+                AetherConnectionMote(
+                    rawStatus = connection,
+                    compact = compactMote,
+                    modifier = Modifier.testTag("home_status_mote")
+                )
+            }
 
-        Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.weight(1f))
 
-        HomeSettingsButton(
-            onClick = onNavigateToSettings
-        )
+            HomeSettingsButton(
+                onClick = onNavigateToSettings
+            )
+        }
     }
-}
-
-/**
- * Aether's own connection/sync reading, derived only from TDLib's real
- * [ConnectionStatus] — never simulated. [ConnectionStatus.UNKNOWN] is the gap
- * before TDLib has reported anything yet, which reads the same as offline
- * rather than flashing a color before there is any real signal.
- */
-private fun ConnectionStatus.toAetherMoteState(): AetherStatusMoteState = when (this) {
-    ConnectionStatus.READY -> AetherStatusMoteState.CONNECTED
-    ConnectionStatus.UPDATING -> AetherStatusMoteState.SYNCING
-    ConnectionStatus.CONNECTING, ConnectionStatus.CONNECTING_PROXY -> AetherStatusMoteState.CONNECTING
-    ConnectionStatus.WAITING_FOR_NETWORK, ConnectionStatus.UNKNOWN -> AetherStatusMoteState.OFFLINE
 }
 
 /**

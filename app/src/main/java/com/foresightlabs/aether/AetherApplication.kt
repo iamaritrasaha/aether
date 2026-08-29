@@ -7,6 +7,7 @@ import android.os.Build
 import com.foresightlabs.aether.data.contacts.DefaultContactsRepository
 import com.foresightlabs.aether.data.permissions.PermissionCoordinator
 import com.foresightlabs.aether.data.telegram.TelegramClient
+import com.foresightlabs.aether.data.preferences.OnboardingRepository
 import com.foresightlabs.aether.domain.contacts.ContactsRepository
 
 import coil.ImageLoader
@@ -19,6 +20,9 @@ import com.foresightlabs.aether.domain.calls.CallsRepository
 
 class AetherApplication : Application(), ImageLoaderFactory {
     lateinit var telegram: TelegramClient
+        private set
+
+    lateinit var onboardingRepository: OnboardingRepository
         private set
 
     lateinit var contactsRepository: ContactsRepository
@@ -56,6 +60,9 @@ class AetherApplication : Application(), ImageLoaderFactory {
         super.onCreate()
         permissionCoordinator = PermissionCoordinator(this)
         createNotificationChannels()
+        val legacyInstallation = filesDir.resolve("tdlib").exists() ||
+            filesDir.resolve("tdlib-files").exists()
+        onboardingRepository = OnboardingRepository(this, legacyInstallation)
         telegram = TelegramClient(this)
         notificationManager = com.foresightlabs.aether.data.notifications.AetherNotificationManager(
             context = this,

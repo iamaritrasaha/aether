@@ -13,6 +13,7 @@ import com.foresightlabs.aether.domain.text.AetherText
 import com.foresightlabs.aether.domain.text.ComposerFormatting
 import com.foresightlabs.aether.domain.text.ReplyQuote
 import com.foresightlabs.aether.domain.messages.MessageCapabilities
+import com.foresightlabs.aether.domain.messages.MessageMotionEvent
 import com.foresightlabs.aether.domain.messages.SendOptions
 import com.foresightlabs.aether.domain.search.ConversationSearchState
 import com.foresightlabs.aether.domain.model.Chat
@@ -28,7 +29,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class ConversationViewModel(
@@ -121,6 +124,10 @@ class ConversationViewModel(
     private val _jumpTarget = MutableStateFlow<String?>(null)
     val jumpTarget: StateFlow<String?> = _jumpTarget.asStateFlow()
 
+    /** One-shot server events consumed by visible message rows for motion only. */
+    private val _messageMotionEvents = MutableStateFlow<Map<String, MessageMotionEvent>>(emptyMap())
+    val messageMotionEvents: StateFlow<Map<String, MessageMotionEvent>> = _messageMotionEvents.asStateFlow()
+
     /** Conversations a message may be forwarded into, excluding this one. */
     val forwardTargets: StateFlow<List<Chat>> = telegram.chatList
         .map { chats -> chats.filter { it.id != activeChatId.toString() && it.canSendText } }
@@ -143,6 +150,19 @@ class ConversationViewModel(
                 if (found != null) {
                     _header.value = found
                     _composerEnabled.value = found.canSendText
+                }
+            }
+        }
+        viewModelScope.launch {
+            telegram.messageEvents(activeChatId).collect { event ->
+                _messageMotionEvents.update { current ->
+                    (current + (event.messageId to event)).let { updated ->
+                        if (updated.size <= 80) updated else updated.entries.drop(updated.size - 80).associate { it.key to it.value }
+                    }
+                }
+                delay(1_000)
+                _messageMotionEvents.update { current ->
+                    if (current[event.messageId]?.token == event.token) current - event.messageId else current
                 }
             }
         }

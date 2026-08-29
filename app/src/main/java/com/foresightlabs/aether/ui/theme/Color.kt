@@ -21,6 +21,12 @@ val DarkTextSecondary = Color(0xFFA6A6AC)
 val DarkTextTertiary = Color(0xFF72727A)
 val DarkTextMuted = Color(0xFF55555C)
 
+// Authentication and introduction atmosphere: a cool, quiet foreground over the
+// same graphite base used by the rest of the application.
+val AetherAuthLavender = Color(0xFF747291)
+val AetherAuthMist = Color(0xFFA5A3B7)
+val AetherAuthMoon = Color(0xFFC9C7D8)
+
 // Aether Living Atmosphere Typography (Directly over dynamic gradients)
 val AtmosphereTextPrimary = Color(0xFFFFFFFF)
 val AtmosphereTextSecondary = Color(0xF0FFFFFF)

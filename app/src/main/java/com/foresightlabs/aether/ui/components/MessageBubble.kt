@@ -3,8 +3,16 @@ package com.foresightlabs.aether.ui.components
 import com.foresightlabs.aether.BuildConfig
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,6 +28,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -55,6 +64,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,11 +77,14 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -90,12 +103,17 @@ import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageStatus
 import com.foresightlabs.aether.domain.model.MessageType
 import com.foresightlabs.aether.domain.model.Reaction
+import com.foresightlabs.aether.domain.model.ReplyPreview
+import com.foresightlabs.aether.domain.messages.ConversationMotion
+import com.foresightlabs.aether.domain.messages.MessageMotionEvent
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
@@ -122,14 +140,20 @@ fun MessageBubble(
     /** Non-null only while a multi-selection is running. */
     onSelectToggle: (() -> Unit)? = null,
     onStopLiveLocation: ((Message) -> Unit)? = null,
-    onRetry: ((Message) -> Unit)? = null
+    onRetry: ((Message) -> Unit)? = null,
+    onReplyPreviewClick: (chatId: Long, messageId: Long) -> Unit = { _, _ -> },
+    motionEvent: MessageMotionEvent? = null,
+    reducedMotion: Boolean = false
 ) {
     val coroutineScope = rememberCoroutineScope()
     val colors = LocalAetherColors.current
     val haptic = LocalHapticFeedback.current
     val viewConfiguration = LocalViewConfiguration.current
+    val density = LocalDensity.current
     val offsetX = remember { Animatable(0f) }
+    val entranceProgress = remember { Animatable(1f) }
     var boxCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var replyCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val richTextController = remember(message.id) { AetherRichTextController() }
 
     val replyThreshold = -180f // Drag left to reply
@@ -138,6 +162,26 @@ fun MessageBubble(
     // Light text on dark surfaces: secondary timestamps/metadata use controlled alpha
     // for comfortable contrast without competing with primary text.
     val metaColor = if (isOutgoing) contentColor.copy(alpha = 0.55f) else contentColor.copy(alpha = 0.62f)
+    val entrance = motionEvent?.let { ConversationMotion.entrance(it.type, reducedMotion) }
+
+    LaunchedEffect(motionEvent?.token) {
+        if (entrance != null) {
+            entranceProgress.snapTo(0f)
+            entranceProgress.animateTo(
+                1f,
+                animationSpec = tween(
+                    durationMillis = entrance.durationMs,
+                    easing = FastOutSlowInEasing
+                )
+            )
+        } else if (motionEvent?.type == com.foresightlabs.aether.domain.messages.MessageMotionEventType.DELETED) {
+            entranceProgress.snapTo(1f)
+            entranceProgress.animateTo(0f, tween(ConversationMotion.FAST_MS + 60))
+        } else if (motionEvent != null && ConversationMotion.usesShortChange(motionEvent.type)) {
+            entranceProgress.snapTo(0.94f)
+            entranceProgress.animateTo(1f, tween(ConversationMotion.FAST_MS))
+        }
+    }
 
     val bubbleShape = if (isOutgoing) {
         RoundedCornerShape(
@@ -252,7 +296,19 @@ fun MessageBubble(
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 1.dp)
             .graphicsLayer {
-                alpha = selectionAlpha
+                alpha = selectionAlpha * entranceProgress.value
+                if (motionEvent?.type == com.foresightlabs.aether.domain.messages.MessageMotionEventType.DELETED) {
+                    val deleteScale = 0.97f + (0.03f * entranceProgress.value)
+                    scaleX = deleteScale
+                    scaleY = deleteScale
+                }
+                entrance?.let { spec ->
+                    translationX = with(density) { spec.translationX.dp.toPx() } * (1f - entranceProgress.value)
+                    translationY = with(density) { spec.translationY.dp.toPx() } * (1f - entranceProgress.value)
+                    val scaleDelta = 1f - spec.scale
+                    scaleX = 1f - scaleDelta * (1f - entranceProgress.value)
+                    scaleY = 1f - scaleDelta * (1f - entranceProgress.value)
+                }
                 if (isSelected) {
                     translationY = -1.5f
                 }
@@ -333,6 +389,9 @@ fun MessageBubble(
                 // Main Bubble Container
                 Box(
                     modifier = Modifier
+                        .animateContentSize(
+                            animationSpec = tween(ConversationMotion.STANDARD_MS, easing = FastOutSlowInEasing)
+                        )
                         .clip(bubbleShape)
                         .then(
                             if (isOutgoing) {
@@ -351,7 +410,14 @@ fun MessageBubble(
                         // nothing nested underneath (text, media) installs its own
                         // competing pointerInput, which is what made long-press
                         // selection fire "sometimes" before.
-                        .pointerInput(message.id, isSelectionActive, onSelectToggle) {
+                        .pointerInput(
+                            message.id,
+                            message.replyPreview?.messageId,
+                            message.replyPreview?.isAvailable,
+                            message.replyPreview?.isNavigable,
+                            isSelectionActive,
+                            onSelectToggle
+                        ) {
                             val touchSlop = viewConfiguration.touchSlop
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
@@ -390,7 +456,21 @@ fun MessageBubble(
                                                     )
                                                 }
                                             } else if (!longPressFired) {
-                                                if (onSelectToggle != null) {
+                                                val reply = message.replyPreview
+                                                val replyBounds = if (reply?.isAvailable == true) {
+                                                    val replyCo = replyCoordinates
+                                                    val boxCo = boxCoordinates
+                                                    if (replyCo != null && boxCo != null) {
+                                                        val topLeft = boxCo.localPositionOf(replyCo, Offset.Zero)
+                                                        Rect(
+                                                            topLeft,
+                                                            topLeft + Offset(replyCo.size.width.toFloat(), replyCo.size.height.toFloat())
+                                                        )
+                                                    } else null
+                                                } else null
+                                                if (reply != null && reply.isAvailable && reply.isNavigable && replyBounds?.contains(change.position) == true) {
+                                                    onReplyPreviewClick(reply.chatId, reply.messageId)
+                                                } else if (onSelectToggle != null) {
                                                     onSelectToggle()
                                                 } else {
                                                     var textHandled = false
@@ -466,10 +546,12 @@ fun MessageBubble(
                         }
 
                         // Reply preview quote snippet
-                        if (message.replyToMessage != null) {
+                        if (message.replyPreview != null) {
                             ReplySnippet(
-                                replyMessage = message.replyToMessage,
-                                isOutgoingParent = isOutgoing
+                                preview = message.replyPreview,
+                                isOutgoingParent = isOutgoing,
+                                onActivate = { onReplyPreviewClick(message.replyPreview.chatId, message.replyPreview.messageId) },
+                                onPositioned = { replyCoordinates = it }
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                         }
@@ -613,21 +695,30 @@ fun MessageBubble(
                                 }
                             }
                             else -> {
-                                AetherRichText(
-                                    value = message.richText,
-                                    style = TextStyle(
-                                        fontFamily = ManropeFontFamily,
-                                        fontSize = 13.5.sp,
-                                        lineHeight = 18.sp,
-                                        fontWeight = FontWeight.Medium
-                                    ),
-                                    color = contentColor,
-                                    accentColor = colors.accent,
-                                    spoilerCover = metaColor.copy(alpha = 0.55f),
-                                    codeBackground = contentColor.copy(alpha = 0.10f),
-                                    controller = richTextController,
-                                    onAction = onEntityAction
-                                )
+                                AnimatedContent(
+                                    targetState = message.richText,
+                                    transitionSpec = {
+                                        fadeIn(tween(ConversationMotion.FAST_MS)) togetherWith
+                                            fadeOut(tween(ConversationMotion.FAST_MS))
+                                    },
+                                    label = "message_content_change"
+                                ) { richText ->
+                                    AetherRichText(
+                                        value = richText,
+                                        style = TextStyle(
+                                            fontFamily = ManropeFontFamily,
+                                            fontSize = 13.5.sp,
+                                            lineHeight = 18.sp,
+                                            fontWeight = FontWeight.Medium
+                                        ),
+                                        color = contentColor,
+                                        accentColor = colors.accent,
+                                        spoilerCover = metaColor.copy(alpha = 0.55f),
+                                        codeBackground = contentColor.copy(alpha = 0.10f),
+                                        controller = richTextController,
+                                        onAction = onEntityAction
+                                    )
+                                }
                             }
                         }
 
@@ -660,7 +751,15 @@ fun MessageBubble(
 
                                 if (isOutgoing) {
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    when (message.status) {
+                                    AnimatedContent(
+                                        targetState = message.status,
+                                        transitionSpec = {
+                                            (fadeIn(tween(ConversationMotion.FAST_MS)) + scaleIn(tween(ConversationMotion.FAST_MS), initialScale = 0.86f))
+                                                .togetherWith(fadeOut(tween(ConversationMotion.FAST_MS)) + scaleOut(tween(ConversationMotion.FAST_MS), targetScale = 0.86f))
+                                        },
+                                        label = "message_delivery_status"
+                                    ) { status ->
+                                    when (status) {
                                         MessageStatus.SENDING -> {
                                             Icon(
                                                 imageVector = Icons.Default.Schedule,
@@ -704,6 +803,7 @@ fun MessageBubble(
                                             }
                                         }
                                     }
+                                    }
                                 }
                             }
                         }
@@ -724,6 +824,8 @@ fun MessageBubble(
                             ReactionBadge(
                                 reaction = reaction,
                                 isOutgoing = isOutgoing,
+                                animateIn = motionEvent?.type == com.foresightlabs.aether.domain.messages.MessageMotionEventType.REACTION_UPDATED,
+                                reducedMotion = reducedMotion,
                                 onClick = { onReactionClick(message, reaction.emoji) }
                             )
                         }
@@ -756,8 +858,10 @@ fun MessageBubble(
 
 @Composable
 private fun ReplySnippet(
-    replyMessage: Message,
-    isOutgoingParent: Boolean
+    preview: ReplyPreview,
+    isOutgoingParent: Boolean,
+    onActivate: () -> Unit,
+    onPositioned: (LayoutCoordinates) -> Unit
 ) {
     val colors = LocalAetherColors.current
     val contentColor = if (isOutgoingParent) colors.bubbleOutgoingText else colors.bubbleIncomingText
@@ -767,6 +871,21 @@ private fun ReplySnippet(
         modifier = Modifier
             .widthIn(max = 240.dp)
             .clip(RoundedCornerShape(10.dp))
+            .heightIn(min = 48.dp)
+            .onGloballyPositioned(onPositioned)
+            .semantics(mergeDescendants = true) {
+                contentDescription = if (preview.isAvailable && preview.isNavigable) {
+                    "Reply to ${preview.senderName}: ${preview.text}. Double tap to view original message."
+                } else {
+                    "${preview.senderName}: ${preview.text}"
+                }
+                if (preview.isAvailable && preview.isNavigable) {
+                    onClick(label = "View original message") {
+                    onActivate()
+                        true
+                    }
+                }
+            }
             // Tinted from the parent bubble's own ink rather than a fixed dark
             // surface token — a solid near-black card here is what read as an
             // opaque rectangle fighting a light incoming bubble.
@@ -785,14 +904,14 @@ private fun ReplySnippet(
 
         Column {
             Text(
-                text = replyMessage.senderName,
+                text = preview.senderName,
                 fontFamily = ManropeFontFamily,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = barColor
             )
             Text(
-                text = replyMessage.text.ifEmpty { "Attachment" },
+                text = preview.text,
                 fontFamily = ManropeFontFamily,
                 fontSize = 12.sp,
                 maxLines = 1,
@@ -1073,14 +1192,28 @@ private fun LinkPreviewCard(
 private fun ReactionBadge(
     reaction: Reaction,
     isOutgoing: Boolean,
+    animateIn: Boolean = false,
+    reducedMotion: Boolean = false,
     onClick: () -> Unit
 ) {
     val colors = LocalAetherColors.current
     val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
     val bg = if (reaction.userReacted) colors.accent else colors.bubbleIncoming
+    val badgeScale = remember { Animatable(1f) }
+
+    LaunchedEffect(reaction.emoji, reaction.count, animateIn) {
+        if (animateIn && !reducedMotion) {
+            badgeScale.snapTo(0.88f)
+            badgeScale.animateTo(1.04f, tween(ConversationMotion.FAST_MS))
+            badgeScale.animateTo(1f, tween(ConversationMotion.FAST_MS))
+        } else {
+            badgeScale.snapTo(1f)
+        }
+    }
 
     Row(
         modifier = Modifier
+            .scale(badgeScale.value)
             .clip(CircleShape)
             .background(bg)
             .clickable { onClick() }

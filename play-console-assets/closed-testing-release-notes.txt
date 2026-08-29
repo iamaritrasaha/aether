@@ -1,10 +1,9 @@
-Initial closed testing release of Aether.
+Aether 1.5.0 — A more fluid way to connect.
 
-• People-first Telegram conversations powered by TDLib
-• Living time and weather atmospheres
-• Light, Ember Dark and OLED appearance modes
-• Persistent global and per-chat appearance
-• Modern conversation, profile and contacts experiences
-• Frosted floating navigation and headers
-
-This is a testing build. Notification delivery and notification permission handling are still under development.
+• New first-run onboarding experience
+• Refined Telegram sign-in experience
+• Improved replies with real message previews and jump-to-original
+• Smoother Conversation and message-send motion
+• Refined connection status experience
+• Further media, profile and messaging improvements
+• Stability and interface refinements

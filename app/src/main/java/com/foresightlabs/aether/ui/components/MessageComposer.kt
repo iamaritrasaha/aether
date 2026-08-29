@@ -7,6 +7,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
@@ -77,6 +79,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,6 +98,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.CameraAlt
@@ -109,12 +113,15 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextAlign
 import com.foresightlabs.aether.domain.model.Message
+import com.foresightlabs.aether.domain.messages.ConversationMotion
 import com.foresightlabs.aether.ui.design.AetherAccent
 import com.foresightlabs.aether.ui.design.AetherGlass
 import com.foresightlabs.aether.ui.design.AetherIconButton
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private data class AttachmentOptionItem(
     val label: String,
@@ -297,6 +304,8 @@ fun MessageComposer(
     // Held as a TextFieldValue so the selection is available for formatting.
     var field by remember { mutableStateOf(TextFieldValue("")) }
     var formatting by remember { mutableStateOf<List<AetherEntity>>(emptyList()) }
+    var sendingTransition by remember { mutableStateOf(false) }
+    val composerScope = rememberCoroutineScope()
 
     LaunchedEffect(editingMessage?.id) {
         if (editingMessage != null) {
@@ -318,6 +327,11 @@ fun MessageComposer(
     }
     val colors = LocalAetherColors.current
     val hasText = text.isNotBlank()
+    val composerTextAlpha by animateFloatAsState(
+        targetValue = if (sendingTransition) 0f else 1f,
+        animationSpec = tween(ConversationMotion.COMPOSER_TEXT_FADE_MS),
+        label = "composer_send_text_fade"
+    )
     val fieldShape = RoundedCornerShape(ComposerRadius)
     // A recessed control: a shade off the dock behind it, and nothing else.
     val fieldFill = Color(0xFF17171C)
@@ -342,6 +356,9 @@ fun MessageComposer(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .animateContentSize(
+                animationSpec = tween(ConversationMotion.STANDARD_MS, easing = FastOutSlowInEasing)
+            )
             .testTag("message_composer")
             // The footer owns the gesture inset; the input sits just above it.
             .navigationBarsPadding()
@@ -423,6 +440,9 @@ fun MessageComposer(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .animateContentSize(
+                    animationSpec = tween(ConversationMotion.STANDARD_MS, easing = FastOutSlowInEasing)
+                )
                 .clip(fieldShape)
                 .background(fieldFill)
         ) {
@@ -434,8 +454,8 @@ fun MessageComposer(
                 // Integrated Edit & Reply Strip (Inside the continuous dark composer dock)
                 AnimatedVisibility(
                     visible = editingMessage != null || replyingTo != null,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
+                    enter = expandVertically(tween(ConversationMotion.STANDARD_MS)) + fadeIn(tween(ConversationMotion.FAST_MS)),
+                    exit = shrinkVertically(tween(ConversationMotion.STANDARD_MS)) + fadeOut(tween(ConversationMotion.FAST_MS))
                 ) {
                     if (editingMessage != null) {
                         val editMsg = editingMessage
@@ -673,6 +693,7 @@ fun MessageComposer(
                                     maxLines = 5,
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .graphicsLayer { alpha = composerTextAlpha }
                                         .onFocusChanged {
                                             if (it.isFocused && effectiveDockMode.isExpanded) {
                                                 onInputFocus()
@@ -711,11 +732,11 @@ fun MessageComposer(
                             AnimatedContent(
                                 targetState = actionState,
                                 transitionSpec = {
-                                    (fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)) +
-                                            expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMedium)))
+                                    (fadeIn(tween(ConversationMotion.FAST_MS)) +
+                                            scaleIn(tween(ConversationMotion.FAST_MS), initialScale = 0.9f))
                                         .togetherWith(
-                                            fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMedium)) +
-                                                    shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMedium))
+                                            fadeOut(tween(ConversationMotion.FAST_MS)) +
+                                                    scaleOut(tween(ConversationMotion.FAST_MS), targetScale = 0.9f)
                                         )
                                 },
                                 label = "composer_action_morph"
@@ -755,9 +776,14 @@ fun MessageComposer(
                                                 .background(AetherAccent.actionBrush)
                                                 .clickable(enabled = enabled) {
                                                     if (text.isNotBlank() && enabled) {
+                                                        sendingTransition = true
                                                         onSendMessage(text.trimEnd(), formatting)
-                                                        field = TextFieldValue("")
-                                                        formatting = emptyList()
+                                                        composerScope.launch {
+                                                            delay(ConversationMotion.COMPOSER_TEXT_FADE_MS.toLong())
+                                                            field = TextFieldValue("")
+                                                            formatting = emptyList()
+                                                            sendingTransition = false
+                                                        }
                                                     }
                                                 }
                                                 .testTag("send_message_button"),

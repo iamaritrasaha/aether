@@ -215,7 +215,12 @@ class ConversationScreenshotTest {
                 timestamp = "10:32 AM",
                 isOutgoing = true,
                 status = MessageStatus.READ,
-                replyToMessage = replyTarget,
+                replyPreview = com.foresightlabs.aether.domain.model.ReplyPreview(
+                    chatId = 103L,
+                    messageId = 1L,
+                    senderName = replyTarget.senderName,
+                    text = replyTarget.text
+                ),
                 reactions = listOf(Reaction("🔥", 1, true))
             ),
             Message(

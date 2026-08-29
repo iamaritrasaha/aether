@@ -10,8 +10,12 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.foresightlabs.aether.domain.model.ConnectionStatus
@@ -31,9 +35,9 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * The status mote replaces the earlier, oversized connection orb — it must
- * stay genuinely tiny (no 30dp lens pretending to be a control) and sit
- * quietly between Search and Settings rather than competing with either,
- * while its semantics keep tracking the real [ConnectionStatus] driving it.
+ * keep a tiny visible glyph while exposing a real accessible touch target,
+ * sit quietly between Search and Settings, and keep semantics tied to the
+ * real [ConnectionStatus] driving it.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -77,6 +81,7 @@ class HomeStatusMoteTest {
         setUpContent()
         val search = boundsOf("home_top_search")
         val mote = boundsOf("home_status_mote")
+        val visibleMote = boundsOf("connection_mote_visual")
         val settings = boundsOf("home_settings_button")
 
         assertTrue(
@@ -90,12 +95,17 @@ class HomeStatusMoteTest {
             mote.right <= settings.left + 1f
         )
         val density = composeRule.density
-        val maxAllowedPx = with(density) { Dp(20f).toPx() }
+        val minTouchPx = with(density) { Dp(48f).toPx() }
         assertTrue(
-            "The mote measured ${mote.width}px wide — it must stay a tiny " +
-                "ambient point of light, not a 30dp lens or 48dp control " +
-                "(cap is ${maxAllowedPx}px)",
-            mote.width <= maxAllowedPx
+            "The mote hit area measured ${mote.width}x${mote.height}px — " +
+                "it must remain accessible",
+            mote.width >= minTouchPx && mote.height >= minTouchPx
+        )
+        val maxVisiblePx = with(density) { Dp(20f).toPx() }
+        assertTrue(
+            "The visible mote measured ${visibleMote.width}px wide — it must " +
+                "remain a tiny ambient point",
+            visibleMote.width <= maxVisiblePx
         )
     }
 
@@ -128,10 +138,28 @@ class HomeStatusMoteTest {
     }
 
     @Test
-    fun unresolvedConnectionReadsAsOfflineRatherThanFlashingAColor() {
+    fun unresolvedConnectionReadsAsStartingRatherThanOffline() {
         connection.value = ConnectionStatus.UNKNOWN
         setUpContent()
-        assertMoteDescribed("Offline")
+        assertMoteDescribed("Starting connection")
+    }
+
+    @Test
+    fun tappingConnectedMoteRevealsItsStatusWithoutChangingHomeControls() {
+        connection.value = ConnectionStatus.READY
+        setUpContent()
+
+        composeRule.onAllNodesWithTag("connection_mote_surface", useUnmergedTree = true)
+            .assertCountEquals(0)
+
+        composeRule.onNodeWithTag("home_status_mote", useUnmergedTree = true)
+            .performClick()
+
+        composeRule.onNodeWithTag("connection_mote_surface", useUnmergedTree = true)
+            .assertExists()
+        composeRule.onNodeWithText("Connected", useUnmergedTree = true).assertExists()
+        boundsOf("home_top_search")
+        boundsOf("home_settings_button")
     }
 
     // --- helpers ---------------------------------------------------------

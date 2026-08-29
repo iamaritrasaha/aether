@@ -8,6 +8,7 @@ import com.foresightlabs.aether.domain.model.ChatType
 import com.foresightlabs.aether.domain.model.ConnectionStatus
 import com.foresightlabs.aether.domain.model.MediaItem
 import com.foresightlabs.aether.domain.model.Reaction
+import com.foresightlabs.aether.domain.model.ReplyPreview
 import com.foresightlabs.aether.domain.model.PollChoice
 import com.foresightlabs.aether.domain.model.PollKind
 import com.foresightlabs.aether.domain.model.PollPresentation
@@ -42,28 +43,38 @@ object TelegramMappers {
             is TdApi.AuthorizationStateWaitCode -> AuthUiState.Code(
                 phoneNumber = state.codeInfo?.phoneNumber.orEmpty(),
                 codeLength = codeLength(state.codeInfo?.type),
-                hint = codeHint(state.codeInfo)
+                hint = codeHint(state.codeInfo),
+                isNumeric = codeIsNumeric(state.codeInfo?.type)
             )
             is TdApi.AuthorizationStateWaitPassword -> AuthUiState.Password(
-                hint = state.passwordHint?.takeIf { it.isNotBlank() }
+                hint = state.passwordHint?.takeIf { it.isNotBlank() },
+                hasRecoveryEmailAddress = state.hasRecoveryEmailAddress,
+                recoveryEmailAddressPattern = state.recoveryEmailAddressPattern
+            )
+            is TdApi.AuthorizationStateWaitEmailAddress -> AuthUiState.EmailAddress(
+                allowAppleId = state.allowAppleId,
+                allowGoogleId = state.allowGoogleId
+            )
+            is TdApi.AuthorizationStateWaitEmailCode -> AuthUiState.EmailCode(
+                addressPattern = state.codeInfo?.emailAddressPattern.orEmpty(),
+                codeLength = state.codeInfo?.length?.takeIf { it > 0 },
+                canReset = state.emailAddressResetState is TdApi.EmailAddressResetStateAvailable,
+                resetWaitSeconds = (state.emailAddressResetState as? TdApi.EmailAddressResetStatePending)?.resetIn
             )
             is TdApi.AuthorizationStateWaitRegistration -> AuthUiState.Registration(
                 termsOfServiceText = state.termsOfService?.text?.text,
-                minAge = state.termsOfService?.minUserAge ?: 0
+                minAge = state.termsOfService?.minUserAge ?: 0,
+                showPopup = state.termsOfService?.showPopup == true
             )
             is TdApi.AuthorizationStateWaitOtherDeviceConfirmation ->
                 AuthUiState.OtherDevice(state.link.orEmpty())
-            is TdApi.AuthorizationStateWaitEmailAddress ->
-                AuthUiState.Unsupported("Telegram asked for an email address. That step isn't in this Aether build yet.")
-            is TdApi.AuthorizationStateWaitEmailCode ->
-                AuthUiState.Unsupported("Telegram sent an email code. That step isn't in this Aether build yet.")
             is TdApi.AuthorizationStateWaitPremiumPurchase ->
                 AuthUiState.Unsupported("Telegram requires a Premium purchase to continue on this account.")
             is TdApi.AuthorizationStateReady -> AuthUiState.Ready
             is TdApi.AuthorizationStateLoggingOut -> AuthUiState.LoggingOut
             is TdApi.AuthorizationStateClosing -> AuthUiState.Closing
             is TdApi.AuthorizationStateClosed -> AuthUiState.Phone()
-            else -> AuthUiState.Unsupported("Telegram reported authorization state ${state.javaClass.simpleName}.")
+            else -> AuthUiState.Unsupported("Aether can't complete this sign-in method yet.")
         }
     }
 
@@ -254,7 +265,7 @@ object TelegramMappers {
         chats: Map<Long, TdApi.Chat>,
         myUserId: Long,
         lastReadOutboxMessageId: Long,
-        reply: Message? = null,
+        reply: ReplyPreview? = null,
         resolvePath: (TdApi.File?) -> String? = { localPath(it) },
         isDownloadFailed: (Int) -> Boolean = { false }
     ): Message {
@@ -278,7 +289,7 @@ object TelegramMappers {
             status = mapMessageStatus(message, lastReadOutboxMessageId),
             isEdited = message.editDate > 0,
             type = type,
-            replyToMessage = reply,
+            replyPreview = reply,
             forwardedFrom = forwardOrigin(message.forwardInfo, users, chats),
             mediaItems = presentation.mediaItems,
             fileName = presentation.fileName,
@@ -304,6 +315,122 @@ object TelegramMappers {
                 else -> "webp"
             }
         )
+    }
+
+    /**
+     * Creates the small, stable reply presentation from TDLib's reply metadata and,
+     * when available, the actual referenced message. The target ids are retained even
+     * when the target content is not present locally so the conversation can resolve it
+     * asynchronously and the UI can jump to the right message later.
+     */
+    fun mapReplyPreview(
+        reply: TdApi.MessageReplyToMessage,
+        target: TdApi.Message?,
+        users: Map<Long, TdApi.User>,
+        chats: Map<Long, TdApi.Chat>,
+        myUserId: Long,
+        fallbackChatId: Long = 0L,
+        isResolving: Boolean = false,
+        isNavigable: Boolean = true
+    ): ReplyPreview {
+        val targetChatId = reply.chatId.takeIf { it != 0L } ?: target?.chatId ?: fallbackChatId
+        val content = target?.content ?: reply.content
+        val quoted = reply.quote?.text?.text?.takeIf { it.isNotBlank() }
+        val resolvedText = quoted ?: replyContentText(content)
+        val available = target != null || content != null
+        val sender = target?.let {
+            messageSenderName(it.senderId, users, chats, it.isOutgoing, myUserId)
+        } ?: originSenderName(reply.origin, users, chats)
+        return ReplyPreview(
+            chatId = targetChatId,
+            messageId = reply.messageId,
+            senderName = sender,
+            text = resolvedText.ifBlank {
+                if (isResolving) "Loading original message…" else "Original message unavailable"
+            },
+            type = replyContentType(content),
+            isQuotedExcerpt = quoted != null,
+            isAvailable = available,
+            isResolving = isResolving && !available,
+            isNavigable = isNavigable
+        )
+    }
+
+    private fun replyContentText(content: TdApi.MessageContent?): String {
+        return when (content) {
+            is TdApi.MessageText -> content.text?.text.orEmpty()
+            is TdApi.MessagePhoto -> content.caption?.text.orEmpty().ifBlank { "Photo" }
+            is TdApi.MessageVideo -> content.caption?.text.orEmpty().ifBlank { "Video" }
+            is TdApi.MessageVoiceNote -> "Voice message"
+            is TdApi.MessageAudio -> {
+                content.caption?.text.orEmpty().ifBlank {
+                    listOfNotNull(
+                        content.audio?.performer?.takeIf { it.isNotBlank() },
+                        content.audio?.title?.takeIf { it.isNotBlank() }
+                    ).joinToString(" — ").ifBlank { "Audio" }
+                }
+            }
+            is TdApi.MessageDocument -> content.caption?.text.orEmpty().ifBlank {
+                content.document?.fileName?.takeIf { it.isNotBlank() } ?: "File"
+            }
+            is TdApi.MessageSticker -> content.sticker?.emoji?.takeIf { it.isNotBlank() }?.let { "Sticker $it" } ?: "Sticker"
+            is TdApi.MessageAnimation -> content.caption?.text.orEmpty().ifBlank { "GIF" }
+            is TdApi.MessageVideoNote -> "Video message"
+            is TdApi.MessageContact -> "Contact"
+            is TdApi.MessageLocation -> "Location"
+            is TdApi.MessageVenue -> "Venue"
+            is TdApi.MessagePoll -> content.poll?.question?.text.orEmpty().ifBlank { "Poll" }
+            else -> mapContent(content).first
+        }
+    }
+
+    private fun replyContentType(content: TdApi.MessageContent?): MessageType {
+        return when (content) {
+            is TdApi.MessagePhoto, is TdApi.MessageVideo -> MessageType.IMAGE
+            is TdApi.MessageVoiceNote -> MessageType.VOICE
+            is TdApi.MessageAudio -> MessageType.AUDIO
+            is TdApi.MessageDocument -> MessageType.FILE
+            is TdApi.MessageSticker -> MessageType.STICKER
+            is TdApi.MessageAnimation -> MessageType.ANIMATION
+            is TdApi.MessageVideoNote -> MessageType.VIDEO_NOTE
+            is TdApi.MessageContact -> MessageType.CONTACT
+            is TdApi.MessageLocation -> MessageType.LOCATION
+            is TdApi.MessageVenue -> MessageType.VENUE
+            is TdApi.MessagePoll -> MessageType.POLL
+            else -> mapContent(content).second
+        }
+    }
+
+    private fun messageSenderName(
+        sender: TdApi.MessageSender?,
+        users: Map<Long, TdApi.User>,
+        chats: Map<Long, TdApi.Chat>,
+        outgoing: Boolean,
+        myUserId: Long
+    ): String {
+        if (outgoing || (sender as? TdApi.MessageSenderUser)?.userId == myUserId && myUserId != 0L) return "You"
+        return when (sender) {
+            is TdApi.MessageSenderUser -> users[sender.userId]?.let { user ->
+                listOf(user.firstName, user.lastName).filter { !it.isNullOrBlank() }.joinToString(" ")
+            }?.ifBlank { null } ?: "Unknown sender"
+            is TdApi.MessageSenderChat -> chats[sender.chatId]?.title?.takeIf { it.isNotBlank() } ?: "Unknown sender"
+            else -> "Unknown sender"
+        }
+    }
+
+    private fun originSenderName(
+        origin: TdApi.MessageOrigin?,
+        users: Map<Long, TdApi.User>,
+        chats: Map<Long, TdApi.Chat>
+    ): String {
+        return when (origin) {
+            is TdApi.MessageOriginUser -> users[origin.senderUserId]?.let { user ->
+                listOf(user.firstName, user.lastName).filter { !it.isNullOrBlank() }.joinToString(" ")
+            }?.ifBlank { null } ?: "Unknown sender"
+            is TdApi.MessageOriginChat -> chats[origin.senderChatId]?.title?.takeIf { it.isNotBlank() } ?: "Unknown sender"
+            is TdApi.MessageOriginHiddenUser -> origin.senderName.takeIf { it.isNotBlank() } ?: "Unknown sender"
+            else -> "Unknown sender"
+        }
     }
 
 
@@ -876,6 +1003,12 @@ object TelegramMappers {
         }.takeIf { it != null && it > 0 }
     }
 
+    private fun codeIsNumeric(type: TdApi.AuthenticationCodeType?): Boolean = when (type) {
+        is TdApi.AuthenticationCodeTypeSmsWord,
+        is TdApi.AuthenticationCodeTypeSmsPhrase -> false
+        else -> true
+    }
+
     /**
      * Telegram's tiny embedded JPEG preview (a few dozen bytes), carried on the
      * message itself rather than downloaded, so it is available the instant
@@ -930,17 +1063,28 @@ object TelegramMappers {
         val type = info?.type ?: return "Enter the verification code from Telegram."
         return when (type) {
             is TdApi.AuthenticationCodeTypeTelegramMessage ->
-                "Telegram sent a code in the Telegram app."
+                "Check Telegram on your other device."
             is TdApi.AuthenticationCodeTypeSms ->
-                "Telegram sent an SMS code."
+                "We sent an SMS to ${maskedPhone(info.phoneNumber)}."
+            is TdApi.AuthenticationCodeTypeSmsWord ->
+                "Telegram sent a word by SMS to ${maskedPhone(info.phoneNumber)}."
+            is TdApi.AuthenticationCodeTypeSmsPhrase ->
+                "Telegram sent a phrase by SMS to ${maskedPhone(info.phoneNumber)}."
             is TdApi.AuthenticationCodeTypeCall ->
-                "Telegram will call with a code."
+                "Telegram will call ${maskedPhone(info.phoneNumber)} with a code."
             is TdApi.AuthenticationCodeTypeMissedCall ->
-                "Telegram will miss-call you with a code."
+                "Telegram will call ${maskedPhone(info.phoneNumber)} and hang up."
+            is TdApi.AuthenticationCodeTypeFlashCall ->
+                "Telegram will call ${maskedPhone(info.phoneNumber)} to verify this number."
             is TdApi.AuthenticationCodeTypeFragment ->
                 "Enter the code from Fragment."
             else -> "Enter the verification code from Telegram."
         }
+    }
+
+    private fun maskedPhone(phone: String?): String {
+        val digits = phone.orEmpty().filter(Char::isDigit)
+        return if (digits.length >= 2) "•••• ${digits.takeLast(2)}" else "your phone"
     }
 
     fun draftText(draft: TdApi.DraftMessage?): String? {

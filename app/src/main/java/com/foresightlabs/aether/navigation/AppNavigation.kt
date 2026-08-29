@@ -63,6 +63,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import com.foresightlabs.aether.ui.calls.CallsViewModel
 import com.foresightlabs.aether.ui.screens.AppearanceScreen
 import com.foresightlabs.aether.ui.screens.AuthScreen
+import com.foresightlabs.aether.ui.screens.OnboardingScreen
 import com.foresightlabs.aether.ui.screens.CallsScreen
 import com.foresightlabs.aether.ui.screens.ChatAppearanceScreen
 import com.foresightlabs.aether.ui.screens.ContactsScreen
@@ -115,6 +116,19 @@ fun AetherApp(
     val authState by authViewModel.authState.collectAsStateWithLifecycle()
     val busy by authViewModel.busy.collectAsStateWithLifecycle()
     val error by authViewModel.error.collectAsStateWithLifecycle()
+    val onboardingCompleted by authViewModel.onboardingCompleted.collectAsStateWithLifecycle(
+        initialValue = (LocalContext.current.applicationContext as AetherApplication)
+            .onboardingRepository.initialCompleted
+    )
+
+    androidx.compose.runtime.LaunchedEffect(authState) {
+        if (authState is AuthUiState.Ready) authViewModel.markOnboardingCompleted()
+    }
+
+    if (!onboardingCompleted && authState !is AuthUiState.Ready) {
+        OnboardingScreen(onComplete = authViewModel::markOnboardingCompleted)
+        return
+    }
 
     if (authState !is AuthUiState.Ready) {
         AuthScreen(
@@ -125,7 +139,14 @@ fun AetherApp(
             onSubmitCode = authViewModel::submitCode,
             onSubmitPassword = authViewModel::submitPassword,
             onRegister = authViewModel::register,
-            onResendCode = authViewModel::resendCode
+            onResendCode = authViewModel::resendCode,
+            onRequestQrCode = authViewModel::requestQrCodeAuthentication,
+            onSubmitEmailAddress = authViewModel::submitEmailAddress,
+            onSubmitEmailCode = authViewModel::submitEmailCode,
+            onResetEmailAddress = authViewModel::resetEmailAddress,
+            onRequestPasswordRecovery = authViewModel::requestPasswordRecovery,
+            onUsePasskey = authViewModel::usePasskey,
+            passwordRecoveryRequested = authViewModel.passwordRecoveryRequested.collectAsStateWithLifecycle().value
         )
         return
     }
@@ -693,6 +714,7 @@ private fun ConversationRoute(
     val forwardTargets by viewModel.forwardTargets.collectAsStateWithLifecycle()
     val searchState by viewModel.search.collectAsStateWithLifecycle()
     val jumpTarget by viewModel.jumpTarget.collectAsStateWithLifecycle()
+    val messageMotionEvents by viewModel.messageMotionEvents.collectAsStateWithLifecycle()
     val pinnedMessages by viewModel.pinnedMessages.collectAsStateWithLifecycle()
     val installedStickerSets by viewModel.installedStickerSets.collectAsStateWithLifecycle()
     val recentStickers by viewModel.recentStickers.collectAsStateWithLifecycle()
@@ -814,11 +836,15 @@ private fun ConversationRoute(
             },
             pinnedFromServer = pinnedMessages,
             onJumpToMessage = viewModel::jumpTo,
+            onReplyPreviewClick = { replyChatId, replyMessageId ->
+                if (replyChatId == targetChatId) viewModel.jumpTo(replyMessageId.toString())
+            },
             onUnpinMessage = viewModel::unpinMessage,
             // Unpinning is offered only where Telegram says the account may pin.
             canUnpin = messageCapabilities.values.any { it.canBePinned },
             jumpTarget = jumpTarget,
             onJumpConsumed = viewModel::consumeJumpTarget,
+            messageMotionEvents = messageMotionEvents,
             onRequestMediaDownload = { fileId, isRetry ->
                 if (isRetry) viewModel.retryMediaDownload(fileId) else viewModel.requestFullMediaDownload(fileId)
             }

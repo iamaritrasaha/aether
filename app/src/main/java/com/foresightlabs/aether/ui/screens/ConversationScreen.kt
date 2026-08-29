@@ -107,6 +107,7 @@ import com.foresightlabs.aether.ui.components.VideoNoteRecorderSheet
 import androidx.compose.material.icons.filled.Schedule
 import com.foresightlabs.aether.ui.components.LocationShareSheet
 import android.content.Intent
+import android.provider.Settings
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -139,6 +140,8 @@ import androidx.compose.material3.ripple
 import com.foresightlabs.aether.domain.text.EntityAction
 import com.foresightlabs.aether.domain.messages.MessageAction
 import com.foresightlabs.aether.domain.messages.MessageCapabilities
+import com.foresightlabs.aether.domain.messages.MessageMotionEvent
+import com.foresightlabs.aether.domain.messages.ConversationMotion
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageType
 import com.foresightlabs.aether.ui.components.AetherAtmosphericBackground
@@ -176,6 +179,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import java.io.File
 import java.io.FileOutputStream
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ConversationScreen(
     chat: Chat?,
@@ -235,12 +239,14 @@ fun ConversationScreen(
     /** Pinned messages Telegram reports for this chat, beyond those loaded. */
     pinnedFromServer: List<Message> = emptyList(),
     onJumpToMessage: (String) -> Unit = {},
+    onReplyPreviewClick: (chatId: Long, messageId: Long) -> Unit = { _, _ -> },
     onUnpinMessage: (Message) -> Unit = {},
     canUnpin: Boolean = false,
     jumpTarget: String? = null,
     onJumpConsumed: () -> Unit = {},
     /** fileId, isRetry -- called when the media viewer opens on a file TDLib hasn't finished fetching. */
     onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
+    messageMotionEvents: Map<String, MessageMotionEvent> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -250,6 +256,13 @@ fun ConversationScreen(
     val atmosphere = LocalAtmosphere.current
     val frostState = rememberAetherFrostState()
     val colors = LocalAetherColors.current
+    val reducedMotion = remember {
+        Settings.Global.getFloat(
+            context.contentResolver,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f
+        ) == 0f
+    }
 
     var replyingToMessage by remember { mutableStateOf<Message?>(null) }
     var editingMessage by remember { mutableStateOf<Message?>(null) }
@@ -291,7 +304,10 @@ fun ConversationScreen(
         if (entryIndex < 0) return@LaunchedEffect
         val index = entryIndex + 1
         highlightedMessageId = target
-        runCatching { listState.animateScrollToItem(index) }
+        // Leave the target in the upper-middle of the conversation rather than
+        // placing it flush beneath the fixed frosted header.
+        val comfortableOffset = -(listState.layoutInfo.viewportSize.height / 4).coerceAtLeast(96)
+        runCatching { listState.animateScrollToItem(index, comfortableOffset) }
         onJumpConsumed()
         delay(1_600)
         if (highlightedMessageId == target) highlightedMessageId = null
@@ -408,9 +424,19 @@ fun ConversationScreen(
         }
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    var hasSettledInitialPosition by remember { mutableStateOf(false) }
+    LaunchedEffect(entries.size) {
+        if (entries.isEmpty()) return@LaunchedEffect
+        val lastIndex = entries.size
+        if (!hasSettledInitialPosition) {
+            listState.scrollToItem(lastIndex)
+            hasSettledInitialPosition = true
+            return@LaunchedEffect
+        }
+        val visible = listState.layoutInfo.visibleItemsInfo
+        val nearLatest = visible.any { it.index >= lastIndex - 2 }
+        if (nearLatest) {
+            listState.animateScrollToItem(lastIndex)
         }
     }
     LaunchedEffect(listState) {
@@ -866,6 +892,7 @@ fun ConversationScreen(
 
             // Message Bubbles, with grouped media collapsed into one cluster.
             items(entries, key = { it.key }) { entry ->
+                val rowMotion = messageMotionEvents[entry.anchor.id]
                 if (entry is ConversationEntry.Album) {
                     AlbumEntryRow(
                         album = entry,
@@ -877,13 +904,19 @@ fun ConversationScreen(
                         onMediaClick = { media ->
                             selectedMediaItem = media
                             isMediaViewerVisible = true
-                        }
+                        },
+                        modifier = Modifier.animateItem(
+                            fadeInSpec = null,
+                            fadeOutSpec = null,
+                            placementSpec = tween(ConversationMotion.STANDARD_MS)
+                        )
                     )
                     return@items
                 }
                 val msg = entry.anchor
                 MessageBubble(
                     message = msg,
+                    motionEvent = rowMotion,
                     onSwipeToReply = { replyTarget ->
                         replyingToMessage = replyTarget
                     },
@@ -913,7 +946,14 @@ fun ConversationScreen(
                     isHighlighted = msg.id == highlightedMessageId,
                     onPollVote = onPollVote,
                     onStopLiveLocation = onStopLiveLocation,
-                    onRetry = onRetryMessage
+                    onRetry = onRetryMessage,
+                    onReplyPreviewClick = onReplyPreviewClick,
+                    reducedMotion = reducedMotion,
+                    modifier = Modifier.animateItem(
+                        fadeInSpec = null,
+                        fadeOutSpec = null,
+                        placementSpec = tween(ConversationMotion.STANDARD_MS)
+                    )
                 )
                 } // items
             } // LazyColumn
@@ -1363,14 +1403,15 @@ private fun ForwardOptionRow(
 private fun AlbumEntryRow(
     album: ConversationEntry.Album,
     onLongPress: () -> Unit,
-    onMediaClick: (MediaItem) -> Unit
+    onMediaClick: (MediaItem) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val colors = LocalAetherColors.current
     val isOutgoing = album.anchor.isOutgoing
     val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 2.dp),
         horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start

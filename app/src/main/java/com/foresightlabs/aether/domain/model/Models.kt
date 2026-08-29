@@ -180,6 +180,19 @@ data class MediaItem(
 )
 
 @Immutable
+data class ReplyPreview(
+    val chatId: Long,
+    val messageId: Long,
+    val senderName: String,
+    val text: String,
+    val type: MessageType = MessageType.TEXT,
+    val isQuotedExcerpt: Boolean = false,
+    val isAvailable: Boolean = true,
+    val isResolving: Boolean = false,
+    val isNavigable: Boolean = true
+)
+
+@Immutable
 data class Message(
     val id: String,
     val chatId: String,
@@ -192,7 +205,7 @@ data class Message(
     val status: MessageStatus = MessageStatus.SENT,
     val isEdited: Boolean = false,
     val type: MessageType = MessageType.TEXT,
-    val replyToMessage: Message? = null,
+    val replyPreview: ReplyPreview? = null,
     val forwardedFrom: String? = null,
     val voiceDurationSec: Int = 0,
     val voiceWaveform: List<Float> = emptyList(),
@@ -231,7 +244,9 @@ data class Message(
      * True when this is a reply preview showing a *quoted span* rather than the
      * whole original message, so the UI can mark it as an excerpt.
      */
-    val isQuotedExcerpt: Boolean = false
+    val isQuotedExcerpt: Boolean = false,
+    /** UI-only identity bridge used while TDLib replaces a temporary send id. */
+    val presentationKey: String? = null
 ) {
     /** The message's text with its entities, falling back to plain text. */
     val richText: com.foresightlabs.aether.domain.text.AetherText
@@ -457,17 +472,35 @@ sealed interface AuthUiState {
         val phoneNumber: String,
         val codeLength: Int?,
         val hint: String,
+        val isNumeric: Boolean = true,
         val isLoading: Boolean = false,
         val error: String? = null
     ) : AuthUiState
     data class Password(
         val hint: String?,
+        val hasRecoveryEmailAddress: Boolean = false,
+        val recoveryEmailAddressPattern: String? = null,
+        val isLoading: Boolean = false,
+        val error: String? = null
+    ) : AuthUiState
+    data class EmailAddress(
+        val allowAppleId: Boolean = false,
+        val allowGoogleId: Boolean = false,
+        val isLoading: Boolean = false,
+        val error: String? = null
+    ) : AuthUiState
+    data class EmailCode(
+        val addressPattern: String,
+        val codeLength: Int?,
+        val canReset: Boolean = false,
+        val resetWaitSeconds: Int? = null,
         val isLoading: Boolean = false,
         val error: String? = null
     ) : AuthUiState
     data class Registration(
         val termsOfServiceText: String? = null,
         val minAge: Int = 0,
+        val showPopup: Boolean = false,
         val isLoading: Boolean = false,
         val error: String? = null
     ) : AuthUiState
