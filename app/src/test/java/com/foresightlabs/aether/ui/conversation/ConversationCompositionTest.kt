@@ -132,7 +132,7 @@ class ConversationCompositionTest {
 
     /**
      * The frosted header only reads the living atmosphere behind it when it lives
-     * inside the same "conversation_canvas" Box that registers that atmosphere as
+     * inside the same "conversation_foreground" Box that registers that atmosphere as
      * Haze's backdrop source. A header rendered as a cousin instead of a child —
      * outside that Box rather than inside it — once shipped with the header as a
      * flat, opaque panel instead of glass. This holds the relationship
@@ -144,7 +144,7 @@ class ConversationCompositionTest {
             .fetchSemanticsNode()
             .parent
         while (node != null) {
-            if (node.config.getOrNull(SemanticsProperties.TestTag) == "conversation_canvas") {
+            if (node.config.getOrNull(SemanticsProperties.TestTag) == "conversation_foreground") {
                 return
             }
             node = node.parent
@@ -171,7 +171,7 @@ class ConversationCompositionTest {
 
     private fun assertComposition() {
         val root = composeRule.onRoot().fetchSemanticsNode().size
-        val canvas = boundsOf("conversation_canvas")
+        val canvas = boundsOf("conversation_foreground")
         val composer = boundsOf("message_composer")
 
         assertTrue(
@@ -212,33 +212,33 @@ class ConversationCompositionTest {
     }
 
     /**
-     * The counterpart of Home's expanded dock: the same surface, collapsed. It
+     * The counterpart of Home's expanded dock: the same surface, at rest. It
      * still reaches the bottom edge, but now it is shallow enough that the
      * conversation owns the screen.
      */
     @Test
-    fun theDockIsCollapsedAndStillAttachedToTheBottomEdge() {
+    fun theCurtainRestsCompactAndStillReachesTheBottomEdge() {
         val root = composeRule.onRoot().fetchSemanticsNode().size
-        val dock = boundsOf("conversation_dock")
+        val curtain = boundsOf("conversation_curtain")
 
         assertTrue(
-            "The dock left a ${root.height - dock.bottom}px gap under it",
-            dock.bottom >= root.height.toFloat() - 1f
+            "The Curtain left a ${root.height - curtain.bottom}px gap under it",
+            curtain.bottom >= root.height.toFloat() - 1f
         )
         assertTrue(
-            "Collapsed, the dock should be shallow; it took " +
-                "${"%.0f".format(dock.height / root.height * 100)}% of the window",
-            dock.height / root.height <= 0.20f
+            "At rest the Curtain should be shallow; it took " +
+                "${"%.0f".format(curtain.height / root.height * 100)}% of the window",
+            curtain.height / root.height <= 0.20f
         )
         assertTrue(
-            "The composer has to live inside the dock",
-            boundsOf("message_composer").top >= dock.top - 1f
+            "The composer has to live inside the Curtain",
+            boundsOf("message_composer").top >= curtain.top - 1f
         )
     }
 
     @Test
     fun noMessageEndsUpBehindTheFooter() {
-        val canvas = boundsOf("conversation_canvas")
+        val canvas = boundsOf("conversation_foreground")
         messages.forEach { message ->
             val bubble = boundsOfOrNull("message_bubble_${message.id}") ?: return@forEach
             assertTrue(

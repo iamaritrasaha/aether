@@ -11,6 +11,11 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
+import androidx.core.content.LocusIdCompat
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
+import android.graphics.BitmapFactory
 import com.foresightlabs.aether.AetherApplication
 import com.foresightlabs.aether.BuildConfig
 import com.foresightlabs.aether.MainActivity
@@ -48,10 +53,6 @@ class AetherNotificationManager(
         var totalCount: Int,
         val items: MutableMap<Int, ActiveItem> = mutableMapOf()
     )
-
-    init {
-        createNotificationChannels()
-    }
 
     private fun hashChatId(chatId: Long): String = Integer.toHexString(chatId.hashCode())
 
@@ -115,24 +116,6 @@ class AetherNotificationManager(
         }
     }
 
-    fun createNotificationChannels() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val systemNotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-
-            val messagesChannel = NotificationChannel(
-                AetherApplication.CHANNEL_MESSAGES,
-                "Messages",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Notifications for new Telegram messages"
-                enableVibration(true)
-                setShowBadge(true)
-            }
-
-            systemNotificationManager.createNotificationChannel(messagesChannel)
-        }
-    }
-
     suspend fun onUpdateNotificationGroup(update: TdApi.UpdateNotificationGroup) {
         val groupId = update.notificationGroupId
         val chatId = update.chatId
@@ -145,6 +128,11 @@ class AetherNotificationManager(
                 "TDLIB_NOTIFICATION_GROUP_UPDATE groupId=$groupId chatHash=${hashChatId(chatId)} addedIds=$addedIds removedIds=$removedIds totalCount=${update.totalCount} settingsChatIdHash=${hashChatId(update.notificationSettingsChatId)} soundId=${update.notificationSoundId} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
             )
         }
+        NotificationTiming.markNotificationGroup(
+            update.addedNotifications.orEmpty().mapNotNull { notification ->
+                (notification.type as? TdApi.NotificationTypeNewMessage)?.message?.id
+            }
+        )
 
         // Aether product policy: Android notifications are personal 1:1 human conversations only
         if (!isPersonalHumanChat(chatId)) {
@@ -396,8 +384,11 @@ class AetherNotificationManager(
         val chatTitle = chat?.title.orEmpty().ifBlank { "Telegram" }
         val isGroup = chat?.type is TdApi.ChatTypeBasicGroup || chat?.type is TdApi.ChatTypeSupergroup
 
-        val sortedItems = group.items.values.sortedBy { it.date }
-        if (sortedItems.isEmpty()) return
+        val allItems = group.items.values.sortedBy { it.date }
+        if (allItems.isEmpty()) return
+        // Reconciliation retains every active item in GroupData; only the recent
+        // meaningful window is sent to MessagingStyle so expanded shade stays compact.
+        val sortedItems = allItems.takeLast(MAX_PRESENTED_HISTORY)
 
         if (BuildConfig.DEBUG) {
             Log.d(TAG, "ANDROID_NOTIFICATION_BUILD groupId=${group.groupId} chatHash=${hashChatId(chatId)} itemCount=${sortedItems.size}")
@@ -408,13 +399,31 @@ class AetherNotificationManager(
             .setKey("self")
             .build()
 
+        val privateUser = (chat?.type as? TdApi.ChatTypePrivate)?.userId?.let { getUser(it) }
+        val otherPerson = Person.Builder()
+            .setName(
+                privateUser?.let { "${it.firstName} ${it.lastName}".trim() }
+                    ?.ifBlank { chatTitle } ?: chatTitle
+            )
+            .setKey("private_user_${privateUser?.id ?: 0L}")
+            .apply {
+                privateUser?.profilePhoto?.small?.local?.path
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { path -> BitmapFactory.decodeFile(path)?.let { setIcon(IconCompat.createWithBitmap(it)) } }
+            }
+            .build()
+        val shortcutId = privateConversationShortcutId(chatId)
+        registerConversationShortcut(shortcutId, chatTitle, otherPerson, chat)
+
         val messagingStyle = NotificationCompat.MessagingStyle(selfPerson)
             .setConversationTitle(if (isGroup) chatTitle else null)
             .setGroupConversation(isGroup)
 
         sortedItems.forEach { item ->
             val person = if (item.isOutgoing) {
-                null
+                selfPerson
+            } else if (privateUser != null && item.senderId == privateUser.id) {
+                otherPerson
             } else {
                 Person.Builder()
                     .setName(item.senderName)
@@ -509,21 +518,25 @@ class AetherNotificationManager(
         val builder = NotificationCompat.Builder(context, AetherApplication.CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_stat_aether)
             .setStyle(messagingStyle)
+            .setShortcutId(shortcutId)
+            .setLocusId(LocusIdCompat(shortcutId))
             .setContentIntent(tapPendingIntent)
             .setDeleteIntent(deletePendingIntent)
             .addAction(replyAction)
             .addAction(readAction)
-            .setGroup(GROUP_KEY_MESSAGES)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(if (isMuted || isAllSilent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .setSilent(isMuted || isAllSilent)
             .setAutoCancel(true)
+
+        if (useLegacyGrouping()) builder.setGroup(GROUP_KEY_MESSAGES)
 
         val tag = notificationTag(chatId)
         val id = group.groupId
         try {
             if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_POST_ATTEMPT tag=$tag id=$id elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
             notificationManager.notify(tag, id, builder.build())
+            NotificationTiming.markPosted(sortedItems.map { it.messageId }, group.groupId)
             if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_POSTED tag=$tag id=$id elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
         } catch (e: SecurityException) {
             if (BuildConfig.DEBUG) Log.w(TAG, "ANDROID_NOTIFICATION_POST_FAILED_SECURITY tag=$tag id=$id msg=${e.message} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
@@ -531,6 +544,13 @@ class AetherNotificationManager(
     }
 
     private fun updateSummaryNotification() {
+        // Android 12+ owns conversation organization once each notification has a
+        // stable shortcut. The explicit summary is retained only for legacy shade
+        // behavior where group children otherwise have no native organization.
+        if (!useLegacyGrouping()) {
+            notificationManager.cancel(TAG_SUMMARY, ID_SUMMARY)
+            return
+        }
         val unreadGroups = activeGroups.values.filter { it.items.isNotEmpty() }
         if (unreadGroups.size <= 1) {
             // No summary needed if 0 or 1 chat
@@ -582,6 +602,31 @@ class AetherNotificationManager(
 
     private fun notificationTag(chatId: Long): String = "aether_chat_$chatId"
 
+    private fun useLegacyGrouping(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.R
+
+    private fun privateConversationShortcutId(chatId: Long): String = "private_chat_$chatId"
+
+    private fun registerConversationShortcut(
+        shortcutId: String,
+        label: String,
+        person: Person,
+        chat: TdApi.Chat?
+    ) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_CHAT_ID, chat?.id ?: 0L)
+        }
+        val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
+            .setShortLabel(label)
+            .setLongLived(true)
+            .setIntent(intent)
+            .setPerson(person)
+            .setLocusId(LocusIdCompat(shortcutId))
+            .build()
+        runCatching { ShortcutManagerCompat.addDynamicShortcuts(context, listOf(shortcut)) }
+    }
+
     companion object {
         private const val TAG = "AetherTd"
 
@@ -601,5 +646,6 @@ class AetherNotificationManager(
         const val ACTION_DISMISS = "com.foresightlabs.aether.action.NOTIFICATION_DISMISS"
 
         const val KEY_TEXT_REPLY = "key_text_reply"
+        private const val MAX_PRESENTED_HISTORY = 4
     }
 }

@@ -27,7 +27,8 @@ import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.ChatType
 import com.foresightlabs.aether.domain.model.Presence
 import com.foresightlabs.aether.domain.model.User
-import com.foresightlabs.aether.ui.conversation.AttachmentSheet
+import com.foresightlabs.aether.ui.conversation.AttachmentCurtainContent
+import com.foresightlabs.aether.ui.conversation.CurtainState
 import com.foresightlabs.aether.ui.conversation.MessageComposer
 import com.foresightlabs.aether.ui.design.AetherFloatingHeaderDefaults
 import com.foresightlabs.aether.ui.design.AetherMinTouchTarget
@@ -68,9 +69,8 @@ class AetherUiPolishPassTest {
     }
 
     @Test
-    fun testAttachmentSheet4ColumnLayoutAndVenueRegressionOnNarrowViewport() {
+    fun attachmentCurtainContentKeepsFourColumnsAndVenueOnANarrowViewport() {
         var selectedOption: String? = null
-        var dismissed = false
 
         composeRule.setContent {
             val themeState = AppThemeState().apply {
@@ -80,10 +80,15 @@ class AetherUiPolishPassTest {
             CompositionLocalProvider(LocalAppThemeState provides themeState) {
                 AetherTheme(themeState = themeState) {
                     Box(modifier = Modifier.width(360.dp)) {
-                        AttachmentSheet(
-                            isVisible = true,
-                            onDismiss = { dismissed = true },
-                            onOptionSelected = { selectedOption = it }
+                        AttachmentCurtainContent(
+                            onSelectGallery = { selectedOption = "Gallery" },
+                            onSelectCamera = { selectedOption = "Camera" },
+                            onSelectVideoNote = { selectedOption = "Video note" },
+                            onSelectFile = { selectedOption = "File" },
+                            onSelectAudio = { selectedOption = "Audio" },
+                            onSelectLocation = { selectedOption = "Location" },
+                            onSelectVenue = { selectedOption = "Venue" },
+                            onSelectContact = { selectedOption = "Contact" }
                         )
                     }
                 }
@@ -92,32 +97,35 @@ class AetherUiPolishPassTest {
 
         composeRule.waitForIdle()
 
-        // Verify sheet content is displayed
-        composeRule.onNodeWithTag("attachment_sheet_content").assertIsDisplayed()
-        composeRule.onNodeWithText("Share Content").assertIsDisplayed()
+        composeRule.onNodeWithTag("curtain_attachment_content").assertIsDisplayed()
 
-        // Verify enabled attachment items exist and are displayed
-        val expectedTags = buildList {
-            add("attachment_gallery")
-            add("attachment_camera")
-            add("attachment_video_message")
-            add("attachment_file")
-            add("attachment_audio")
-            add("attachment_location")
-            if (com.foresightlabs.aether.AetherFeatureFlags.LIVE_LOCATION_ENABLED) {
-                add("attachment_live_location")
-            }
-            add("attachment_venue")
-            add("attachment_contact")
-        }
+        val expectedTags = listOf(
+            "attachment_option_gallery",
+            "attachment_option_camera",
+            "attachment_option_video_note",
+            "attachment_option_file",
+            "attachment_option_audio",
+            "attachment_option_location",
+            "attachment_option_venue",
+            "attachment_option_contact"
+        )
         for (tag in expectedTags) {
             composeRule.onNodeWithTag(tag).assertIsDisplayed()
         }
 
-        // Specifically test Venue click and regression
-        composeRule.onNodeWithTag("attachment_venue").performClick()
+        // Four to a row: the last option of the first row and the first of the
+        // second must not share a line.
+        val gallery = composeRule.onNodeWithTag("attachment_option_gallery")
+            .fetchSemanticsNode().boundsInRoot
+        val file = composeRule.onNodeWithTag("attachment_option_file")
+            .fetchSemanticsNode().boundsInRoot
+        val audio = composeRule.onNodeWithTag("attachment_option_audio")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(gallery.top, file.top, 1f)
+        assertTrue("Audio should begin the second row", audio.top > file.bottom - 1f)
+
+        composeRule.onNodeWithTag("attachment_option_venue").performClick()
         assertEquals("Venue", selectedOption)
-        assertTrue(dismissed)
     }
 
     @Test
@@ -133,7 +141,6 @@ class AetherUiPolishPassTest {
                         replyingTo = null,
                         onDismissReply = {},
                         onSendMessage = { _, _ -> },
-                        onOpenAttachmentSheet = {},
                         onVoiceNoteRecorded = {}
                     )
                 }
@@ -284,8 +291,8 @@ class AetherUiPolishPassTest {
     }
 
     @Test
-    fun testExpandingComposerDockRevealsAttachmentOptions() {
-        var isExpanded by mutableStateOf(false)
+    fun testExpandingTheCurtainRevealsAttachmentOptions() {
+        var curtainState by mutableStateOf(CurtainState.COMPOSER)
         var gallerySelected = false
         var cameraSelected = false
         var videoNoteSelected = false
@@ -306,8 +313,14 @@ class AetherUiPolishPassTest {
                         replyingTo = null,
                         onDismissReply = {},
                         onSendMessage = { _, _ -> },
-                        isAttachmentExpanded = isExpanded,
-                        onToggleAttachment = { isExpanded = !isExpanded },
+                        curtainState = curtainState,
+                        onToggleAttachment = {
+                            curtainState = if (curtainState == CurtainState.ATTACHMENTS) {
+                                CurtainState.COMPOSER
+                            } else {
+                                CurtainState.ATTACHMENTS
+                            }
+                        },
                         onSelectGallery = { gallerySelected = true },
                         onSelectCamera = { cameraSelected = true },
                         onSelectVideoNote = { videoNoteSelected = true },
@@ -331,7 +344,7 @@ class AetherUiPolishPassTest {
         // Tap the [+] button to expand the composer dock
         composeRule.onNodeWithTag("attachment_button").performClick()
         composeRule.waitForIdle()
-        assertTrue("isExpanded should be true", isExpanded)
+        assertTrue("The Curtain should be showing attachments", curtainState == CurtainState.ATTACHMENTS)
 
         // Verify all 8 real attachment options are revealed with proper test tags
         composeRule.onNodeWithTag("attachment_option_gallery").assertIsDisplayed().performClick()

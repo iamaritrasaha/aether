@@ -25,10 +25,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -106,6 +106,7 @@ import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.domain.messages.ConversationMotion
 import com.foresightlabs.aether.domain.messages.MessageCapabilities
 import com.foresightlabs.aether.domain.model.AnimationItem
+import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
@@ -128,8 +129,12 @@ private data class AttachmentOptionItem(
     val onClick: () -> Unit
 )
 
+/**
+ * Attachment options as direct Curtain content: icon circles and labels, and no
+ * container of their own — the Curtain is already the surface.
+ */
 @Composable
-fun AttachmentOptionsGrid(
+fun AttachmentCurtainContent(
     onSelectGallery: () -> Unit,
     onSelectCamera: () -> Unit,
     onSelectVideoNote: () -> Unit,
@@ -161,7 +166,8 @@ fun AttachmentOptionsGrid(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .testTag("curtain_attachment_content"),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         val rows = items.chunked(4)
@@ -219,27 +225,18 @@ fun AttachmentOptionsGrid(
 }
 
 /**
- * Unified state model for the continuous bottom composer dock.
- */
-enum class ComposerDockMode {
-    COLLAPSED,
-    ATTACHMENTS,
-    EMOJI,
-    STICKERS,
-    GIFS;
-
-    val isExpanded: Boolean get() = this != COLLAPSED
-    val isPicker: Boolean get() = this == EMOJI || this == STICKERS || this == GIFS
-}
-
-/**
- * The message input, which lives inside the screen's footer region rather than
- * floating over the conversation.
+ * The content of the Conversation Curtain, in every state it can be in.
  *
- * The bottom composer dock is a continuous rear surface with multiple modes:
- * - COLLAPSED: [ + ] [ 🙂 ] Your Message... [ Mic/Send ]
- * - ATTACHMENTS: reveals the clean attachment options grid.
- * - EMOJI / STICKERS / GIFS: reveals the unified emoji/sticker/GIF picker.
+ * Everything here is content passed to [AetherConversationCurtain], which owns the
+ * one surface it all sits on:
+ * - COMPOSER: [ + ] Your Message… [ 🙂 ] [ Mic/Send ], with the reply, edit and
+ *   selection strips folding into the same row.
+ * - ATTACHMENTS: the attachment options, directly on the Curtain.
+ * - EMOJI / STICKERS / GIFS: the unified picker.
+ * - FORWARDING: the input controls give way to forwarding, in the same surface.
+ *
+ * A new bottom interaction belongs here as another state — never as a sheet,
+ * panel or card of its own.
  */
 @Composable
 fun MessageComposer(
@@ -248,24 +245,22 @@ fun MessageComposer(
     onSendMessage: (String, List<AetherEntity>) -> Unit,
     /** Quoted excerpt shown above the composer when replying to part of a message. */
     replyQuote: ReplyQuote? = null,
-    dockMode: ComposerDockMode = ComposerDockMode.COLLAPSED,
-    onDockModeChange: (ComposerDockMode) -> Unit = {},
-    isAttachmentExpanded: Boolean = dockMode == ComposerDockMode.ATTACHMENTS,
+    curtainState: CurtainState = CurtainState.COMPOSER,
+    onCurtainStateChange: (CurtainState) -> Unit = {},
     onToggleAttachment: () -> Unit = {
-        if (dockMode == ComposerDockMode.ATTACHMENTS) {
-            onDockModeChange(ComposerDockMode.COLLAPSED)
+        if (curtainState == CurtainState.ATTACHMENTS) {
+            onCurtainStateChange(CurtainState.COMPOSER)
         } else {
-            onDockModeChange(ComposerDockMode.ATTACHMENTS)
+            onCurtainStateChange(CurtainState.ATTACHMENTS)
         }
     },
     onTogglePicker: () -> Unit = {
-        if (dockMode.isPicker) {
-            onDockModeChange(ComposerDockMode.COLLAPSED)
+        if (curtainState.isPicker) {
+            onCurtainStateChange(CurtainState.COMPOSER)
         } else {
-            onDockModeChange(ComposerDockMode.EMOJI)
+            onCurtainStateChange(CurtainState.EMOJI)
         }
     },
-    onOpenAttachmentSheet: () -> Unit = onToggleAttachment,
     onSelectGallery: () -> Unit = {},
     onSelectCamera: () -> Unit = {},
     onSelectVideoNote: () -> Unit = {},
@@ -277,7 +272,6 @@ fun MessageComposer(
     onInputFocus: () -> Unit = {},
     onVoiceNoteRecorded: () -> Unit = {},
     onOpenVideoNote: () -> Unit = {},
-    onOpenStickerPicker: () -> Unit = onTogglePicker,
     installedStickerSets: List<StickerSetInfo> = emptyList(),
     recentStickers: List<StickerItem> = emptyList(),
     favoriteStickers: List<StickerItem> = emptyList(),
@@ -293,11 +287,18 @@ fun MessageComposer(
     onCopySelected: (List<Message>) -> Unit = {},
     onForwardSelected: (List<Message>) -> Unit = {},
     onDeleteSelected: (List<Message>) -> Unit = {},
+    forwardMessages: List<Message> = emptyList(),
+    forwardTargets: List<Chat> = emptyList(),
+    forwardState: ForwardState = ForwardState.Idle,
+    onDismissForward: () -> Unit = {},
+    onSubmitForward: (Chat, Boolean, Boolean) -> Unit = { _, _, _ -> },
     editingMessage: Message? = null,
     onDismissEdit: () -> Unit = {},
     onSaveEdit: (Message, String, List<AetherEntity>) -> Unit = { _, _, _ -> },
     enabled: Boolean = true,
     onTextChanged: (String) -> Unit = {},
+    /** Reported by the shared Curtain root; see [CurtainHeights]. */
+    onCurtainHeightChanged: (CurtainHeights) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Held as a TextFieldValue so the selection is available for formatting.
@@ -331,41 +332,38 @@ fun MessageComposer(
         animationSpec = tween(ConversationMotion.COMPOSER_TEXT_FADE_MS),
         label = "composer_send_text_fade"
     )
-    val fieldShape = RoundedCornerShape(ComposerRadius)
-    // A recessed control: a shade off the dock behind it, and nothing else.
-    val fieldFill = Color(0xFF17171C)
     val ink = Color(0xFFF2F2F5)
     val control = Color(0xFFB6B6BE)
     val hint = Color(0xFF77777F)
 
-    val effectiveDockMode = if (dockMode != ComposerDockMode.COLLAPSED) {
-        dockMode
-    } else if (isAttachmentExpanded) {
-        ComposerDockMode.ATTACHMENTS
-    } else {
-        ComposerDockMode.COLLAPSED
-    }
-
     val plusRotation by animateFloatAsState(
-        targetValue = if (effectiveDockMode == ComposerDockMode.ATTACHMENTS) 45f else 0f,
+        targetValue = if (curtainState == CurtainState.ATTACHMENTS) 45f else 0f,
         animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
         label = "plus_to_cross_rotation"
     )
 
-    Column(
+    // Every state below is content inside the one shared Curtain root, which owns
+    // the surface, the seam-facing top edge, the bottom inset and the height.
+    AetherConversationCurtain(
+        state = curtainState,
+        onHeightChanged = onCurtainHeightChanged,
         modifier = modifier
-            .fillMaxWidth()
-            .animateContentSize(
-                animationSpec = tween(ConversationMotion.STANDARD_MS, easing = FastOutSlowInEasing)
-            )
-            .testTag("message_composer")
-            // The footer owns the gesture inset; the input sits just above it.
-            .navigationBarsPadding()
-            .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 8.dp)
     ) {
-        // Expanded Content inside the continuous dark composer dock
+        if (curtainState == CurtainState.FORWARDING) {
+            ForwardCurtainContent(
+                messages = forwardMessages,
+                targets = forwardTargets,
+                canSendCopy = forwardMessages.all { capabilities[it.id]?.canBeForwarded == true },
+                hasCaption = forwardMessages.any { it.text.isNotBlank() && it.type != com.foresightlabs.aether.domain.model.MessageType.TEXT },
+                state = forwardState,
+                onDismiss = onDismissForward,
+                onForward = onSubmitForward,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+        // Expanded content remains inside the continuous Curtain.
         AnimatedVisibility(
-            visible = effectiveDockMode.isExpanded,
+            visible = curtainState.isExpanded,
             enter = expandVertically(
                 animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)
             ) + fadeIn(
@@ -378,14 +376,14 @@ fun MessageComposer(
             )
         ) {
             AnimatedContent(
-                targetState = if (effectiveDockMode == ComposerDockMode.ATTACHMENTS) "attachments" else "picker",
+                targetState = if (curtainState == CurtainState.ATTACHMENTS) "attachments" else "picker",
                 transitionSpec = {
                     fadeIn(animationSpec = tween(180)) togetherWith fadeOut(animationSpec = tween(140))
                 },
-                label = "dock_expanded_mode_content"
-            ) { expandedSurface ->
-                if (expandedSurface == "attachments") {
-                    AttachmentOptionsGrid(
+                label = "curtain_expanded_content"
+            ) { expandedContent ->
+                if (expandedContent == "attachments") {
+                    AttachmentCurtainContent(
                         onSelectGallery = onSelectGallery,
                         onSelectCamera = onSelectCamera,
                         onSelectVideoNote = onSelectVideoNote,
@@ -397,20 +395,20 @@ fun MessageComposer(
                         modifier = Modifier.padding(bottom = 6.dp)
                     )
                 } else {
-                    val currentPickerTab = when (effectiveDockMode) {
-                        ComposerDockMode.STICKERS -> PickerTab.STICKERS
-                        ComposerDockMode.GIFS -> PickerTab.GIFS
+                    val currentPickerTab = when (curtainState) {
+                        CurtainState.STICKERS -> PickerTab.STICKERS
+                        CurtainState.GIFS -> PickerTab.GIFS
                         else -> PickerTab.EMOJI
                     }
                     EmojiStickerGifPanel(
                         activeTab = currentPickerTab,
                         onTabChange = { tab ->
                             val targetMode = when (tab) {
-                                PickerTab.EMOJI -> ComposerDockMode.EMOJI
-                                PickerTab.STICKERS -> ComposerDockMode.STICKERS
-                                PickerTab.GIFS -> ComposerDockMode.GIFS
+                                PickerTab.EMOJI -> CurtainState.EMOJI
+                                PickerTab.STICKERS -> CurtainState.STICKERS
+                                PickerTab.GIFS -> CurtainState.GIFS
                             }
-                            onDockModeChange(targetMode)
+                            onCurtainStateChange(targetMode)
                         },
                         onInsertEmoji = { emoji ->
                             val start = field.selection.min.coerceIn(0, field.text.length)
@@ -442,15 +440,14 @@ fun MessageComposer(
                 .animateContentSize(
                     animationSpec = tween(ConversationMotion.STANDARD_MS, easing = FastOutSlowInEasing)
                 )
-                .clip(fieldShape)
-                .background(fieldFill)
+                .testTag("message_composer")
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 6.dp)
             ) {
-                // Integrated Edit & Reply Strip (Inside the continuous dark composer dock)
+                // Integrated Edit & Reply strip inside the same Curtain.
                 AnimatedVisibility(
                     visible = editingMessage != null || replyingTo != null,
                     enter = expandVertically(tween(ConversationMotion.STANDARD_MS)) + fadeIn(tween(ConversationMotion.FAST_MS)),
@@ -461,10 +458,9 @@ fun MessageComposer(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 4.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color(0x1AFFFFFF))
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                // Direct Curtain content: the accent bar marks it,
+                                // not a second background inside the surface.
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
@@ -518,10 +514,9 @@ fun MessageComposer(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 4.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color(0x1AFFFFFF))
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                // Direct Curtain content: the accent bar marks it,
+                                // not a second background inside the surface.
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
@@ -618,8 +613,8 @@ fun MessageComposer(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Add,
-                                    contentDescription = if (effectiveDockMode == ComposerDockMode.ATTACHMENTS) "Close attachments" else "Attach media",
-                                    tint = if (effectiveDockMode == ComposerDockMode.ATTACHMENTS) ink else control,
+                                    contentDescription = if (curtainState == CurtainState.ATTACHMENTS) "Close attachments" else "Attach media",
+                                    tint = if (curtainState == CurtainState.ATTACHMENTS) ink else control,
                                     modifier = Modifier
                                         .size(22.dp)
                                         .graphicsLayer { rotationZ = plusRotation }
@@ -660,7 +655,7 @@ fun MessageComposer(
                                 BasicTextField(
                                     value = field,
                                     onValueChange = { next ->
-                                        if (effectiveDockMode.isExpanded) {
+                                        if (curtainState.isExpanded) {
                                             onInputFocus()
                                         }
                                         if (next.text != field.text) {
@@ -694,7 +689,7 @@ fun MessageComposer(
                                         .fillMaxWidth()
                                         .graphicsLayer { alpha = composerTextAlpha }
                                         .onFocusChanged {
-                                            if (it.isFocused && effectiveDockMode.isExpanded) {
+                                            if (it.isFocused) {
                                                 onInputFocus()
                                             }
                                         }
@@ -709,14 +704,14 @@ fun MessageComposer(
                                     .clickable(enabled = enabled) { onTogglePicker() }
                                     .testTag("sticker_button")
                                     .semantics {
-                                        contentDescription = if (effectiveDockMode.isPicker) "Keyboard" else "Emoji and stickers"
+                                        contentDescription = if (curtainState.isPicker) "Keyboard" else "Emoji and stickers"
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = if (effectiveDockMode.isPicker) Icons.Filled.KeyboardAlt else Icons.Default.EmojiEmotions,
+                                    imageVector = if (curtainState.isPicker) Icons.Filled.KeyboardAlt else Icons.Default.EmojiEmotions,
                                     contentDescription = null,
-                                    tint = if (effectiveDockMode.isPicker) colors.accent else hint,
+                                    tint = if (curtainState.isPicker) colors.accent else hint,
                                     modifier = Modifier.size(19.dp)
                                 )
                             }
@@ -828,6 +823,7 @@ fun MessageComposer(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -971,7 +967,7 @@ private fun reanchorForEdit(
     return ComposerFormatting.reanchor(entities, prefix, removed, inserted)
 }
 
-/** The composer is one recessed field: comfortable to hit, quiet to look at. */
+/** Resting Curtain geometry: comfortable to hit, quiet to look at. */
 private val ComposerRadius = 26.dp
 private val ComposerRowHeight = 52.dp
 

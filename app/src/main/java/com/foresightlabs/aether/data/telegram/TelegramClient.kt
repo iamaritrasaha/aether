@@ -24,6 +24,7 @@ import com.foresightlabs.aether.domain.model.ReplyPreview
 import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
 import com.foresightlabs.aether.domain.model.User
+import com.foresightlabs.aether.data.notifications.NotificationTiming
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +49,7 @@ import org.drinkless.tdlib.NativeLoader
 import org.drinkless.tdlib.TdApi
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 
@@ -72,6 +74,11 @@ class TelegramClient(private val application: Application) {
      * on a fresh completion; consulted so [resolveMediaPath] does not spin in
      * an automatic retry loop against a file TDLib has already given up on. */
     private val failedDownloads = ConcurrentHashMap<Int, Boolean>()
+    private val mediaReferenceIndex = MediaReferenceIndex()
+    private val chatAvatarFileByChat = ConcurrentHashMap<Long, Int>()
+    private val chatsByAvatarFile = ConcurrentHashMap<Int, MutableSet<Long>>()
+    private val userAvatarFileByUser = ConcurrentHashMap<Long, Int>()
+    private val usersByAvatarFile = ConcurrentHashMap<Int, MutableSet<Long>>()
     private val activeStories = ConcurrentHashMap<Long, TdApi.ChatActiveStories>()
     private val storiesCache = ConcurrentHashMap<String, com.foresightlabs.aether.domain.model.StoryItem>()
 
@@ -128,6 +135,10 @@ class TelegramClient(private val application: Application) {
     private val chatLoadMutex = Mutex()
     private var publishChatsJob: Job? = null
     private var publishPulsesJob: Job? = null
+    private val notificationOptionsConfigured = AtomicBoolean(false)
+    @Volatile private var desiredOnline: Boolean? = null
+    @Volatile private var appliedOnline: Boolean? = null
+    private var onlineWriteJob: Job? = null
 
     fun start() {
         if (!BuildConfig.HAS_TELEGRAM_CREDENTIALS) {
@@ -160,6 +171,35 @@ class TelegramClient(private val application: Application) {
             { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib update handler error", error) },
             { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib handler error", error) }
         )
+    }
+
+    /** Mirrors actual app visibility to TDLib without repeating equivalent writes. */
+    @Synchronized
+    fun setOnline(online: Boolean) {
+        desiredOnline = online
+        if (appliedOnline == online && onlineWriteJob?.isActive != true) return
+        if (onlineWriteJob?.isActive == true) return
+        onlineWriteJob = scope.launch {
+            while (true) {
+                val desired = desiredOnline ?: break
+                if (appliedOnline == desired) break
+                when (val result = send(TdApi.SetOption("online", TdApi.OptionValueBoolean(desired)))) {
+                    is TdApi.Ok -> {
+                        appliedOnline = desired
+                        if (BuildConfig.DEBUG) {
+                            android.util.Log.d(TAG, "TDLIB_ONLINE_OPTION applied=$desired")
+                        }
+                    }
+                    is TdApi.Error -> {
+                        if (BuildConfig.DEBUG) {
+                            android.util.Log.w(TAG, "TDLIB_ONLINE_OPTION_ERROR code=${result.code}")
+                        }
+                        break
+                    }
+                    else -> break
+                }
+            }
+        }
     }
 
     suspend fun submitPhoneNumber(phone: String): Result<Unit> {
@@ -2189,7 +2229,7 @@ class TelegramClient(private val application: Application) {
                     if (previous != next) {
                         android.util.Log.d(
                             TAG,
-                            "CONNECTION_RAW from=${previous.name} to=${next.name} " +
+                            "TDLIB_CONNECTION_STATE from=${previous.name} to=${next.name} " +
                                 "elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}"
                         )
                     }
@@ -2285,6 +2325,7 @@ class TelegramClient(private val application: Application) {
             }
             is TdApi.UpdateUser -> {
                 users[update.user.id] = update.user
+                indexUserAvatar(update.user)
                 requestUserPhoto(update.user)
                 if (update.user.id == myUserId) publishMe()
                 publishChats()
@@ -2300,6 +2341,7 @@ class TelegramClient(private val application: Application) {
             }
             is TdApi.UpdateNewChat -> {
                 chats[update.chat.id] = update.chat
+                indexChatAvatar(update.chat)
                 requestChatPhoto(update.chat)
                 publishChats()
                 refreshAllReplyPreviews()
@@ -2320,6 +2362,7 @@ class TelegramClient(private val application: Application) {
             }
             is TdApi.UpdateChatPhoto -> {
                 chats[update.chatId]?.photo = update.photo
+                chats[update.chatId]?.let(::indexChatAvatar)
                 chats[update.chatId]?.let { requestChatPhoto(it) }
                 publishChats()
             }
@@ -2358,6 +2401,7 @@ class TelegramClient(private val application: Application) {
             is TdApi.UpdateNewMessage -> {
                 val msg = update.message
                 if (BuildConfig.DEBUG) {
+                    NotificationTiming.markNewMessage(msg.id)
                     val chatHash = Integer.toHexString(msg.chatId.hashCode())
                     android.util.Log.d(TAG, "TDLIB_UPDATE_NEW_MESSAGE chatHash=$chatHash msgId=${msg.id} isOutgoing=${msg.isOutgoing} date=${msg.date} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
                 }
@@ -2451,6 +2495,7 @@ class TelegramClient(private val application: Application) {
                 update.messageIds.forEach { messageId ->
                     if (rawMessages[messageId]?.chatId == update.chatId) {
                         rawMessages.remove(messageId)
+                        mediaReferenceIndex.remove(MessageMediaReference(update.chatId, messageId))
                     }
                     unavailableReplyTargets.add(ReplyTarget(update.chatId, messageId))
                     refreshReplyingMessages(ReplyTarget(update.chatId, messageId))
@@ -2830,6 +2875,7 @@ class TelegramClient(private val application: Application) {
     }
 
     private suspend fun configureNotificationOptions() {
+        if (!notificationOptionsConfigured.compareAndSet(false, true)) return
         when (val countRes = send(TdApi.SetOption("notification_group_count_max", TdApi.OptionValueInteger(5)))) {
             is TdApi.Ok -> {
                 if (BuildConfig.DEBUG) android.util.Log.d(TAG, "NOTIFICATION_OPTION_GROUP_COUNT_OK")
@@ -2929,47 +2975,31 @@ class TelegramClient(private val application: Application) {
                 requestedFiles.remove(file.id)
             }
         }
-        users.values.filter { it.profilePhoto?.small?.id == file.id }.forEach { publishMe() }
-        publishChats()
-        // A message waiting on this file now has something real to show --
-        // whether that is the completed download, fresh progress, or a
-        // failure the bubble should offer to retry.
-        republishConversationsAwaitingMedia()
-    }
-
-    /**
-     * Re-maps loaded conversations so bubbles blocked on a just-downloaded file pick
-     * it up. Only messages still missing their media are re-mapped.
-     */
-    private fun republishConversationsAwaitingMedia() {
-        conversationFlows.forEach { (chatId, flow) ->
-            val pending = flow.value.any { it.needsMedia() }
-            if (!pending) return@forEach
-            val changedIds = mutableListOf<Long>()
-            val remapped = flow.value.map { existing ->
-                if (!existing.needsMedia()) return@map existing
-                val raw = rawMessages[existing.id.toLongOrNull() ?: return@map existing]
-                    ?: return@map existing
-                changedIds += raw.id
-                mapUiMessage(raw).copy(presentationKey = existing.presentationKey)
-            }
-            flow.value = remapped
-            changedIds.forEach { publishMessageEvent(chatId, it, MessageMotionEventType.MEDIA_UPDATED) }
+        val affectedUsers = usersByAvatarFile[file.id].orEmpty()
+        affectedUsers.forEach { userId ->
+            if (userId == myUserId) publishMe()
         }
-    }
+        if (affectedUsers.isNotEmpty() || chatsByAvatarFile[file.id].orEmpty().isNotEmpty()) publishChats()
 
-    private fun Message.needsMedia(): Boolean = when (type) {
-        com.foresightlabs.aether.domain.model.MessageType.IMAGE,
-        com.foresightlabs.aether.domain.model.MessageType.ALBUM,
-        com.foresightlabs.aether.domain.model.MessageType.ANIMATION,
-        com.foresightlabs.aether.domain.model.MessageType.VIDEO_NOTE,
-        com.foresightlabs.aether.domain.model.MessageType.AUDIO,
-        com.foresightlabs.aether.domain.model.MessageType.STICKER ->
-            // A media item now exists from the moment the message does, so
-            // "still needs a remap" means its file hasn't landed locally yet --
-            // not that the item itself is missing.
-            mediaItems.isNotEmpty() && mediaItems.any { !it.hasLocalFile }
-        else -> false
+        // A file update belongs only to the messages in this reverse index. This
+        // keeps an image download from walking every loaded conversation.
+        val affectedByChat = mediaReferenceIndex.referencesFor(file.id).groupBy { it.chatId }
+        affectedByChat.forEach { (chatId, references) ->
+            val ids = references.map { it.messageId }.toSet()
+            conversationFlows[chatId]?.update { current ->
+                current.map { existing ->
+                    val messageId = existing.id.toLongOrNull()
+                    if (messageId == null || messageId !in ids) {
+                        existing
+                    } else {
+                        rawMessages[messageId]?.let { raw ->
+                            mapUiMessage(raw).copy(presentationKey = existing.presentationKey)
+                        } ?: existing
+                    }
+                }
+            }
+            references.forEach { publishMessageEvent(chatId, it.messageId, MessageMotionEventType.MEDIA_UPDATED) }
+        }
     }
 
     private fun requestChatPhoto(chat: TdApi.Chat) {
@@ -2993,8 +3023,31 @@ class TelegramClient(private val application: Application) {
         return TelegramMappers.localPath(file) ?: file?.id?.let { photoPaths["file:$it"] }
     }
 
+    private fun indexChatAvatar(chat: TdApi.Chat) {
+        val fileId = chat.photo?.small?.id ?: 0
+        val previous = chatAvatarFileByChat.put(chat.id, fileId)
+        if (previous != null && previous != 0 && previous != fileId) {
+            chatsByAvatarFile[previous]?.remove(chat.id)
+        }
+        if (fileId != 0) {
+            chatsByAvatarFile.computeIfAbsent(fileId) { ConcurrentHashMap.newKeySet() }.add(chat.id)
+        }
+    }
+
+    private fun indexUserAvatar(user: TdApi.User) {
+        val fileId = user.profilePhoto?.small?.id ?: 0
+        val previous = userAvatarFileByUser.put(user.id, fileId)
+        if (previous != null && previous != 0 && previous != fileId) {
+            usersByAvatarFile[previous]?.remove(user.id)
+        }
+        if (fileId != 0) {
+            usersByAvatarFile.computeIfAbsent(fileId) { ConcurrentHashMap.newKeySet() }.add(user.id)
+        }
+    }
+
     private fun publishMe() {
         val me = users[myUserId] ?: return
+        indexUserAvatar(me)
         _currentUser.value = TelegramMappers.mapUser(me, TelegramMappers.localPath(me.profilePhoto?.small) ?: photoPaths["file:${me.profilePhoto?.small?.id}"])
     }
 
@@ -3018,6 +3071,8 @@ class TelegramClient(private val application: Application) {
     }
 
     private fun mapUiChat(chat: TdApi.Chat): Chat {
+        indexChatAvatar(chat)
+        (chat.type as? TdApi.ChatTypePrivate)?.userId?.let { users[it]?.let(::indexUserAvatar) }
         val hasUnseen = activeStories[chat.id]?.let { stories ->
             stories.stories.any { it.storyId > stories.maxReadStoryId }
         } ?: false
@@ -3187,7 +3242,7 @@ class TelegramClient(private val application: Application) {
     private fun mapUiMessage(message: TdApi.Message): Message {
         rawMessages[message.id] = message
         val lastRead = chats[message.chatId]?.lastReadOutboxMessageId ?: 0L
-        return TelegramMappers.mapMessage(
+        val mapped = TelegramMappers.mapMessage(
             message = message,
             users = users,
             chats = chats,
@@ -3197,6 +3252,11 @@ class TelegramClient(private val application: Application) {
             resolvePath = ::resolveMediaPath,
             isDownloadFailed = { failedDownloads[it] == true }
         )
+        mediaReferenceIndex.replace(
+            MessageMediaReference(message.chatId, message.id),
+            mapped.mediaItems.mapNotNull { it.fileId.takeIf { fileId -> fileId != 0 } }.toSet()
+        )
+        return mapped
     }
 
     /**
@@ -3312,6 +3372,11 @@ class TelegramClient(private val application: Application) {
         requestedFiles.clear()
         conversationFlows.clear()
         rawMessages.clear()
+        mediaReferenceIndex.clear()
+        chatAvatarFileByChat.clear()
+        chatsByAvatarFile.clear()
+        userAvatarFileByUser.clear()
+        usersByAvatarFile.clear()
         replyResolutionJobs.values.forEach { it.cancel() }
         replyResolutionJobs.clear()
         unavailableReplyTargets.clear()

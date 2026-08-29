@@ -1,11 +1,13 @@
 package com.foresightlabs.aether.ui.conversation
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.foresightlabs.aether.AetherApplication
+import com.foresightlabs.aether.BuildConfig
 import com.foresightlabs.aether.data.telegram.TelegramClient
 import com.foresightlabs.aether.data.telegram.TelegramMappers
 import com.foresightlabs.aether.domain.text.AetherEntity
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -105,6 +108,9 @@ class ConversationViewModel(
     private val _sendError = MutableStateFlow<String?>(null)
     val sendError: StateFlow<String?> = _sendError.asStateFlow()
 
+    private val _forwardState = MutableStateFlow<ForwardState>(ForwardState.Idle)
+    val forwardState: StateFlow<ForwardState> = _forwardState.asStateFlow()
+
     private val _capabilities = MutableStateFlow<Map<String, MessageCapabilities>>(emptyMap())
 
     /** Telegram's per-message capability answers, keyed by message id. */
@@ -130,7 +136,22 @@ class ConversationViewModel(
 
     /** Conversations a message may be forwarded into, excluding this one. */
     val forwardTargets: StateFlow<List<Chat>> = telegram.chatList
-        .map { chats -> chats.filter { it.id != activeChatId.toString() && it.canSendText } }
+        .onEach { chats ->
+            if (BuildConfig.DEBUG) {
+                Log.d(FORWARD_LOG_TAG, "FORWARD_TARGETS_RECEIVED count=${chats.size}")
+            }
+        }
+        .map { chats ->
+            chats.filter { it.id != activeChatId.toString() && it.canSendText && it.isPersonalChat }
+                .also { personalTargets ->
+                    if (BuildConfig.DEBUG) {
+                        Log.d(
+                            FORWARD_LOG_TAG,
+                            "FORWARD_TARGET_FILTERED personalCount=${personalTargets.size}"
+                        )
+                    }
+                }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val viewedIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
@@ -637,9 +658,17 @@ class ConversationViewModel(
         sendCopy: Boolean = false,
         removeCaption: Boolean = false
     ) {
+        if (messages.isEmpty()) return
+        _forwardState.value = ForwardState.Sending
         viewModelScope.launch {
             val messageIds = messages.mapNotNull { it.id.toLongOrNull() }.toLongArray()
-            if (messageIds.isEmpty()) return@launch
+            if (messageIds.isEmpty()) {
+                if (BuildConfig.DEBUG) {
+                    Log.d(FORWARD_LOG_TAG, "FORWARD_RESULT_ERROR code=EMPTY_MESSAGE_IDS")
+                }
+                _forwardState.value = ForwardState.Error("These messages are no longer available.")
+                return@launch
+            }
             val result = telegram.forwardMessages(
                 toChatId = toChatId,
                 fromChatId = activeChatId,
@@ -647,7 +676,30 @@ class ConversationViewModel(
                 sendCopy = sendCopy,
                 removeCaption = removeCaption
             )
-            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+            result.fold(
+                onSuccess = {
+                    if (BuildConfig.DEBUG) {
+                        Log.d(FORWARD_LOG_TAG, "FORWARD_RESULT_OK")
+                    }
+                    _forwardState.value = ForwardState.Success
+                },
+                onFailure = { error ->
+                    if (BuildConfig.DEBUG) {
+                        Log.d(
+                            FORWARD_LOG_TAG,
+                            "FORWARD_RESULT_ERROR class=${error::class.java.simpleName}"
+                        )
+                    }
+                    val message = error.message?.takeIf { it.isNotBlank() } ?: "Forwarding failed. Try again."
+                    _forwardState.value = ForwardState.Error(message)
+                }
+            )
+        }
+    }
+
+    fun consumeForwardState() {
+        if (_forwardState.value !is ForwardState.Sending) {
+            _forwardState.value = ForwardState.Idle
         }
     }
 
@@ -1098,6 +1150,8 @@ class ConversationViewModel(
     }
 
     private companion object {
+        const val FORWARD_LOG_TAG = "AetherTd"
+
         /** Long enough to skip intermediate prefixes, short enough to feel direct. */
         const val SEARCH_DEBOUNCE_MS = 220L
 

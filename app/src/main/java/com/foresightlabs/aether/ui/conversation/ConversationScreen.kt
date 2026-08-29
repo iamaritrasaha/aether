@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -53,6 +54,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -66,10 +69,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -101,7 +104,7 @@ import com.foresightlabs.aether.ui.conversation.LiveLocationShareSheet
 import com.foresightlabs.aether.ui.conversation.VenueShareSheet
 import com.foresightlabs.aether.ui.conversation.ScheduledMessagesSheet
 import com.foresightlabs.aether.domain.model.AnimationItem
-import com.foresightlabs.aether.ui.conversation.ComposerDockMode
+import com.foresightlabs.aether.ui.conversation.CurtainState
 import com.foresightlabs.aether.ui.conversation.VideoNoteRecorderSheet
 import androidx.compose.material.icons.filled.Schedule
 import com.foresightlabs.aether.ui.conversation.LocationShareSheet
@@ -197,8 +200,10 @@ fun ConversationScreen(
     onComposerChanged: (String) -> Unit,
     onLoadOlder: () -> Unit,
     onDeleteMessage: (Message, Boolean) -> Unit,
-    onForwardMessage: (Message, Long, Boolean, Boolean) -> Unit = { _, _, _, _ -> },
+    onForwardMessages: (List<Message>, Long, Boolean, Boolean) -> Unit = { _, _, _, _ -> },
     forwardTargets: List<Chat> = emptyList(),
+    forwardState: ForwardState = ForwardState.Idle,
+    onForwardStateConsumed: () -> Unit = {},
     messageCapabilities: Map<String, MessageCapabilities> = emptyMap(),
     onRequestCapabilities: (Message) -> Unit = {},
     onRetryMessage: (Message) -> Unit,
@@ -250,11 +255,15 @@ fun ConversationScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    val localView = LocalView.current
     val clipboardManager = LocalClipboardManager.current
     val listState = rememberLazyListState()
     val atmosphere = LocalAtmosphere.current
     val frostState = rememberAetherFrostState()
     val colors = LocalAetherColors.current
+    val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
+    val isImeVisible = imeInsets.getBottom(density) > 0
     val reducedMotion = remember {
         Settings.Global.getFloat(
             context.contentResolver,
@@ -274,12 +283,15 @@ fun ConversationScreen(
     var deleteConfirmMessages by remember { mutableStateOf<List<Message>?>(null) }
     // Grouping is derived once per message-list change, not per frame.
     val entries = remember(messages) { MessageGrouping.group(messages) }
+    val selectedMessages by remember(messages, selectedIds) {
+        derivedStateOf { messages.filter { it.id in selectedIds } }
+    }
     var showContactSheet by remember { mutableStateOf(false) }
     var showLocationSheet by remember { mutableStateOf(false) }
     var showLiveLocationSheet by remember { mutableStateOf(false) }
     var showVenueSheet by remember { mutableStateOf(false) }
     var showScheduledSheet by remember { mutableStateOf(false) }
-    var dockMode by remember { mutableStateOf(ComposerDockMode.COLLAPSED) }
+    var curtainState by remember { mutableStateOf(CurtainState.COMPOSER) }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     var replacingMediaMessage by remember { mutableStateOf<Message?>(null) }
@@ -287,6 +299,8 @@ fun ConversationScreen(
     var locationError by remember { mutableStateOf<String?>(null) }
     var isResolvingLocation by remember { mutableStateOf(false) }
     val isSelecting = selectedIds.isNotEmpty()
+    var composerFocusRequest by remember { mutableIntStateOf(0) }
+    var showJumpToLatest by remember { mutableStateOf(false) }
 
     // Brings a jump target into view and marks it, then hands the request back so a
     // repeat tap on the same result scrolls again.
@@ -424,7 +438,8 @@ fun ConversationScreen(
     }
 
     var hasSettledInitialPosition by remember { mutableStateOf(false) }
-    LaunchedEffect(entries.size) {
+    val latestMessageId = messages.lastOrNull()?.id
+    LaunchedEffect(entries.size, latestMessageId) {
         if (entries.isEmpty()) return@LaunchedEffect
         val lastIndex = entries.size
         if (!hasSettledInitialPosition) {
@@ -435,14 +450,40 @@ fun ConversationScreen(
         val visible = listState.layoutInfo.visibleItemsInfo
         val nearLatest = visible.any { it.index >= lastIndex - 2 }
         if (nearLatest) {
+            showJumpToLatest = false
             listState.animateScrollToItem(lastIndex)
+        } else if (hasSettledInitialPosition) {
+            showJumpToLatest = true
+        }
+    }
+    // A focus event alone is not enough: the IME changes the usable viewport over
+    // several layout passes. Re-anchor whenever the real IME inset/viewport changes,
+    // while preserving deliberate reply, edit, search and jump context.
+    LaunchedEffect(composerFocusRequest, entries, searchState.isActive, replyingToMessage?.id, editingMessage?.id, highlightedMessageId) {
+        if (composerFocusRequest == 0 || entries.isEmpty()) return@LaunchedEffect
+        if (!shouldAnchorComposerToLatest(
+                composerFocused = true,
+                isReplying = replyingToMessage != null,
+                isEditing = editingMessage != null,
+                isSearching = searchState.isActive,
+                hasJumpTarget = highlightedMessageId != null || jumpTarget != null
+            )) return@LaunchedEffect
+        snapshotFlow<Pair<Int, Int>> {
+            imeInsets.getBottom(density) to listState.layoutInfo.viewportSize.height
+        }.distinctUntilChanged().collect { viewport ->
+            val imeBottom = viewport.first
+            if (imeBottom > 0) {
+                showJumpToLatest = false
+                listState.animateScrollToItem(entries.size)
+            }
         }
     }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex }
+        snapshotFlow { listState.firstVisibleItemIndex to listState.layoutInfo.totalItemsCount }
             .distinctUntilChanged()
-            .collect { index ->
+            .collect { (index, totalItems) ->
                 if (index <= 1 && messages.size >= 15) onLoadOlder()
+                if (totalItems > 0 && index >= totalItems - 3) showJumpToLatest = false
                 val visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { info ->
                     messages.getOrNull(info.index - 1)?.id
                 }
@@ -565,24 +606,28 @@ fun ConversationScreen(
 
     // Two physical regions with a real depth relationship.
     //
-    // The footer is the base layer: it fills the whole window, including behind
-    // the gesture inset, so nothing of the atmosphere is left below it. The
-    // conversation canvas is drawn on top of it and stops short of the bottom,
-    // with softly rounded lower corners — so the footer is genuinely *behind* the
-    // chat rather than a band painted next to it, and the canvas reads as resting
-    // over a recessed dark section.
+    // The Curtain is the base layer: it runs to the bottom of the window,
+    // including behind the gesture inset, so nothing of the atmosphere is left
+    // below it. The conversation is drawn on top of it and stops short of the
+    // bottom with softly rounded lower corners — so the Curtain is genuinely
+    // *behind* the chat rather than a band painted next to it, and the
+    // conversation reads as resting over a recessed dark section.
+    //
+    // This also mirrors Home's structure: a rear layer and a foreground panel
+    // drawn over it, each aligned explicitly, rather than a Column where the
+    // conversation takes "whatever weight is left" and the Curtain follows it.
+    // Two sibling panels sharing one alignment scheme is what lets this
+    // foreground and Home's hero read the same explicit height from the same
+    // shared formula during the morph.
     val sceneOwnsDock = LocalSceneOwnsDock.current
     val dockColor = LocalAetherColors.current.background
-    val density = LocalDensity.current
 
-    // Mirrors Home's structure exactly: a rear layer (here, just the composer
-    // pinned to the bottom) and a foreground canvas panel drawn on top of it,
-    // aligned TopCenter with its own zIndex — not a Column where the canvas
-    // takes "whatever weight leaves" and the composer follows it. Two sibling
-    // panels sharing one alignment scheme is what lets the canvas and Home's
-    // hero read the same explicit height from the same shared formula during
-    // the morph, rather than two shapes that only resemble each other.
-    var dockHeightPx by remember { mutableIntStateOf(0) }
+    // Two heights, deliberately kept apart. The live one is what the foreground
+    // lays out against this frame; the resting one is the compact composer
+    // relationship and the only one allowed to reach the scene's height cache.
+    // Feeding a transient expansion into scene geometry is what turned the
+    // conversation into a small card stacked over a second screen.
+    var curtainHeights by remember { mutableStateOf(CurtainHeights(livePx = 0, restingPx = 0)) }
     val sceneProgress = LocalSceneTransitionProgress.current
     val heightCache = LocalSceneHeightCache.current
     val atRest = sceneProgress == null || sceneProgress > 0.98f
@@ -620,17 +665,21 @@ fun ConversationScreen(
             heightCache.edgePx(sceneProgress!!, containerHeightPx)
         } else null
 
-        // --- The rear layer: the composer, pinned to the bottom ------
+        // --- The rear layer: the Curtain, pinned to the bottom -------
+        // Bottom alignment and the entry animation are the screen's business;
+        // the surface itself, its height and its bottom inset are the Curtain
+        // root's, and nothing here is allowed to take those back. zIndex 0
+        // states the depth relationship outright: the Curtain is behind the
+        // conversation, so an expanded state is revealed by it, never over it.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.BottomCenter)
+                .zIndex(0f)
                 .graphicsLayer {
                     alpha = composerAlpha
                     translationY = composerTranslationY
                 }
-                .onSizeChanged { dockHeightPx = it.height }
-                .testTag("conversation_dock")
         ) {
             MessageComposer(
                 replyingTo = replyingToMessage,
@@ -639,8 +688,8 @@ fun ConversationScreen(
                     replyQuote = null
                 },
                 replyQuote = replyQuote,
-                dockMode = dockMode,
-                onDockModeChange = { mode ->
+                curtainState = curtainState,
+                onCurtainStateChange = { mode ->
                     if (mode.isExpanded) {
                         keyboardController?.hide()
                         focusManager.clearFocus()
@@ -649,37 +698,38 @@ fun ConversationScreen(
                             onLoadSavedAnimations()
                         }
                     }
-                    dockMode = mode
+                    curtainState = mode
                 },
                 onToggleAttachment = {
-                    if (dockMode == ComposerDockMode.ATTACHMENTS) {
-                        dockMode = ComposerDockMode.COLLAPSED
+                    if (curtainState == CurtainState.ATTACHMENTS) {
+                        curtainState = CurtainState.COMPOSER
                     } else {
                         keyboardController?.hide()
                         focusManager.clearFocus()
-                        dockMode = ComposerDockMode.ATTACHMENTS
+                        curtainState = CurtainState.ATTACHMENTS
                     }
                 },
                 onTogglePicker = {
-                    if (dockMode.isPicker) {
-                        dockMode = ComposerDockMode.COLLAPSED
+                    if (curtainState.isPicker) {
+                        curtainState = CurtainState.COMPOSER
                     } else {
                         keyboardController?.hide()
                         focusManager.clearFocus()
                         onLoadStickers()
                         onLoadSavedAnimations()
-                        dockMode = ComposerDockMode.EMOJI
+                        curtainState = CurtainState.EMOJI
                     }
                 },
                 onInputFocus = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
+                    composerFocusRequest++
                 },
                 onSelectGallery = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     photoPickerLauncher.launch("image/*")
                 },
                 onSelectCamera = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     val hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
                     if (hasCameraPermission) {
                         val file = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
@@ -691,19 +741,19 @@ fun ConversationScreen(
                     }
                 },
                 onSelectVideoNote = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     showVideoNoteRecorder = true
                 },
                 onSelectFile = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     docPickerLauncher.launch(arrayOf("*/*"))
                 },
                 onSelectAudio = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     docPickerLauncher.launch(arrayOf("audio/*"))
                 },
                 onSelectLocation = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     val granted = ContextCompat.checkSelfPermission(
                         context,
                         Manifest.permission.ACCESS_COARSE_LOCATION
@@ -715,7 +765,7 @@ fun ConversationScreen(
                     }
                 },
                 onSelectVenue = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     val granted = ContextCompat.checkSelfPermission(
                         context,
                         Manifest.permission.ACCESS_COARSE_LOCATION
@@ -727,16 +777,17 @@ fun ConversationScreen(
                     }
                 },
                 onSelectContact = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     showContactSheet = true
                 },
                 onSendMessage = { text, formatting ->
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     onSendMessage(text, replyingToMessage, formatting, replyQuote)
                     replyingToMessage = null
                     replyQuote = null
                 },
                 onTextChanged = onComposerChanged,
+                onCurtainHeightChanged = { curtainHeights = it },
                 enabled = canSend,
                 installedStickerSets = installedStickerSets,
                 recentStickers = recentStickers,
@@ -746,7 +797,7 @@ fun ConversationScreen(
                 savedAnimations = savedAnimations,
                 onSendAnimation = onSendAnimation,
                 onVoiceNoteRecorded = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     if (isRecordingAudio) {
                         val recordResult = audioRecorder.stopRecording()
                         isRecordingAudio = false
@@ -767,11 +818,24 @@ fun ConversationScreen(
                     }
                 },
                 onOpenVideoNote = {
-                    dockMode = ComposerDockMode.COLLAPSED
+                    curtainState = CurtainState.COMPOSER
                     showVideoNoteRecorder = true
                 },
-                selectedMessages = messages.filter { it.id in selectedIds },
+                selectedMessages = selectedMessages,
                 capabilities = messageCapabilities,
+                forwardMessages = forwardingMessages,
+                forwardTargets = forwardTargets,
+                forwardState = forwardState,
+                onDismissForward = {
+                    forwardingMessages = emptyList()
+                    curtainState = CurtainState.COMPOSER
+                    onForwardStateConsumed()
+                },
+                onSubmitForward = { targetChat, sendCopy, removeCaption ->
+                    targetChat.id.toLongOrNull()?.let { destination ->
+                        onForwardMessages(forwardingMessages, destination, sendCopy, removeCaption)
+                    }
+                },
                 onClearSelection = { selectedIds = emptySet() },
                 onReplySelected = { msg ->
                     replyingToMessage = msg
@@ -792,7 +856,11 @@ fun ConversationScreen(
                     )
                 },
                 onForwardSelected = { chosen ->
-                    forwardingMessages = chosen
+                    val chosenIds = chosen.mapTo(mutableSetOf()) { it.id }
+                    forwardingMessages = orderedMessagesForForwarding(messages, chosenIds).ifEmpty { chosen }
+                    keyboardController?.hide()
+                    focusManager.clearFocus()
+                    curtainState = CurtainState.FORWARDING
                 },
                 onDeleteSelected = { chosen ->
                     deleteConfirmMessages = chosen
@@ -800,22 +868,33 @@ fun ConversationScreen(
             )
         }
 
-        // --- The foreground layer: the canvas -------------------------
+        // --- The foreground layer: the conversation -------------------
         // A panel lying over that rear layer, exactly like Home's hero —
-        // same alignment, same zIndex, same rounded-bottom-corner shape
-        // family, so the two read as one object at different heights
-        // rather than two screens that merely look alike.
+        // same alignment, same rounded-bottom-corner shape family, so the
+        // two read as one object at different heights rather than two
+        // screens that merely look alike. It is drawn in front of the
+        // Curtain, which is why the seam between them is its own rounded
+        // bottom edge and never a rounded top edge from below.
+        val restingForegroundPx = (containerHeightPx - curtainHeights.restingPx)
+            .coerceAtLeast(0f)
+        val liveForegroundPx = (containerHeightPx - curtainHeights.livePx)
+            .coerceAtLeast(0f)
+        // Only the resting relationship is scene geometry. A Curtain expanded
+        // for attachments or forwarding changes what is exposed on screen now;
+        // it must never redefine the rectangle the Home morph interpolates to.
+        SideEffect {
+            if (atRest && curtainHeights.restingPx > 0) {
+                heightCache?.conversationRestPx = restingForegroundPx
+            }
+        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
                 .zIndex(1f)
-                .then(
-                    if (morphedCanvasPx != null) {
-                        Modifier.height(with(density) { morphedCanvasPx.toDp() })
-                    } else {
-                        Modifier.height(with(density) { (containerHeightPx - dockHeightPx).coerceAtLeast(0f).toDp() })
-                            .onSizeChanged { heightCache?.conversationRestPx = it.height.toFloat() }
+                .height(
+                    with(density) {
+                        (morphedCanvasPx ?: liveForegroundPx).coerceAtLeast(0f).toDp()
                     }
                 )
                 .clip(
@@ -824,7 +903,7 @@ fun ConversationScreen(
                         bottomEnd = ConversationCanvasRadius
                     )
                 )
-                .testTag("conversation_canvas")
+                .testTag("conversation_foreground")
         ) {
         AetherAtmosphericBackground(
             modifier = Modifier.fillMaxSize(),
@@ -864,7 +943,7 @@ fun ConversationScreen(
 
 
             // Date Divider Header
-            item(key = "date_divider") {
+            item(key = "date_divider", contentType = "date_divider") {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -890,7 +969,12 @@ fun ConversationScreen(
             }
 
             // Message Bubbles, with grouped media collapsed into one cluster.
-            items(entries, key = { it.key }) { entry ->
+            items(entries, key = { it.key }, contentType = { entry ->
+                when (entry) {
+                    is ConversationEntry.Single -> "single_message"
+                    is ConversationEntry.Album -> "album"
+                }
+            }) { entry ->
                 val rowMotion = messageMotionEvents[entry.anchor.id]
                 if (entry is ConversationEntry.Album) {
                     AlbumEntryRow(
@@ -999,6 +1083,33 @@ fun ConversationScreen(
                     translationY = headerTranslationY
                 }
         )
+
+        if (showJumpToLatest) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xE51B1B22))
+                    .border(1.dp, colors.accentSubtle, CircleShape)
+                    .clickable {
+                        coroutineScope.launch {
+                            if (entries.isNotEmpty()) listState.animateScrollToItem(entries.size)
+                            showJumpToLatest = false
+                        }
+                    }
+                    .testTag("jump_to_latest"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "Jump to latest message",
+                    tint = colors.accentSubtle,
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+        }
         } // canvas Box
 
         MessageInfoSheet(
@@ -1104,8 +1215,19 @@ fun ConversationScreen(
             onDelete = { msg -> onDeleteMessage(msg, false) }
         )
 
-        BackHandler(enabled = dockMode != ComposerDockMode.COLLAPSED) {
-            dockMode = ComposerDockMode.COLLAPSED
+        BackHandler(enabled = curtainState != CurtainState.COMPOSER) {
+            if (curtainState == CurtainState.FORWARDING) {
+                if (isImeVisible) {
+                    keyboardController?.hide()
+                    focusManager.clearFocus()
+                } else if (forwardState !is ForwardState.Sending) {
+                    forwardingMessages = emptyList()
+                    curtainState = CurtainState.COMPOSER
+                    onForwardStateConsumed()
+                }
+            } else {
+                curtainState = CurtainState.COMPOSER
+            }
         }
 
         VideoNoteRecorderSheet(
@@ -1153,7 +1275,13 @@ fun ConversationScreen(
                     MessageAction.COPY -> {
                         clipboardManager.setText(AnnotatedString(target.text))
                     }
-                    MessageAction.FORWARD -> forwardingMessages = listOf(target)
+                    MessageAction.FORWARD -> {
+                        forwardingMessages = listOf(target)
+                        selectedIds = setOf(target.id)
+                        keyboardController?.hide()
+                        focusManager.clearFocus()
+                        curtainState = CurtainState.FORWARDING
+                    }
                     MessageAction.SELECT -> selectedIds = setOf(target.id)
                     MessageAction.EDIT -> editingMessage = target
                     MessageAction.REPLACE_MEDIA -> {
@@ -1176,30 +1304,14 @@ fun ConversationScreen(
             }
         )
 
-        // Forward target picker
-        if (forwardingMessages.isNotEmpty()) {
-            ForwardTargetSheet(
-                targets = forwardTargets,
-                // Only offered where Telegram permits it: an attributed forward of
-                // protected content is allowed, an unattributed copy is not.
-                canSendCopy = forwardingMessages.all {
-                    messageCapabilities[it.id]?.canBeSaved ?: false
-                },
-                hasCaption = forwardingMessages.any {
-                    it.text.isNotBlank() && it.type != MessageType.TEXT
-                },
-                onDismiss = { forwardingMessages = emptyList() },
-                onPick = { targetChat, sendCopy, removeCaption ->
-                    val destination = targetChat.id.toLongOrNull()
-                    if (destination != null) {
-                        forwardingMessages.forEach { msg ->
-                            onForwardMessage(msg, destination, sendCopy, removeCaption)
-                        }
-                    }
-                    forwardingMessages = emptyList()
-                    selectedIds = emptySet()
-                }
-            )
+        LaunchedEffect(forwardState) {
+            if (forwardState is ForwardState.Success) {
+                localView.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+                selectedIds = emptySet()
+                forwardingMessages = emptyList()
+                curtainState = CurtainState.COMPOSER
+                onForwardStateConsumed()
+            }
         }
 
         // Dismiss message edit mode on back press before exiting Conversation
@@ -1259,137 +1371,6 @@ private fun copyUriToTempFile(context: android.content.Context, uri: Uri, prefix
         null
     }
 }
-
-/**
- * Chooses where a message is forwarded to.
- *
- * Kept deliberately plain: it lists the conversations Aether already has, and the
- * chosen one is forwarded to through the real TDLib forward operation. Nothing is
- * copied or re-sent as new text.
- */
-@Composable
-private fun ForwardTargetSheet(
-    targets: List<Chat>,
-    canSendCopy: Boolean,
-    hasCaption: Boolean,
-    onDismiss: () -> Unit,
-    onPick: (Chat, Boolean, Boolean) -> Unit
-) {
-    val colors = LocalAetherColors.current
-    var sendCopy by remember { mutableStateOf(false) }
-    var removeCaption by remember { mutableStateOf(false) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { onDismiss() }
-            .padding(horizontal = 20.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.7f)
-                .clip(AetherEmber.Shapes.L)
-                .background(colors.surface)
-                .border(1.dp, colors.border, AetherEmber.Shapes.L)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) { /* keep taps inside the sheet */ }
-                .testTag("forward_target_sheet")
-        ) {
-            Text(
-                text = "Forward to",
-                fontFamily = SpaceGroteskFontFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
-                color = colors.textPrimary,
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp)
-            )
-
-            if (canSendCopy) {
-                ForwardOptionRow(
-                    label = "Hide the original sender",
-                    detail = "Forwards without attribution, as though you wrote it",
-                    checked = sendCopy,
-                    testTag = "forward_option_copy",
-                    onToggle = {
-                        sendCopy = !sendCopy
-                        // Dropping a caption is only meaningful on a copy; an
-                        // attributed forward keeps the original intact.
-                        if (!sendCopy) removeCaption = false
-                    }
-                )
-                if (sendCopy && hasCaption) {
-                    ForwardOptionRow(
-                        label = "Remove the caption",
-                        detail = "Sends the media without its text",
-                        checked = removeCaption,
-                        testTag = "forward_option_remove_caption",
-                        onToggle = { removeCaption = !removeCaption }
-                    )
-                }
-            }
-
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                items(targets, key = { it.id }) { target ->
-                    ChatRow(
-                        chat = target,
-                        onClick = { onPick(target, sendCopy, removeCaption) },
-                        modifier = Modifier.testTag("forward_target_${target.id}")
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ForwardOptionRow(
-    label: String,
-    detail: String,
-    checked: Boolean,
-    testTag: String,
-    onToggle: () -> Unit
-) {
-    val colors = LocalAetherColors.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onToggle() }
-            .padding(horizontal = 20.dp, vertical = 12.dp)
-            .testTag(testTag),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = label,
-                fontFamily = ManropeFontFamily,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = colors.textPrimary
-            )
-            Text(
-                text = detail,
-                fontFamily = ManropeFontFamily,
-                fontSize = 12.sp,
-                color = colors.textTertiary
-            )
-        }
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .clip(AetherEmber.Shapes.Pill)
-                .background(if (checked) colors.accent else colors.surfaceHighlight)
-        )
-    }
-}
-
 
 /**
  * One album, presented with the same bubble chrome as a single media message.

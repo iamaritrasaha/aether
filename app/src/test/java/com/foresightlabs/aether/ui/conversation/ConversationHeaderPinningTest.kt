@@ -90,7 +90,7 @@ class ConversationHeaderPinningTest {
      */
     @Test
     fun theMessageListsOwnBoundsAreNotShrunkToStartBelowTheHeader() {
-        val canvas = boundsOf("conversation_canvas")
+        val canvas = boundsOf("conversation_foreground")
         val list = boundsOf("conversation_message_list")
 
         assertTrue(

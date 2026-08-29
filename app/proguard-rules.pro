@@ -19,3 +19,14 @@
 # Keep official TDLib JNI bindings
 -keep class org.drinkless.tdlib.** { *; }
 -dontwarn org.drinkless.tdlib.**
+
+# These classes are reached by Android/FCM from the manifest rather than by a
+# direct Kotlin call site. Keep their names and entry points stable.
+-keep class com.foresightlabs.aether.AetherApplication { *; }
+-keep class com.foresightlabs.aether.MainActivity { *; }
+-keep class com.foresightlabs.aether.data.push.AetherFirebaseMessagingService { *; }
+-keep class com.foresightlabs.aether.data.notifications.NotificationActionReceiver { *; }
+
+# call-media exposes native methods whose generated JNI names include the
+# declaring class and method names.
+-keep class com.foresightlabs.aether.calls.media.** { *; }

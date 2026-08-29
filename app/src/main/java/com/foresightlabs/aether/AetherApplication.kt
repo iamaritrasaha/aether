@@ -25,17 +25,32 @@ class AetherApplication : Application(), ImageLoaderFactory {
     lateinit var onboardingRepository: OnboardingRepository
         private set
 
-    lateinit var contactsRepository: ContactsRepository
-        private set
+    val contactsRepository: ContactsRepository by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        DefaultContactsRepository(
+            context = applicationContext,
+            telegram = telegram,
+        )
+    }
 
     lateinit var permissionCoordinator: PermissionCoordinator
         private set
 
-    lateinit var callsRepository: CallsRepository
-        private set
+    val callsRepository: CallsRepository by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        DefaultCallsRepository(
+            telegram = telegram,
+            application = this,
+            permissionCoordinator = permissionCoordinator
+        )
+    }
 
-    lateinit var liveLocationCoordinator: com.foresightlabs.aether.data.location.LiveLocationCoordinator
-        private set
+    val liveLocationCoordinator: com.foresightlabs.aether.data.location.LiveLocationCoordinator by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        com.foresightlabs.aether.data.location.LiveLocationCoordinator(
+            context = this,
+            locationProvider = com.foresightlabs.aether.data.location.SystemLocationProvider(this),
+            gateway = com.foresightlabs.aether.data.location.TelegramLiveLocationGateway(telegram),
+            scope = applicationScope
+        )
+    }
 
     lateinit var notificationManager: com.foresightlabs.aether.data.notifications.AetherNotificationManager
         private set
@@ -77,6 +92,7 @@ class AetherApplication : Application(), ImageLoaderFactory {
             override fun onActivityResumed(activity: android.app.Activity) {
                 resumedActivities++
                 com.foresightlabs.aether.data.notifications.ActiveConversationTracker.setAppForeground(true)
+                telegram.setOnline(true)
             }
 
             override fun onActivityPaused(activity: android.app.Activity) {
@@ -84,6 +100,7 @@ class AetherApplication : Application(), ImageLoaderFactory {
                 if (resumedActivities <= 0) {
                     resumedActivities = 0
                     com.foresightlabs.aether.data.notifications.ActiveConversationTracker.setAppForeground(false)
+                    telegram.setOnline(false)
                 }
             }
 
@@ -94,22 +111,8 @@ class AetherApplication : Application(), ImageLoaderFactory {
             override fun onActivityDestroyed(activity: android.app.Activity) {}
         })
         telegram.start()
+        telegram.setOnline(false)
         registerExistingFcmToken()
-        contactsRepository = DefaultContactsRepository(
-            context = applicationContext,
-            telegram = telegram,
-        )
-        callsRepository = DefaultCallsRepository(
-            telegram = telegram,
-            application = this,
-            permissionCoordinator = permissionCoordinator
-        )
-        liveLocationCoordinator = com.foresightlabs.aether.data.location.LiveLocationCoordinator(
-            context = this,
-            locationProvider = com.foresightlabs.aether.data.location.SystemLocationProvider(this),
-            gateway = com.foresightlabs.aether.data.location.TelegramLiveLocationGateway(telegram),
-            scope = applicationScope
-        )
     }
 
     /**
@@ -141,6 +144,7 @@ class AetherApplication : Application(), ImageLoaderFactory {
             ).apply {
                 description = "Notifications for new Telegram messages"
                 enableVibration(true)
+                setShowBadge(true)
             }
 
             val callsChannel = NotificationChannel(

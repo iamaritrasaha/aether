@@ -50,11 +50,34 @@
         -->
         <service
             android:name=".data.push.AetherFirebaseMessagingService"
+            android:enabled="${aetherFcmEnabled}"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+
+        <!--
+          Firebase remains on the compile/runtime classpath so the configured
+          FCM build uses the same source set. Without google-services.json,
+          every Firebase process entry point is disabled before Application
+          startup; BuildConfig checks alone run too late for ContentProviders.
+        -->
+        <provider
+            android:name="com.google.firebase.provider.FirebaseInitProvider"
+            android:enabled="${aetherFcmEnabled}" />
+
+        <receiver
+            android:name="com.google.firebase.iid.FirebaseInstanceIdReceiver"
+            android:enabled="${aetherFcmEnabled}" />
+
+        <service
+            android:name="com.google.firebase.messaging.FirebaseMessagingService"
+            android:enabled="${aetherFcmEnabled}" />
+
+        <service
+            android:name="com.google.firebase.components.ComponentDiscoveryService"
+            android:enabled="${aetherFcmEnabled}" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

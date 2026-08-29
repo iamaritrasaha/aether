@@ -24,7 +24,7 @@ import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
 import com.foresightlabs.aether.domain.model.User
 import com.foresightlabs.aether.domain.search.ConversationSearchState
-import com.foresightlabs.aether.ui.conversation.ComposerDockMode
+import com.foresightlabs.aether.ui.conversation.CurtainState
 import com.foresightlabs.aether.ui.conversation.MessageComposer
 import com.foresightlabs.aether.ui.conversation.PickerTab
 import com.foresightlabs.aether.ui.conversation.ConversationScreen
@@ -53,21 +53,21 @@ class ComposerDockTest {
     // --- State Model Tests ---
 
     @Test
-    fun dockModePropertiesAreCorrect() {
-        assertFalse(ComposerDockMode.COLLAPSED.isExpanded)
-        assertFalse(ComposerDockMode.COLLAPSED.isPicker)
+    fun curtainStatePropertiesAreCorrect() {
+        assertFalse(CurtainState.COMPOSER.isExpanded)
+        assertFalse(CurtainState.COMPOSER.isPicker)
 
-        assertTrue(ComposerDockMode.ATTACHMENTS.isExpanded)
-        assertFalse(ComposerDockMode.ATTACHMENTS.isPicker)
+        assertTrue(CurtainState.ATTACHMENTS.isExpanded)
+        assertFalse(CurtainState.ATTACHMENTS.isPicker)
 
-        assertTrue(ComposerDockMode.EMOJI.isExpanded)
-        assertTrue(ComposerDockMode.EMOJI.isPicker)
+        assertTrue(CurtainState.EMOJI.isExpanded)
+        assertTrue(CurtainState.EMOJI.isPicker)
 
-        assertTrue(ComposerDockMode.STICKERS.isExpanded)
-        assertTrue(ComposerDockMode.STICKERS.isPicker)
+        assertTrue(CurtainState.STICKERS.isExpanded)
+        assertTrue(CurtainState.STICKERS.isPicker)
 
-        assertTrue(ComposerDockMode.GIFS.isExpanded)
-        assertTrue(ComposerDockMode.GIFS.isPicker)
+        assertTrue(CurtainState.GIFS.isExpanded)
+        assertTrue(CurtainState.GIFS.isPicker)
     }
 
     // --- Emoji Insertion & Cursor Preservation ---
@@ -140,7 +140,7 @@ class ComposerDockTest {
 
     @Test
     fun tappingPlusButtonTogglesAttachmentGrid() {
-        var currentDockMode by mutableStateOf(ComposerDockMode.COLLAPSED)
+        var currentDockMode by mutableStateOf(CurtainState.COMPOSER)
         composeRule.setContent {
             val theme = AppThemeState()
             AetherTheme(themeState = theme) {
@@ -148,31 +148,31 @@ class ComposerDockTest {
                     replyingTo = null,
                     onDismissReply = {},
                     onSendMessage = { _, _ -> },
-                    dockMode = currentDockMode,
-                    onDockModeChange = { currentDockMode = it }
+                    curtainState = currentDockMode,
+                    onCurtainStateChange = { currentDockMode = it }
                 )
             }
         }
         composeRule.waitForIdle()
 
         // Initially collapsed
-        assertEquals(ComposerDockMode.COLLAPSED, currentDockMode)
+        assertEquals(CurtainState.COMPOSER, currentDockMode)
 
         // Tap Plus
         composeRule.onNodeWithTag("attachment_button").performClick()
         composeRule.waitForIdle()
-        assertEquals(ComposerDockMode.ATTACHMENTS, currentDockMode)
+        assertEquals(CurtainState.ATTACHMENTS, currentDockMode)
         composeRule.onNodeWithTag("attachment_option_gallery").assertIsDisplayed()
 
         // Tap Plus again to collapse
         composeRule.onNodeWithTag("attachment_button").performClick()
         composeRule.waitForIdle()
-        assertEquals(ComposerDockMode.COLLAPSED, currentDockMode)
+        assertEquals(CurtainState.COMPOSER, currentDockMode)
     }
 
     @Test
     fun tappingEmojiButtonTogglesEmojiPicker() {
-        var currentDockMode by mutableStateOf(ComposerDockMode.COLLAPSED)
+        var currentDockMode by mutableStateOf(CurtainState.COMPOSER)
         composeRule.setContent {
             val theme = AppThemeState()
             AetherTheme(themeState = theme) {
@@ -180,8 +180,8 @@ class ComposerDockTest {
                     replyingTo = null,
                     onDismissReply = {},
                     onSendMessage = { _, _ -> },
-                    dockMode = currentDockMode,
-                    onDockModeChange = { currentDockMode = it }
+                    curtainState = currentDockMode,
+                    onCurtainStateChange = { currentDockMode = it }
                 )
             }
         }
@@ -190,18 +190,18 @@ class ComposerDockTest {
         // Tap Emoji button
         composeRule.onNodeWithTag("sticker_button").performClick()
         composeRule.waitForIdle()
-        assertEquals(ComposerDockMode.EMOJI, currentDockMode)
+        assertEquals(CurtainState.EMOJI, currentDockMode)
         composeRule.onNodeWithTag("emoji_sticker_gif_panel").assertIsDisplayed()
 
         // Tap again (now showing keyboard icon) to collapse
         composeRule.onNodeWithTag("sticker_button").performClick()
         composeRule.waitForIdle()
-        assertEquals(ComposerDockMode.COLLAPSED, currentDockMode)
+        assertEquals(CurtainState.COMPOSER, currentDockMode)
     }
 
     @Test
     fun switchingBetweenAttachmentsAndEmojiMaintainsSingleDock() {
-        var currentDockMode by mutableStateOf(ComposerDockMode.COLLAPSED)
+        var currentDockMode by mutableStateOf(CurtainState.COMPOSER)
         composeRule.setContent {
             val theme = AppThemeState()
             AetherTheme(themeState = theme) {
@@ -209,8 +209,8 @@ class ComposerDockTest {
                     replyingTo = null,
                     onDismissReply = {},
                     onSendMessage = { _, _ -> },
-                    dockMode = currentDockMode,
-                    onDockModeChange = { currentDockMode = it }
+                    curtainState = currentDockMode,
+                    onCurtainStateChange = { currentDockMode = it }
                 )
             }
         }
@@ -219,18 +219,18 @@ class ComposerDockTest {
         // Open Attachments
         composeRule.onNodeWithTag("attachment_button").performClick()
         composeRule.waitForIdle()
-        assertEquals(ComposerDockMode.ATTACHMENTS, currentDockMode)
+        assertEquals(CurtainState.ATTACHMENTS, currentDockMode)
 
         // Switch to Emoji directly
         composeRule.onNodeWithTag("sticker_button").performClick()
         composeRule.waitForIdle()
-        assertEquals(ComposerDockMode.EMOJI, currentDockMode)
+        assertEquals(CurtainState.EMOJI, currentDockMode)
         composeRule.onNodeWithTag("emoji_sticker_gif_panel").assertIsDisplayed()
 
         // Switch back to Attachments directly
         composeRule.onNodeWithTag("attachment_button").performClick()
         composeRule.waitForIdle()
-        assertEquals(ComposerDockMode.ATTACHMENTS, currentDockMode)
+        assertEquals(CurtainState.ATTACHMENTS, currentDockMode)
         composeRule.onNodeWithTag("attachment_option_gallery").assertIsDisplayed()
     }
 
@@ -238,7 +238,7 @@ class ComposerDockTest {
     fun stickerAndGifActionsRouteCorrectly() {
         var sentStickerFileId = 0
         var sentAnimationFileId = 0
-        var currentDockMode by mutableStateOf(ComposerDockMode.STICKERS)
+        var currentDockMode by mutableStateOf(CurtainState.STICKERS)
 
         val testSticker = StickerItem(fileId = 12345, emoji = "😀")
         val testAnim = AnimationItem(fileId = 67890, fileName = "funny.gif")
@@ -250,8 +250,8 @@ class ComposerDockTest {
                     replyingTo = null,
                     onDismissReply = {},
                     onSendMessage = { _, _ -> },
-                    dockMode = currentDockMode,
-                    onDockModeChange = { currentDockMode = it },
+                    curtainState = currentDockMode,
+                    onCurtainStateChange = { currentDockMode = it },
                     recentStickers = listOf(testSticker),
                     savedAnimations = listOf(testAnim),
                     onSendSticker = { fileId, _ -> sentStickerFileId = fileId },
@@ -268,7 +268,7 @@ class ComposerDockTest {
         // Switch to GIFs tab inside panel
         composeRule.onNodeWithTag("picker_tab_gifs").performClick()
         composeRule.waitForIdle()
-        assertEquals(ComposerDockMode.GIFS, currentDockMode)
+        assertEquals(CurtainState.GIFS, currentDockMode)
 
         // Tap GIF item
         composeRule.onNodeWithTag("gif_item_67890").performClick()

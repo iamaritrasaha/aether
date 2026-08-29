@@ -16,7 +16,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.foresightlabs.aether.ui.conversation.AttachmentSheet
+import com.foresightlabs.aether.ui.conversation.AttachmentCurtainContent
 import com.foresightlabs.aether.ui.conversation.MessageComposer
 import com.foresightlabs.aether.ui.design.AetherGlassTokens
 import com.foresightlabs.aether.ui.design.AetherNavItem
@@ -97,7 +97,6 @@ class AetherGlassSystemTest {
                     Box(modifier = Modifier.fillMaxSize()) {
                         MessageComposer(
                             onSendMessage = { _, _ -> },
-                            onOpenAttachmentSheet = {},
                             onVoiceNoteRecorded = {},
                             replyingTo = null,
                             onDismissReply = {}
@@ -114,23 +113,28 @@ class AetherGlassSystemTest {
     }
 
     @Test
-    fun attachmentSheet_rendersUnifiedNeutralGlassSheetAndCircles() {
+    fun attachmentCurtainContent_rendersOptionCirclesWithNoSurfaceOfItsOwn() {
         val themeState = AppThemeState()
         composeRule.setContent {
             CompositionLocalProvider(LocalAppThemeState provides themeState) {
                 AetherTheme(themeState = themeState) {
-                    AttachmentSheet(
-                        isVisible = true,
-                        onDismiss = {},
-                        onOptionSelected = {}
+                    AttachmentCurtainContent(
+                        onSelectGallery = {},
+                        onSelectCamera = {},
+                        onSelectVideoNote = {},
+                        onSelectFile = {},
+                        onSelectAudio = {},
+                        onSelectLocation = {},
+                        onSelectVenue = {},
+                        onSelectContact = {}
                     )
                 }
             }
         }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("attachment_sheet_content").assertIsDisplayed()
-        composeRule.onNodeWithTag("attachment_gallery").assertIsDisplayed()
-        composeRule.onNodeWithTag("attachment_file").assertIsDisplayed()
-        composeRule.onNodeWithTag("attachment_location").assertIsDisplayed()
+        composeRule.onNodeWithTag("curtain_attachment_content").assertIsDisplayed()
+        composeRule.onNodeWithTag("attachment_option_gallery").assertIsDisplayed()
+        composeRule.onNodeWithTag("attachment_option_file").assertIsDisplayed()
+        composeRule.onNodeWithTag("attachment_option_location").assertIsDisplayed()
     }
 }

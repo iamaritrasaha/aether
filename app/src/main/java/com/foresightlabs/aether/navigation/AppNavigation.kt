@@ -656,28 +656,34 @@ fun AetherApp(
             }
         }
 
-        val callsRepository = (application as AetherApplication).callsRepository
-        val activeCall by callsRepository.activeCallState.collectAsStateWithLifecycle()
+        val callsRepository = if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED) {
+            (application as AetherApplication).callsRepository
+        } else {
+            null
+        }
+        val activeCall by (callsRepository?.activeCallState
+            ?: kotlinx.coroutines.flow.flowOf<com.foresightlabs.aether.domain.model.ActiveCall?>(null))
+            .collectAsStateWithLifecycle(initialValue = null)
         val navScope = rememberCoroutineScope()
 
         if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED && activeCall != null) {
             if (activeCall!!.isMinimized) {
                 OngoingCallBar(
                     activeCall = activeCall!!,
-                    onExpand = { callsRepository.setMinimized(false) }
+                    onExpand = { callsRepository?.setMinimized(false) }
                 )
             } else {
                 FullCallScreen(
                     activeCall = activeCall,
                     onAcceptCall = { callId ->
-                        navScope.launch { callsRepository.acceptCall(callId) }
+                        navScope.launch { callsRepository?.acceptCall(callId) }
                     },
                     onDiscardCall = { callId ->
-                        navScope.launch { callsRepository.discardCall(callId) }
+                        navScope.launch { callsRepository?.discardCall(callId) }
                     },
-                    onToggleMute = callsRepository::toggleMute,
-                    onToggleSpeaker = callsRepository::toggleSpeaker,
-                    onMinimize = { callsRepository.setMinimized(true) }
+                    onToggleMute = { callsRepository?.toggleMute() },
+                    onToggleSpeaker = { callsRepository?.toggleSpeaker() },
+                    onMinimize = { callsRepository?.setMinimized(true) }
                 )
             }
         }
@@ -712,6 +718,7 @@ private fun ConversationRoute(
     val canSend by viewModel.composerEnabled.collectAsStateWithLifecycle()
     val messageCapabilities by viewModel.capabilities.collectAsStateWithLifecycle()
     val forwardTargets by viewModel.forwardTargets.collectAsStateWithLifecycle()
+    val forwardState by viewModel.forwardState.collectAsStateWithLifecycle()
     val searchState by viewModel.search.collectAsStateWithLifecycle()
     val jumpTarget by viewModel.jumpTarget.collectAsStateWithLifecycle()
     val messageMotionEvents by viewModel.messageMotionEvents.collectAsStateWithLifecycle()
@@ -781,10 +788,12 @@ private fun ConversationRoute(
             onEditMessage = viewModel::editMessage, onAddReaction = viewModel::addReaction,
             onPinMessage = viewModel::pinMessage, onComposerChanged = viewModel::onComposerChanged,
             onLoadOlder = viewModel::loadOlder, onDeleteMessage = viewModel::delete,
-            onForwardMessage = { message, toChatId, sendCopy, removeCaption ->
-                viewModel.forwardMessage(message, toChatId, sendCopy, removeCaption)
+            onForwardMessages = { selectedMessages, toChatId, sendCopy, removeCaption ->
+                viewModel.forwardMessages(selectedMessages, toChatId, sendCopy, removeCaption)
             },
             forwardTargets = forwardTargets,
+            forwardState = forwardState,
+            onForwardStateConsumed = viewModel::consumeForwardState,
             messageCapabilities = messageCapabilities,
             onRequestCapabilities = viewModel::loadCapabilities,
             onRetryMessage = viewModel::retry, onVisibleMessages = viewModel::markVisible,

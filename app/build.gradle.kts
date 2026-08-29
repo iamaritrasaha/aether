@@ -48,8 +48,8 @@ android {
     applicationId = "com.foresightlabs.aether"
     minSdk = 24
     targetSdk = 37
-    versionCode = 6
-    versionName = "1.5.0"
+    versionCode = 7
+    versionName = "1.5.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -63,6 +63,7 @@ android {
     buildConfigField("boolean", "HAS_TELEGRAM_CREDENTIALS", (telegramApiId.isNotEmpty() && telegramApiHash.isNotEmpty()).toString())
     buildConfigField("String", "TDLIB_COMMIT", "\"89ebded9571b7bb589ec1bd05e585fffa4c580e2\"")
     buildConfigField("boolean", "HAS_FCM_CONFIG", hasFcmConfig.toString())
+    manifestPlaceholders["aetherFcmEnabled"] = hasFcmConfig.toString()
   }
 
   signingConfigs {
@@ -80,7 +81,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
