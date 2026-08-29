@@ -47,15 +47,15 @@ object AetherEmber {
         val TranslucentWarmGlow = Color(0x29FF7038)
 
         // Message Bubble Colors
-        val IncomingBubbleBg = Color(0x30FFFFFF)
-        val IncomingBubbleBorder = Color(0x26FFFFFF)
-        val IncomingBubbleText = Color(0xFFFFFFFF)
-        val IncomingBubbleMeta = Color(0xB8FFFFFF)
+        val IncomingBubbleBg = Color(0xFF393A46)
+        val IncomingBubbleBorder = Color(0x1AFFFFFF)
+        val IncomingBubbleText = Color(0xFFF1F0F4)
+        val IncomingBubbleMeta = Color(0x9EF1F0F4)
 
-        val OutgoingBubbleStart = Color(0xFFF04425)
-        val OutgoingBubbleEnd = Color(0xFFC90B27)
-        val OutgoingBubbleText = Color(0xFFFFFFFF)
-        val OutgoingBubbleMeta = Color(0xCCFFFFFF)
+        val OutgoingBubbleStart = Color(0xDB24252C)
+        val OutgoingBubbleEnd = Color(0xDB24252C)
+        val OutgoingBubbleText = Color(0xFFF4F4F7)
+        val OutgoingBubbleMeta = Color(0x8CF4F4F7)
 
         // --- CONTEXTUAL TEXT HIERARCHY ---
         // 1. Stable Near-Black / Surface Typography (Foreground dark sheets, cards, lists)

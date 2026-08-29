@@ -2,6 +2,7 @@ package com.foresightlabs.aether.data.telegram
 
 import android.app.Application
 import android.os.Build
+import androidx.core.content.edit
 import com.foresightlabs.aether.BuildConfig
 import com.foresightlabs.aether.domain.calls.MediaConnectionState
 import com.foresightlabs.aether.domain.messages.MessageCapabilities
@@ -53,6 +54,15 @@ class TelegramClient(private val application: Application) {
     private val typing = ConcurrentHashMap<Long, String>()
     private val photoPaths = ConcurrentHashMap<String, String>()
     private val requestedFiles = ConcurrentHashMap<Int, Boolean>()
+    /** File ids TDLib is currently, actively downloading -- tracked so a later
+     * UpdateFile that is neither active nor completed can be told apart from
+     * "never started" (nothing to report) versus "genuinely stopped without
+     * finishing" (a real download failure worth a retry affordance). */
+    private val activeDownloads = ConcurrentHashMap<Int, Boolean>()
+    /** File ids whose download stopped without completing. Cleared on retry or
+     * on a fresh completion; consulted so [resolveMediaPath] does not spin in
+     * an automatic retry loop against a file TDLib has already given up on. */
+    private val failedDownloads = ConcurrentHashMap<Int, Boolean>()
     private val activeStories = ConcurrentHashMap<Long, TdApi.ChatActiveStories>()
     private val storiesCache = ConcurrentHashMap<String, com.foresightlabs.aether.domain.model.StoryItem>()
 
@@ -88,6 +98,8 @@ class TelegramClient(private val application: Application) {
     var notificationManager: com.foresightlabs.aether.data.notifications.AetherNotificationManager? = null
 
     @Volatile private var myUserId: Long = 0L
+
+    fun getMyUserId(): Long = myUserId
     @Volatile private var chatsFullyLoaded = false
     private val chatLoadMutex = Mutex()
     private var publishChatsJob: Job? = null
@@ -215,13 +227,159 @@ class TelegramClient(private val application: Application) {
         return messages.mapNotNull { td -> td?.let(::mapUiMessage) }.reversed()
     }
 
-    suspend fun loadHistory(chatId: Long, fromMessageId: Long, limit: Int = 40): List<Message> {
-        val result = send(TdApi.GetChatHistory(chatId, fromMessageId, 0, limit, false))
-        val messages = (result as? TdApi.Messages)?.messages ?: return emptyList()
-        val chat = chats[chatId]
-        val lastReadOut = chat?.lastReadOutboxMessageId ?: 0L
-        return messages.mapNotNull { td -> td?.let(::mapUiMessage) }.reversed()
+    /**
+     * Result of a local-first history page request.
+     *
+     * [endOfHistory] is only meaningful when a network-capable request was actually
+     * attempted (i.e. only when the caller allowed network AND local history ran
+     * out) — TDLib may legitimately hand back fewer than the requested count while
+     * more history still exists, so a short page never implies completeness on its
+     * own. [oldestId] is the next pagination boundary regardless of how the page
+     * was satisfied.
+     */
+    data class HistoryPage(
+        val messages: List<Message>,
+        val oldestId: Long,
+        val usedNetwork: Boolean,
+        val endOfHistory: Boolean
+    )
+
+    /**
+     * One page of chat history, local-first.
+     *
+     * Two independent reasons a single call can't be trusted at face value:
+     *
+     * 1. TDLib's onlyLocal=true call can legitimately return fewer than [limit]
+     *    messages even though its local database holds more — its own local
+     *    pagination isn't guaranteed to fill a page in one shot.
+     * 2. GetChatHistory with offset=0 starts *at* fromMessageId, not after it —
+     *    the boundary message itself may legitimately reappear in the next
+     *    round's batch. That is overlap, not a new/older message, and must not
+     *    be counted as progress or it would silently re-add the same message
+     *    forever. Aether tolerates the overlap by deduping on stable message id
+     *    and explicitly excluding the requested boundary id from the "did this
+     *    round make progress" count.
+     *
+     * So each round computes newUniqueCount (messages neither already collected
+     * nor equal to the id we just requested from) and only advances the cursor
+     * to the oldest of those. A round with newUniqueCount == 0 means the local
+     * database has nothing further at this boundary — it stops immediately
+     * rather than re-requesting the same boundary. Only once local rounds are
+     * exhausted (by that condition, by hitting [limit], or by the defensive
+     * round cap) and [allowNetwork] is true does this fall through to one
+     * network-capable request to close the remaining gap — so an initial,
+     * non-blocking render can pass allowNetwork=false and never wait on the
+     * network merely to show what's already cached.
+     */
+    private suspend fun collectHistoryPage(
+        chatId: Long,
+        fromMessageId: Long,
+        limit: Int,
+        allowNetwork: Boolean,
+        reason: String
+    ): HistoryPage {
+        val collected = LinkedHashMap<Long, TdApi.Message>()
+        var boundary = fromMessageId
+        var rounds = 0
+        while (collected.size < limit && rounds < MAX_LOCAL_FILL_ROUNDS) {
+            rounds++
+            val requestBoundary = boundary
+            val remaining = limit - collected.size
+            val localResult = send(TdApi.GetChatHistory(chatId, requestBoundary, 0, remaining, true))
+            val batch = (localResult as? TdApi.Messages)?.messages?.filterNotNull() ?: emptyList()
+            val (newUnique, newOldest) = mergeBatch(collected, batch, requestBoundary)
+            val boundaryAfter = if (newUnique > 0) newOldest else requestBoundary
+            logHistoryRequest(chatId, "LOCAL", reason, requestBoundary, remaining, batch.size, newUnique, boundaryAfter, (localResult as? TdApi.Messages)?.totalCount ?: -1)
+            // newUnique == 0 means the local database has nothing further at
+            // this boundary (LOCAL CACHE EXHAUSTED AT THIS BOUNDARY) -- not
+            // proof the server has no more history. Stop local rounds here
+            // rather than re-requesting the same boundary.
+            if (newUnique == 0) break
+            boundary = newOldest
+        }
+        var usedNetwork = false
+        var endOfHistory = false
+        if (collected.size < limit && allowNetwork) {
+            usedNetwork = true
+            val requestBoundary = boundary
+            val remaining = limit - collected.size
+            val networkResult = send(TdApi.GetChatHistory(chatId, requestBoundary, 0, remaining, false))
+            val batch = (networkResult as? TdApi.Messages)?.messages?.filterNotNull() ?: emptyList()
+            val (newUnique, newOldest) = mergeBatch(collected, batch, requestBoundary)
+            val boundaryAfter = if (newUnique > 0) newOldest else requestBoundary
+            logHistoryRequest(chatId, "NETWORK_CAPABLE", reason, requestBoundary, remaining, batch.size, newUnique, boundaryAfter, (networkResult as? TdApi.Messages)?.totalCount ?: -1)
+            if (newUnique == 0) {
+                // Chosen client-side exhaustion rule, not a TDLib guarantee: a
+                // network-capable request that adds no new unique older
+                // message is treated as the practical end of this chat's
+                // history for pagination purposes.
+                endOfHistory = true
+            } else {
+                boundary = newOldest
+            }
+        }
+        val messages = collected.values.mapNotNull(::mapUiMessage).reversed()
+        return HistoryPage(messages, boundary, usedNetwork, endOfHistory)
     }
+
+    /**
+     * Merges [batch] into [collected] (keyed by stable message id), skipping the
+     * message matching [requestBoundary] -- GetChatHistory's offset=0 starts
+     * exactly at that id, so it may reappear without being a genuinely new
+     * older message. Returns the count of messages this round actually added
+     * and the oldest id among them (0L if none were added).
+     */
+    private fun mergeBatch(
+        collected: LinkedHashMap<Long, TdApi.Message>,
+        batch: List<TdApi.Message>,
+        requestBoundary: Long
+    ): Pair<Int, Long> {
+        var newUnique = 0
+        var newOldest = 0L
+        for (m in batch) {
+            if (m.id == requestBoundary) continue
+            val isNew = !collected.containsKey(m.id)
+            collected[m.id] = m
+            if (isNew) {
+                newUnique++
+                if (newOldest == 0L || m.id < newOldest) newOldest = m.id
+            }
+        }
+        return newUnique to newOldest
+    }
+
+    private fun logHistoryRequest(
+        chatId: Long,
+        requestType: String,
+        reason: String,
+        boundaryBefore: Long,
+        requestedLimit: Int,
+        returnedCount: Int,
+        newUniqueCount: Int,
+        boundaryAfter: Long,
+        approxTotalCount: Int
+    ) {
+        if (!BuildConfig.DEBUG) return
+        android.util.Log.d(
+            TAG,
+            "history chat=${chatId.hashCode()} type=$requestType reason=$reason " +
+                "boundaryBefore=$boundaryBefore limit=$requestedLimit returned=$returnedCount " +
+                "newUnique=$newUniqueCount boundaryAfter=$boundaryAfter approxTotal=$approxTotalCount"
+        )
+    }
+
+    /**
+     * Local-first page of chat history. See [collectHistoryPage] for the fill
+     * algorithm; [allowNetwork] should be false for a non-blocking initial render
+     * and true for user-driven pagination that is allowed to wait on the network.
+     */
+    suspend fun loadHistory(
+        chatId: Long,
+        fromMessageId: Long,
+        limit: Int = 40,
+        allowNetwork: Boolean = true,
+        reason: String = "PAGINATION"
+    ): HistoryPage = collectHistoryPage(chatId, fromMessageId, limit, allowNetwork, reason)
 
     suspend fun openChat(chatId: Long) {
         send(TdApi.OpenChat(chatId))
@@ -1702,6 +1860,54 @@ class TelegramClient(private val application: Application) {
         }
     }
 
+    enum class SharedMediaCategory {
+        MEDIA, FILES, LINKS, VOICE
+    }
+
+    data class SharedMediaPage(
+        val messages: List<com.foresightlabs.aether.domain.model.Message>,
+        val nextFromMessageId: Long,
+        val totalCount: Int
+    )
+
+    /**
+     * Queries TDLib directly for shared media in a chat using SearchChatMessages with pinned filters.
+     */
+    suspend fun getSharedMedia(
+        chatId: Long,
+        category: SharedMediaCategory,
+        fromMessageId: Long = 0L,
+        limit: Int = 50
+    ): SharedMediaPage {
+        val filter: TdApi.SearchMessagesFilter = when (category) {
+            SharedMediaCategory.MEDIA -> TdApi.SearchMessagesFilterPhotoAndVideo()
+            SharedMediaCategory.FILES -> TdApi.SearchMessagesFilterDocument()
+            SharedMediaCategory.LINKS -> TdApi.SearchMessagesFilterUrl()
+            SharedMediaCategory.VOICE -> TdApi.SearchMessagesFilterVoiceAndVideoNote()
+        }
+        val function = TdApi.SearchChatMessages(
+            chatId,
+            null,
+            "",
+            null,
+            fromMessageId,
+            0,
+            limit,
+            filter
+        )
+        return when (val result = send(function)) {
+            is TdApi.FoundChatMessages -> {
+                val mapped = result.messages.orEmpty().filterNotNull().map { mapUiMessage(it) }
+                SharedMediaPage(
+                    messages = mapped,
+                    nextFromMessageId = result.nextFromMessageId,
+                    totalCount = result.totalCount
+                )
+            }
+            else -> SharedMediaPage(emptyList(), 0L, 0)
+        }
+    }
+
     /**
      * Searches messages across every chat the account can see.
      *
@@ -1785,9 +1991,40 @@ class TelegramClient(private val application: Application) {
         return ids.map { id -> chat(id) ?: chats[id]?.let { mapUiChat(it) } }.filterNotNull()
     }
 
-    suspend fun downloadFile(fileId: Int) {
+    suspend fun downloadFile(fileId: Int, priority: Int = 16) {
         if (requestedFiles.putIfAbsent(fileId, true) != null) return
-        send(TdApi.DownloadFile(fileId, 16, 0, 0, false))
+        send(TdApi.DownloadFile(fileId, priority, 0, 0, false))
+    }
+
+    /**
+     * Re-requests a file TDLib previously gave up on.
+     *
+     * Clears the failure so [resolveMediaPath] stops treating this file as a
+     * dead end, then re-issues the download -- this is the only path that
+     * downloads a previously-failed file again; auto-retry deliberately does
+     * not do this on its own.
+     */
+    fun retryMediaDownload(fileId: Int) {
+        if (fileId == 0) return
+        failedDownloads.remove(fileId)
+        requestedFiles.remove(fileId)
+        activeDownloads[fileId] = true
+        scope.launch { downloadFile(fileId, priority = 32) }
+    }
+
+    /**
+     * High-priority request for a file's full bytes, used when the user
+     * actually opens the viewer on it. Bypasses the de-duplication that
+     * protects the timeline's background prefetch from redundant requests --
+     * TDLib treats a repeat DownloadFile as a priority bump, not an error.
+     */
+    fun requestFullMediaDownload(fileId: Int) {
+        if (fileId == 0) return
+        failedDownloads.remove(fileId)
+        if (activeDownloads[fileId] == true) return
+        activeDownloads[fileId] = true
+        requestedFiles[fileId] = true
+        scope.launch { send(TdApi.DownloadFile(fileId, 32, 0, 0, false)) }
     }
 
     fun messagesFlow(chatId: Long): StateFlow<List<Message>> {
@@ -1851,7 +2088,20 @@ class TelegramClient(private val application: Application) {
             is TdApi.UpdateActiveNotifications -> notificationManager?.onUpdateActiveNotifications(update)
             is TdApi.UpdateCall -> handleCallUpdate(update.call)
             is TdApi.UpdateAuthorizationState -> onAuth(update.authorizationState)
-            is TdApi.UpdateConnectionState -> _connection.value = TelegramMappers.mapConnection(update.state)
+            is TdApi.UpdateConnectionState -> {
+                if (BuildConfig.DEBUG) {
+                    val stateName = when (update.state) {
+                        is TdApi.ConnectionStateWaitingForNetwork -> "WAITING_FOR_NETWORK"
+                        is TdApi.ConnectionStateConnecting -> "CONNECTING"
+                        is TdApi.ConnectionStateConnectingToProxy -> "CONNECTING_TO_PROXY"
+                        is TdApi.ConnectionStateReady -> "READY"
+                        is TdApi.ConnectionStateUpdating -> "UPDATING"
+                        else -> update.state?.javaClass?.simpleName ?: "UNKNOWN"
+                    }
+                    android.util.Log.d(TAG, "TDLIB_CONNECTION_STATE state=$stateName elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
+                }
+                _connection.value = TelegramMappers.mapConnection(update.state)
+            }
             is TdApi.UpdateChatFolders -> {
                 // Telegram decides where the main list sits among the folders; it is
                 // inserted at that index rather than assumed to come first.
@@ -2010,6 +2260,10 @@ class TelegramClient(private val application: Application) {
             }
             is TdApi.UpdateNewMessage -> {
                 val msg = update.message
+                if (BuildConfig.DEBUG) {
+                    val chatHash = Integer.toHexString(msg.chatId.hashCode())
+                    android.util.Log.d(TAG, "TDLIB_UPDATE_NEW_MESSAGE chatHash=$chatHash msgId=${msg.id} isOutgoing=${msg.isOutgoing} date=${msg.date} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
+                }
                 chats[msg.chatId]?.lastMessage = msg
                 upsertConversation(msg.chatId, listOf(mapUiMessage(msg)), prepend = false)
                 publishChats()
@@ -2076,6 +2330,14 @@ class TelegramClient(private val application: Application) {
                 removeMessages(update.chatId, update.messageIds.map { it.toString() }.toSet())
             }
             is TdApi.UpdateFile -> onFile(update.file)
+            is TdApi.UpdateHavePendingNotifications -> {
+                if (BuildConfig.DEBUG) {
+                    val isPending = update.haveDelayedNotifications || update.haveUnreceivedNotifications
+                    val elapsed = android.os.SystemClock.elapsedRealtime()
+                    android.util.Log.d(TAG, if (isPending) "PENDING_UPDATE_TRUE haveDelayed=${update.haveDelayedNotifications} haveUnreceived=${update.haveUnreceivedNotifications} elapsedRealtime=$elapsed" else "PENDING_UPDATE_FALSE haveDelayed=${update.haveDelayedNotifications} haveUnreceived=${update.haveUnreceivedNotifications} elapsedRealtime=$elapsed")
+                }
+                pushPendingGate.onUpdate(update.haveDelayedNotifications, update.haveUnreceivedNotifications)
+            }
             is TdApi.UpdateChatActiveStories -> {
                 val active = update.activeStories
                 if (active != null) {
@@ -2113,6 +2375,264 @@ class TelegramClient(private val application: Application) {
         }
     }
 
+    // --- Real background push (TDLib + FCM) ---
+    //
+    // FCM exists only to wake TDLib and hand it the raw push so TDLib can
+    // decide what happened and emit the same UpdateNotificationGroup /
+    // UpdateNotification / UpdateActiveNotifications updates a live connection
+    // would have produced. Android notifications are never built directly from
+    // an FCM payload.
+    @Volatile private var lastRegisteredFcmToken: String? = null
+    @Volatile private var pendingFcmToken: String? = null
+
+    /**
+     * The identifier TDLib returned from the RegisterDevice call this client
+     * made. TDLib's own documented push flow is: GetPushReceiverId(payload) on
+     * every incoming push, then route to whichever client registered that id
+     * -- meant for a device receiving pushes for several accounts/clients at
+     * once. Aether has exactly one TelegramClient, so there is only ever one
+     * id to route to, but the routing check itself is kept: a receiver id
+     * that is neither 0 (no id could be extracted -- process anyway, there is
+     * nowhere else for it to go) nor this client's own id means the push was
+     * meant for a registration Aether does not currently hold (most likely a
+     * stale token from a previous login), and processing it would be acting
+     * on a push this session was never told about.
+     *
+     * Persisted in app-private SharedPreferences (not TDLib's own database --
+     * this is Aether's own bookkeeping) and loaded eagerly, so a process
+     * started fresh by the push itself still has it available for the
+     * mismatch check rather than starting blind every cold start. Cleared on
+     * logout in [clearSession] so a stale id from a previous account can
+     * never suppress or misroute a push after re-login.
+     */
+    @Volatile private var pushReceiverId: Long? = loadPersistedPushReceiverId()
+
+    private val pushPrefs by lazy {
+        application.getSharedPreferences("aether_push_state", android.content.Context.MODE_PRIVATE)
+    }
+
+    private fun loadPersistedPushReceiverId(): Long? {
+        val prefs = application.getSharedPreferences("aether_push_state", android.content.Context.MODE_PRIVATE)
+        return prefs.getLong(PREF_PUSH_RECEIVER_ID, 0L).takeIf { prefs.contains(PREF_PUSH_RECEIVER_ID) }
+    }
+
+    private fun persistPushReceiverId(id: Long?) {
+        pushPrefs.edit {
+            if (id == null) remove(PREF_PUSH_RECEIVER_ID) else putLong(PREF_PUSH_RECEIVER_ID, id)
+        }
+    }
+
+    /** Race-safe tracker for TDLib's UpdateHavePendingNotifications state -- see [PushPendingGate]. */
+    private val pushPendingGate = com.foresightlabs.aether.data.push.PushPendingGate()
+
+    /**
+     * Registers this device's FCM token with Telegram, so the server knows
+     * where to push while the connection is not live.
+     *
+     * Idempotent: a token equal to the last one successfully registered is a
+     * no-op, so a Service re-delivering the same token (or a caller invoking
+     * this from more than one place) never re-registers on every call.
+     * RegisterDevice requires an authorized session, so a token that arrives
+     * first is held and flushed once [AuthUiState.Ready] is reached.
+     */
+    fun registerFcmToken(token: String) {
+        if (token.isBlank() || token == lastRegisteredFcmToken) return
+        pendingFcmToken = token
+        if (BuildConfig.DEBUG) android.util.Log.d(TAG, "FCM_TOKEN_AVAILABLE")
+        if (_authState.value is AuthUiState.Ready) {
+            scope.launch { flushPendingFcmToken() }
+        }
+    }
+
+    private suspend fun flushPendingFcmToken() {
+        val token = pendingFcmToken ?: return
+        if (token == lastRegisteredFcmToken) return
+        if (BuildConfig.DEBUG) android.util.Log.d(TAG, "REGISTER_DEVICE_REQUEST")
+        // encrypt=true: per TDLib's Notification API docs, an FCM push
+        // registered without encryption carries no message content at all
+        // (TDLib gets woken up but must still reach Telegram's server to find
+        // out what happened) -- exactly the dependency on post-wake
+        // connectivity this milestone exists to reduce. With encryption
+        // enabled TDLib generates and holds its own key material locally
+        // (nothing for Aether to generate, store, or expose here) and can
+        // produce real NewPushMessage notification content straight from the
+        // push payload.
+        val deviceToken = TdApi.DeviceTokenFirebaseCloudMessaging(token, true)
+        when (val result = send(TdApi.RegisterDevice(deviceToken, LongArray(0)))) {
+            is TdApi.PushReceiverId -> {
+                lastRegisteredFcmToken = token
+                pushReceiverId = result.id
+                persistPushReceiverId(result.id)
+                if (BuildConfig.DEBUG) android.util.Log.d(TAG, "REGISTER_DEVICE_SUCCESS")
+            }
+            is TdApi.Error -> {
+                if (BuildConfig.DEBUG) android.util.Log.w(TAG, "REGISTER_DEVICE_ERROR code=${result.code}")
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Hands a raw FCM data payload to TDLib, following TDLib's documented
+     * push flow: GetPushReceiverId first to decide whether this push is
+     * actually for this client, then ProcessPushNotification.
+     *
+     * TDLib alone knows how to turn the payload into real Telegram semantics
+     * (fetch the update, decrypt if needed, decide what notification state
+     * changed); this never inspects the payload itself. The resulting
+     * UpdateNotificationGroup/UpdateNotification/UpdateActiveNotifications
+     * updates flow through the same canonical path a live connection uses, so
+     * there is exactly one place Android notifications get built.
+     *
+     * TDLib supports calling ProcessPushNotification before authorization,
+     * and the client here is created in Application.onCreate() -- which runs
+     * before this is ever invoked, even when nothing else in the app is
+     * running -- so no extra process bootstrapping is needed for a push-only
+     * wakeup.
+     *
+     * Result handling is not uniform, because TDLib documents ProcessPushNotification
+     * as returning Ok only *after* every update the push caused has already
+     * been sent -- so a successful call needs no further waiting at all, and
+     * this returns immediately. Error 406 means the opposite: the push alone
+     * could not tell TDLib enough, and a live server connection is needed to
+     * fetch what actually changed -- that is real, possibly slow network work
+     * this function does not block on; it hands it to [PushFetchWorker]
+     * instead and returns. Any other error is logged and otherwise dropped;
+     * there is nothing more to try.
+     */
+    suspend fun processPushNotification(payload: String) {
+        if (BuildConfig.DEBUG) android.util.Log.d(TAG, "FCM_MESSAGE_RECEIVED")
+        val receiverId = getPushReceiverId(payload)
+        val ourId = pushReceiverId
+        if (receiverId != 0L && ourId != null && receiverId != ourId) {
+            if (BuildConfig.DEBUG) android.util.Log.w(TAG, "PUSH_RECEIVER_MISMATCH")
+            return
+        }
+        if (BuildConfig.DEBUG && receiverId != 0L && ourId != null && receiverId == ourId) {
+            android.util.Log.d(TAG, "PUSH_RECEIVER_MATCH")
+        }
+        start()
+        if (BuildConfig.DEBUG) android.util.Log.d(TAG, "PROCESS_PUSH_STARTED")
+        val result = send(TdApi.ProcessPushNotification(payload))
+        when {
+            result is TdApi.Ok -> {
+                // TDLib's own contract: every update this push caused has
+                // already been emitted by the time Ok is returned. Nothing
+                // further to wait for -- blocking here would only add
+                // latency to the FCM callback for no benefit. No Worker.
+                if (BuildConfig.DEBUG) android.util.Log.d(TAG, "PUSH_PROCESS_OK")
+            }
+            result is TdApi.Error && result.code == 406 -> {
+                // TDLib: push lacked enough data locally; only a live fetch
+                // resolves it, and that can genuinely outlast the FCM
+                // callback's execution window -- hand it off rather than
+                // block here.
+                if (BuildConfig.DEBUG) android.util.Log.d(TAG, "PUSH_PROCESS_406")
+                enqueuePushFetchWork()
+            }
+            result is TdApi.Error -> {
+                // A parse/decryption failure or similar -- not the "needs a
+                // connection" case, so it does not get the 406 continuation.
+                // There is nothing else to try from here.
+                if (BuildConfig.DEBUG) android.util.Log.w(TAG, "PUSH_PROCESS_ERROR code=${result.code}")
+            }
+            else -> {
+                if (BuildConfig.DEBUG) android.util.Log.w(TAG, "PUSH_PROCESS_ERROR unexpected")
+            }
+        }
+    }
+
+    /**
+     * The only continuation path a push can hand off to, and only for error
+     * 406.
+     *
+     * Uses an ordinary (non-expedited) OneTimeWorkRequest: no setExpedited(),
+     * no setForeground(), no ForegroundInfo. This push continuation is
+     * intentionally non-expedited to avoid introducing a foreground-service
+     * requirement on older Android versions.
+     *
+     * ExistingWorkPolicy.KEEP, not REPLACE: this worker's job is "connect
+     * TDLib and fetch whatever notifications are pending", not "process this
+     * one push's payload" -- it doesn't even receive the payload (TDLib
+     * already saw it via ProcessPushNotification; there is nothing
+     * push-specific left to carry, so nothing is put in the WorkRequest's
+     * input data). Several 406s arriving close together all want the exact
+     * same outcome, so if one is already connecting, replacing it would
+     * cancel real in-flight progress and restart from scratch for no reason.
+     * One active worker is enough to satisfy every pending 406.
+     */
+    private fun enqueuePushFetchWork() {
+        val workManager = androidx.work.WorkManager.getInstance(application)
+        if (BuildConfig.DEBUG) {
+            val alreadyRunning = try {
+                workManager.getWorkInfosForUniqueWork(PUSH_FETCH_WORK_NAME)
+                    .get(200, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .any { it.state == androidx.work.WorkInfo.State.ENQUEUED || it.state == androidx.work.WorkInfo.State.RUNNING }
+            } catch (_: Exception) {
+                false
+            }
+            android.util.Log.d(TAG, if (alreadyRunning) "PUSH_FETCH_ALREADY_RUNNING" else "PUSH_FETCH_ENQUEUED")
+        }
+        val request = androidx.work.OneTimeWorkRequestBuilder<com.foresightlabs.aether.data.push.PushFetchWorker>()
+            .setConstraints(
+                androidx.work.Constraints.Builder()
+                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                    .build()
+            )
+            .setBackoffCriteria(
+                androidx.work.BackoffPolicy.EXPONENTIAL,
+                androidx.work.WorkRequest.MIN_BACKOFF_MILLIS,
+                java.util.concurrent.TimeUnit.MILLISECONDS
+            )
+            .build()
+        workManager.enqueueUniqueWork(PUSH_FETCH_WORK_NAME, androidx.work.ExistingWorkPolicy.KEEP, request)
+    }
+
+    /**
+     * Called only from [PushFetchWorker], for the error-406 case: ensures
+     * TDLib is running and waits (bounded) for it to report the fetch a push
+     * implied is done, via the race-safe [pushPendingGate]. A timeout is
+     * reported as [PushPendingGate.Outcome.TIMED_OUT], never treated as
+     * completion -- the Worker maps that to Result.retry() under WorkManager's
+     * own backoff, not an internal loop here.
+     */
+    suspend fun awaitPushFetchCompletion(timeoutMs: Long = PUSH_PENDING_TIMEOUT_MS): com.foresightlabs.aether.data.push.PushPendingGate.Outcome {
+        val startGeneration = pushPendingGate.currentGeneration()
+        start()
+        if (BuildConfig.DEBUG) android.util.Log.d(TAG, "PUSH_FETCH_STARTED")
+        val outcome = pushPendingGate.awaitCompletion(startGeneration, timeoutMs)
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d(
+                TAG,
+                if (outcome == com.foresightlabs.aether.data.push.PushPendingGate.Outcome.COMPLETED) {
+                    "PUSH_FETCH_COMPLETED"
+                } else {
+                    "PUSH_FETCH_TIMEOUT_RETRY"
+                }
+            )
+        }
+        return outcome
+    }
+
+    /**
+     * GetPushReceiverId is documented as callable synchronously, without a
+     * running TDLib instance -- it is pure computation over the payload, not
+     * a request to a live client -- so this uses Client.execute directly
+     * rather than the async send() queue.
+     */
+    private fun getPushReceiverId(payload: String): Long {
+        return try {
+            val res = Client.execute(TdApi.GetPushReceiverId(payload)) as? TdApi.PushReceiverId
+            val id = res?.id ?: 0L
+            if (BuildConfig.DEBUG && id != 0L) {
+                android.util.Log.d(TAG, "PUSH_RECEIVER_ID_RESOLVED id=$id")
+            }
+            id
+        } catch (_: Client.ExecutionException) {
+            0L
+        }
+    }
+
     private suspend fun onAuth(state: TdApi.AuthorizationState) {
         when (state) {
             is TdApi.AuthorizationStateWaitTdlibParameters -> applyParameters()
@@ -2123,6 +2643,7 @@ class TelegramClient(private val application: Application) {
             is TdApi.AuthorizationStateReady -> {
                 _authState.value = AuthUiState.Ready
                 afterReady()
+                flushPendingFcmToken()
             }
             is TdApi.AuthorizationStateLoggingOut -> {
                 _authState.value = AuthUiState.LoggingOut
@@ -2170,9 +2691,33 @@ class TelegramClient(private val application: Application) {
             }
         }
         send(TdApi.SetNetworkType(TdApi.NetworkTypeOther()))
+        configureNotificationOptions()
+    }
+
+    private suspend fun configureNotificationOptions() {
+        when (val countRes = send(TdApi.SetOption("notification_group_count_max", TdApi.OptionValueInteger(5)))) {
+            is TdApi.Ok -> {
+                if (BuildConfig.DEBUG) android.util.Log.d(TAG, "NOTIFICATION_OPTION_GROUP_COUNT_OK")
+            }
+            is TdApi.Error -> {
+                if (BuildConfig.DEBUG) android.util.Log.e(TAG, "NOTIFICATION_OPTION_GROUP_COUNT_ERROR code=${countRes.code} msg=${countRes.message}")
+            }
+            else -> {}
+        }
+
+        when (val sizeRes = send(TdApi.SetOption("notification_group_size_max", TdApi.OptionValueInteger(10)))) {
+            is TdApi.Ok -> {
+                if (BuildConfig.DEBUG) android.util.Log.d(TAG, "NOTIFICATION_OPTION_GROUP_SIZE_OK")
+            }
+            is TdApi.Error -> {
+                if (BuildConfig.DEBUG) android.util.Log.e(TAG, "NOTIFICATION_OPTION_GROUP_SIZE_ERROR code=${sizeRes.code} msg=${sizeRes.message}")
+            }
+            else -> {}
+        }
     }
 
     private suspend fun afterReady() {
+        configureNotificationOptions()
         when (val me = send(TdApi.GetMe())) {
             is TdApi.User -> {
                 myUserId = me.id
@@ -2223,11 +2768,37 @@ class TelegramClient(private val application: Application) {
     }
 
     private fun onFile(file: TdApi.File) {
-        val path = TelegramMappers.localPath(file) ?: return
-        photoPaths["file:${file.id}"] = path
+        val local = file.local
+        val path = local?.path
+        val hasDiskFile = !path.isNullOrBlank() && java.io.File(path).let { it.exists() && it.length() > 0L }
+        val isComplete = local?.isDownloadingCompleted == true || hasDiskFile
+        if (BuildConfig.DEBUG) {
+            val hasLocal = isComplete && !path.isNullOrBlank()
+            android.util.Log.d(TAG, "MEDIA_FILE_UPDATE fileId=${file.id} hasLocal=$hasLocal size=${file.size} expectedSize=${file.expectedSize} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
+        }
+        when {
+            isComplete && !path.isNullOrBlank() -> {
+                photoPaths["file:${file.id}"] = path
+                failedDownloads.remove(file.id)
+                activeDownloads.remove(file.id)
+            }
+            local?.isDownloadingActive == true -> {
+                activeDownloads[file.id] = true
+                failedDownloads.remove(file.id)
+            }
+            activeDownloads.remove(file.id) != null -> {
+                // Was actively downloading and now is neither active nor
+                // completed -- TDLib genuinely stopped without finishing, not
+                // merely "hasn't started yet".
+                failedDownloads[file.id] = true
+                requestedFiles.remove(file.id)
+            }
+        }
         users.values.filter { it.profilePhoto?.small?.id == file.id }.forEach { publishMe() }
         publishChats()
-        // A message waiting on this file now has something real to show.
+        // A message waiting on this file now has something real to show --
+        // whether that is the completed download, fresh progress, or a
+        // failure the bubble should offer to retry.
         republishConversationsAwaitingMedia()
     }
 
@@ -2255,7 +2826,11 @@ class TelegramClient(private val application: Application) {
         com.foresightlabs.aether.domain.model.MessageType.ANIMATION,
         com.foresightlabs.aether.domain.model.MessageType.VIDEO_NOTE,
         com.foresightlabs.aether.domain.model.MessageType.AUDIO,
-        com.foresightlabs.aether.domain.model.MessageType.STICKER -> mediaItems.isEmpty()
+        com.foresightlabs.aether.domain.model.MessageType.STICKER ->
+            // A media item now exists from the moment the message does, so
+            // "still needs a remap" means its file hasn't landed locally yet --
+            // not that the item itself is missing.
+            mediaItems.isNotEmpty() && mediaItems.any { !it.hasLocalFile }
         else -> false
     }
 
@@ -2481,7 +3056,8 @@ class TelegramClient(private val application: Application) {
             myUserId = myUserId,
             lastReadOutboxMessageId = lastRead,
             reply = replyPreview(message),
-            resolvePath = ::resolveMediaPath
+            resolvePath = ::resolveMediaPath,
+            isDownloadFailed = { failedDownloads[it] == true }
         )
     }
 
@@ -2495,8 +3071,17 @@ class TelegramClient(private val application: Application) {
     private fun resolveMediaPath(file: TdApi.File?): String? {
         if (file == null) return null
         TelegramMappers.localPath(file)?.let { return it }
-        photoPaths["file:${file.id}"]?.let { return it }
-        if (file.local?.canBeDownloaded == true && file.local?.isDownloadingActive != true) {
+        val cached = photoPaths["file:${file.id}"]
+        if (!cached.isNullOrBlank() && java.io.File(cached).let { it.exists() && it.length() > 0L }) {
+            return cached
+        }
+        // A file TDLib already gave up on is not retried automatically -- that
+        // would spin forever against a dead file. The UI offers a real retry
+        // affordance instead; see retryMediaDownload.
+        if (failedDownloads[file.id] != true &&
+            file.local?.canBeDownloaded == true &&
+            file.local?.isDownloadingActive != true
+        ) {
             scope.launch { downloadFile(file.id) }
         }
         return null
@@ -2545,6 +3130,13 @@ class TelegramClient(private val application: Application) {
         chatsFullyLoaded = false
         _currentUser.value = null
         _chatList.value = emptyList()
+        // The account this token was registered against no longer has a
+        // session; a future login must register fresh rather than trusting
+        // this as already-done.
+        lastRegisteredFcmToken = null
+        pendingFcmToken = null
+        pushReceiverId = null
+        persistPushReceiverId(null)
     }
 
     private suspend fun sendExpectOk(function: TdApi.Function<*>): Result<Unit> {
@@ -2566,5 +3158,26 @@ class TelegramClient(private val application: Application) {
 
     companion object {
         private const val TAG = "AetherTd"
+        // Defensive-only guard for the local-fill loop in collectHistoryPage().
+        // The loop's real stopping conditions are "collected enough" and "a
+        // round added zero new unique messages" -- both fire well before this
+        // in normal operation, since local db batches are typically dozens of
+        // messages, not one at a time. This cap exists only to bound the
+        // pathological case where local rounds keep making some progress (so
+        // the zero-new-unique check never fires) without ever reaching the
+        // page size; it is generous relative to typical page sizes so it does
+        // not cut off local history that is still genuinely being found and
+        // force an unnecessary network round-trip.
+        private const val MAX_LOCAL_FILL_ROUNDS = 20
+        // Bounds how long awaitPushFetchCompletion (run from PushFetchWorker,
+        // only for the error-406 case) waits for UpdateHavePendingNotifications
+        // to clear before returning -- long enough for a normal fetch to
+        // land, short enough that a stuck fetch does not hold the background
+        // work open indefinitely. One wait, one timeout: this is not a retry
+        // loop, and it is never used on the ProcessPushNotification success
+        // path, which needs no waiting at all.
+        private const val PUSH_PENDING_TIMEOUT_MS = 8_000L
+        private const val PREF_PUSH_RECEIVER_ID = "push_receiver_id"
+        private const val PUSH_FETCH_WORK_NAME = "aether_push_fetch"
     }
 }

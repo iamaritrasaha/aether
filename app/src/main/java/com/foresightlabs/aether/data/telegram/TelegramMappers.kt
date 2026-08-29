@@ -1,5 +1,6 @@
 package com.foresightlabs.aether.data.telegram
 
+import android.util.Base64
 import androidx.compose.ui.graphics.Color
 import com.foresightlabs.aether.domain.model.AuthUiState
 import com.foresightlabs.aether.domain.model.Chat
@@ -18,6 +19,7 @@ import com.foresightlabs.aether.domain.model.MessageType
 import com.foresightlabs.aether.domain.model.Presence
 import com.foresightlabs.aether.domain.model.User
 import org.drinkless.tdlib.TdApi
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -253,10 +255,11 @@ object TelegramMappers {
         myUserId: Long,
         lastReadOutboxMessageId: Long,
         reply: Message? = null,
-        resolvePath: (TdApi.File?) -> String? = { localPath(it) }
+        resolvePath: (TdApi.File?) -> String? = { localPath(it) },
+        isDownloadFailed: (Int) -> Boolean = { false }
     ): Message {
         val senderName = senderName(message.senderId, users, chats, message.isOutgoing)
-        val presentation = mapPresentation(message.content, message.id, resolvePath)
+        val presentation = mapPresentation(message.content, message.id, resolvePath, isDownloadFailed)
         val type = presentation.type
         val text = if (type == MessageType.SERVICE) {
             ServiceMessages.describe(message.content, senderName).trim()
@@ -337,17 +340,47 @@ object TelegramMappers {
     fun mapPresentation(
         content: TdApi.MessageContent?,
         messageId: Long,
-        resolvePath: (TdApi.File?) -> String?
+        resolvePath: (TdApi.File?) -> String?,
+        isDownloadFailed: (Int) -> Boolean = { false }
     ): MediaPresentation {
-        fun mediaItem(file: TdApi.File?, caption: String, width: Int, height: Int): List<MediaItem> {
-            val path = resolvePath(file) ?: return emptyList()
+        // A message's media EXISTS the moment TDLib reports the message, whether
+        // or not its bytes have arrived. This never returns emptyList() merely
+        // because [resolvePath] came back null -- that would make the message
+        // invisible in the timeline until a download finishes, which is the
+        // exact bug this mapper exists to avoid. What changes when the file is
+        // not ready yet is only which fields are set: hasLocalFile is false,
+        // previewBase64 carries Telegram's minithumbnail when it sent one, and
+        // isDownloading/isUploading/downloadFailed report real transfer state
+        // read straight off the TdApi.File so the UI never has to guess it.
+        fun mediaItem(
+            file: TdApi.File?,
+            caption: String,
+            width: Int,
+            height: Int,
+            minithumbnail: TdApi.Minithumbnail? = null
+        ): List<MediaItem> {
+            if (file == null) return emptyList()
+            val path = resolvePath(file)
+            val preview = if (path == null) minithumbnailBase64(minithumbnail) else null
+            val local = file.local
+            val remote = file.remote
+            val uploadProgress = if (remote?.isUploadingActive == true && file.expectedSize > 0) {
+                (remote.uploadedSize.toFloat() / file.expectedSize.toFloat()).coerceIn(0f, 1f)
+            } else null
             return listOf(
                 MediaItem(
-                    id = "$messageId:${file?.id ?: 0}",
-                    url = path,
+                    id = "$messageId:${file.id}",
+                    url = path.orEmpty(),
                     caption = caption,
                     width = width.coerceAtLeast(1),
-                    height = height.coerceAtLeast(1)
+                    height = height.coerceAtLeast(1),
+                    fileId = file.id,
+                    hasLocalFile = path != null,
+                    isDownloading = local?.isDownloadingActive == true,
+                    downloadFailed = isDownloadFailed(file.id),
+                    isUploading = remote?.isUploadingActive == true,
+                    uploadProgress = uploadProgress,
+                    previewBase64 = preview
                 )
             )
         }
@@ -377,7 +410,13 @@ object TelegramMappers {
                     text = caption,
                     type = MessageType.IMAGE,
                     formatted = captionText,
-                    mediaItems = mediaItem(best?.photo, caption, best?.width ?: 0, best?.height ?: 0)
+                    mediaItems = mediaItem(
+                        best?.photo,
+                        caption,
+                        best?.width ?: 0,
+                        best?.height ?: 0,
+                        minithumbnail = content.photo?.minithumbnail
+                    )
                 )
             }
             is TdApi.MessageVideo -> {
@@ -392,7 +431,8 @@ object TelegramMappers {
                         video?.thumbnail?.file ?: video?.video,
                         caption,
                         video?.width ?: 0,
-                        video?.height ?: 0
+                        video?.height ?: 0,
+                        minithumbnail = video?.minithumbnail
                     )
                 )
             }
@@ -561,7 +601,8 @@ object TelegramMappers {
                         animation?.animation ?: animation?.thumbnail?.file,
                         captionText.text,
                         animation?.width ?: 0,
-                        animation?.height ?: 0
+                        animation?.height ?: 0,
+                        minithumbnail = animation?.minithumbnail
                     ),
                     fileName = animation?.fileName?.takeIf { it.isNotBlank() } ?: "GIF",
                     voiceDurationSec = animation?.duration ?: 0
@@ -835,9 +876,28 @@ object TelegramMappers {
         }.takeIf { it != null && it > 0 }
     }
 
+    /**
+     * Telegram's tiny embedded JPEG preview (a few dozen bytes), carried on the
+     * message itself rather than downloaded, so it is available the instant
+     * the message arrives -- long before the real photo or video file is.
+     */
+    fun minithumbnailBase64(thumbnail: TdApi.Minithumbnail?): String? {
+        val data = thumbnail?.data
+        if (data == null || data.isEmpty()) return null
+        return Base64.encodeToString(data, Base64.NO_WRAP)
+    }
+
     fun localPath(file: TdApi.File?): String? {
         val path = file?.local?.path
-        return path?.takeIf { file.local?.isDownloadingCompleted == true && it.isNotBlank() }
+        if (path.isNullOrBlank()) return null
+        val fileObj = File(path)
+        return if (fileObj.exists() && fileObj.length() > 0L) {
+            path
+        } else if (file?.local?.isDownloadingCompleted == true && path.isNotBlank()) {
+            path
+        } else {
+            null
+        }
     }
 
     fun initials(name: String): String {

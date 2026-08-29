@@ -503,6 +503,13 @@ fun AetherApp(
                             onBack = { navController.popBackStack() },
                             onNavigateToConversation = { navController.popBackStack() },
                             onChatAction = chatsViewModel::perform,
+                            onLoadSharedMedia = { targetChatId, category, offset ->
+                                (application as AetherApplication).telegram.getSharedMedia(targetChatId, category, offset)
+                            },
+                            onRequestMediaDownload = { fileId, isRetry ->
+                                val tg = (application as AetherApplication).telegram
+                                if (isRetry) tg.retryMediaDownload(fileId) else tg.requestFullMediaDownload(fileId)
+                            },
                             canCallAudio = profileCalls.isCallMediaAvailable,
                             canCallVideo = false,
                             onStartVoiceCall = {
@@ -811,7 +818,10 @@ private fun ConversationRoute(
             // Unpinning is offered only where Telegram says the account may pin.
             canUnpin = messageCapabilities.values.any { it.canBePinned },
             jumpTarget = jumpTarget,
-            onJumpConsumed = viewModel::consumeJumpTarget
+            onJumpConsumed = viewModel::consumeJumpTarget,
+            onRequestMediaDownload = { fileId, isRetry ->
+                if (isRetry) viewModel.retryMediaDownload(fileId) else viewModel.requestFullMediaDownload(fileId)
+            }
         )
     }
 }

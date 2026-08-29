@@ -60,7 +60,8 @@ class AetherApplication : Application(), ImageLoaderFactory {
         notificationManager = com.foresightlabs.aether.data.notifications.AetherNotificationManager(
             context = this,
             getChat = { telegram.getRawChat(it) },
-            getUser = { telegram.getRawUser(it) }
+            getUser = { telegram.getRawUser(it) },
+            getMyUserId = { telegram.getMyUserId() }
         )
         telegram.notificationManager = notificationManager
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
@@ -86,6 +87,7 @@ class AetherApplication : Application(), ImageLoaderFactory {
             override fun onActivityDestroyed(activity: android.app.Activity) {}
         })
         telegram.start()
+        registerExistingFcmToken()
         contactsRepository = DefaultContactsRepository(
             context = applicationContext,
             telegram = telegram,
@@ -101,6 +103,24 @@ class AetherApplication : Application(), ImageLoaderFactory {
             gateway = com.foresightlabs.aether.data.location.TelegramLiveLocationGateway(telegram),
             scope = applicationScope
         )
+    }
+
+    /**
+     * Fetches whatever FCM token already exists for this install (a fresh
+     * token generation, or one issued on a previous run) so a device that
+     * never receives an onNewToken call during this process's lifetime still
+     * gets registered with Telegram. [TelegramClient.registerFcmToken] is
+     * idempotent, so this racing with a live onNewToken callback is harmless.
+     */
+    private fun registerExistingFcmToken() {
+        if (!BuildConfig.HAS_FCM_CONFIG) {
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("AetherTd", "FCM_DISABLED_MISSING_CONFIG")
+            }
+            return
+        }
+        com.google.firebase.messaging.FirebaseMessaging.getInstance().token
+            .addOnSuccessListener { token -> telegram.registerFcmToken(token) }
     }
 
     private fun createNotificationChannels() {

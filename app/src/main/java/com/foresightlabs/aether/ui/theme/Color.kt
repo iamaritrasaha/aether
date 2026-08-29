@@ -27,15 +27,15 @@ val AtmosphereTextSecondary = Color(0xF0FFFFFF)
 val AtmosphereTextTertiary = Color(0xD9FFFFFF)
 val AtmosphereTextMuted = Color(0xB8FFFFFF)
 
-// The two directions are told apart by tone, not by colour: incoming is a pale
-// mist the atmosphere still shows through, outgoing is smoky graphite. Neither
-// is an accent slab, and both stay neutral so they belong to the sky behind them.
-val DarkBubbleOutgoing = Color(0xDB2C2C36)
-val DarkBubbleOutgoingEnd = Color(0xDB2C2C36)
+// Incoming is a cool smoky lavender graphite (distinct from the background and told
+// apart from outgoing by temperature and a subtle tonal lift, never a pale card).
+// Outgoing is a deep neutral graphite.
+val DarkBubbleOutgoing = Color(0xDB24252C)
+val DarkBubbleOutgoingEnd = Color(0xDB24252C)
 val DarkBubbleOutgoingText = Color(0xFFF4F4F7)
-val DarkBubbleIncoming = Color(0xC7EDECF2)
-val DarkBubbleIncomingBorder = Color(0x14FFFFFF)
-val DarkBubbleIncomingText = Color(0xFF1B1B21)
+val DarkBubbleIncoming = Color(0xFF393A46)
+val DarkBubbleIncomingBorder = Color(0x1AFFFFFF)
+val DarkBubbleIncomingText = Color(0xFFF1F0F4)
 
 // Accent Colors - Ember default
 val AccentEmber = Color(0xFFFF7038)

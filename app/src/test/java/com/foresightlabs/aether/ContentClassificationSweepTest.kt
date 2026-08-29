@@ -120,7 +120,7 @@ class ContentClassificationSweepTest {
     @Test
     fun anAnimatedEmojiIsPresentedAsItsEmoji() {
         val content = TdApi.MessageAnimatedEmoji(null, "🎉")
-        val presentation = TelegramMappers.mapPresentation(content, 1L) { null }
+        val presentation = TelegramMappers.mapPresentation(content, 1L, resolvePath = { null })
         assertEquals(MessageType.TEXT, presentation.type)
         assertEquals("🎉", presentation.text)
     }
@@ -137,7 +137,7 @@ class ContentClassificationSweepTest {
                 false, false, false, false
             )
         )
-        val presentation = TelegramMappers.mapPresentation(checklist, 1L) { null }
+        val presentation = TelegramMappers.mapPresentation(checklist, 1L, resolvePath = { null })
         assertEquals("Launch", presentation.text)
         assertEquals("1 of 2 done", presentation.fileSize)
     }

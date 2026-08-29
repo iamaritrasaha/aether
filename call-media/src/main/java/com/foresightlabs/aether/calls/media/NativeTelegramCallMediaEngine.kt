@@ -13,19 +13,24 @@ class NativeTelegramCallMediaEngine {
     companion object {
         private const val TAG = "NativeCallMediaEngine"
         private var isNativeLibLoaded = false
+        private var hasAttemptedLoad = false
 
-        init {
-            isNativeLibLoaded = try {
-                System.loadLibrary("callmedia")
-                true
-            } catch (_: Throwable) {
-                false
+        private fun ensureNativeLoaded(): Boolean {
+            if (!hasAttemptedLoad) {
+                hasAttemptedLoad = true
+                isNativeLibLoaded = try {
+                    System.loadLibrary("callmedia")
+                    true
+                } catch (_: Throwable) {
+                    false
+                }
             }
+            return isNativeLibLoaded
         }
     }
 
     private fun hasRealTelegramTransport(): Boolean {
-        if (!isNativeLibLoaded) return false
+        if (!ensureNativeLoaded()) return false
         return try {
             nativeHasRealTelegramTransport()
         } catch (_: Throwable) {
@@ -35,7 +40,7 @@ class NativeTelegramCallMediaEngine {
 
     fun init(callback: NativeCallEngineCallback) {
         this.callback = callback
-        if (isNativeLibLoaded) {
+        if (ensureNativeLoaded()) {
             try {
                 nativeInit(callback)
             } catch (e: Throwable) {

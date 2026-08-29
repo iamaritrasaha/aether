@@ -51,7 +51,7 @@ import androidx.compose.material.icons.automirrored.filled.Forward
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -73,6 +73,7 @@ import com.foresightlabs.aether.domain.model.AnimationItem
 import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -286,6 +287,9 @@ fun MessageComposer(
     onCopySelected: (List<Message>) -> Unit = {},
     onForwardSelected: (List<Message>) -> Unit = {},
     onDeleteSelected: (List<Message>) -> Unit = {},
+    editingMessage: Message? = null,
+    onDismissEdit: () -> Unit = {},
+    onSaveEdit: (Message, String, List<AetherEntity>) -> Unit = { _, _, _ -> },
     enabled: Boolean = true,
     onTextChanged: (String) -> Unit = {},
     modifier: Modifier = Modifier
@@ -293,6 +297,15 @@ fun MessageComposer(
     // Held as a TextFieldValue so the selection is available for formatting.
     var field by remember { mutableStateOf(TextFieldValue("")) }
     var formatting by remember { mutableStateOf<List<AetherEntity>>(emptyList()) }
+
+    LaunchedEffect(editingMessage?.id) {
+        if (editingMessage != null) {
+            field = TextFieldValue(
+                text = editingMessage.text,
+                selection = TextRange(editingMessage.text.length)
+            )
+        }
+    }
     val text = field.text
     val selection = field.selection
     val hasSelection = !selection.collapsed
@@ -418,13 +431,71 @@ fun MessageComposer(
                     .fillMaxWidth()
                     .padding(horizontal = 6.dp, vertical = 4.dp)
             ) {
-                // Integrated Reply Strip (Inside the floating pill dock)
+                // Integrated Edit & Reply Strip (Inside the continuous dark composer dock)
                 AnimatedVisibility(
-                    visible = replyingTo != null,
+                    visible = editingMessage != null || replyingTo != null,
                     enter = expandVertically() + fadeIn(),
                     exit = shrinkVertically() + fadeOut()
                 ) {
-                    replyingTo?.let { replyMsg ->
+                    if (editingMessage != null) {
+                        val editMsg = editingMessage
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 4.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0x1AFFFFFF))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(3.dp)
+                                    .height(26.dp)
+                                    .clip(CircleShape)
+                                    .background(AetherAccent.current)
+                            )
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Editing message",
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AetherAccent.current
+                                )
+                                Text(
+                                    text = editMsg.text.ifEmpty { "Message" },
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 11.5.sp,
+                                    color = colors.textSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        onDismissEdit()
+                                        field = TextFieldValue("")
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Cancel Edit",
+                                    tint = colors.textSecondary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
+                    } else if (replyingTo != null) {
+                        val replyMsg = replyingTo
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -630,9 +701,15 @@ fun MessageComposer(
                                 )
                             }
 
-                            // Action Button (Morphing between Mic & Send)
+                            // Action Button (Morphing between Mic, Send & Save Edit)
+                            val actionState = when {
+                                editingMessage != null -> "edit"
+                                hasText -> "send"
+                                else -> "mic"
+                            }
+
                             AnimatedContent(
-                                targetState = hasText,
+                                targetState = actionState,
                                 transitionSpec = {
                                     (fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)) +
                                             expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMedium)))
@@ -642,55 +719,83 @@ fun MessageComposer(
                                         )
                                 },
                                 label = "composer_action_morph"
-                            ) { isTextPresent ->
-                                if (isTextPresent) {
-                                    // Send Action Button
-                                    Box(
-                                        modifier = Modifier
-                                            .size(48.dp)
-                                            .clip(CircleShape)
-                                            .background(AetherAccent.actionBrush)
-                                            .clickable(enabled = enabled) {
-                                                if (text.isNotBlank() && enabled) {
-                                                    onSendMessage(text.trimEnd(), formatting)
-                                                    field = TextFieldValue("")
-                                                    formatting = emptyList()
+                            ) { mode ->
+                                when (mode) {
+                                    "edit" -> {
+                                        val editMsg = editingMessage
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(CircleShape)
+                                                .background(AetherAccent.actionBrush)
+                                                .clickable(enabled = enabled && text.isNotBlank() && editMsg != null) {
+                                                    if (editMsg != null && text.isNotBlank() && enabled) {
+                                                        onSaveEdit(editMsg, text.trimEnd(), formatting)
+                                                        field = TextFieldValue("")
+                                                        formatting = emptyList()
+                                                    }
                                                 }
-                                            }
-                                            .testTag("send_message_button"),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.Send,
-                                            contentDescription = "Send",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(22.dp)
-                                        )
+                                                .testTag("save_edit_button"),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Save edit",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(22.dp)
+                                            )
+                                        }
                                     }
-                                } else {
-                                    // Voice Note / Video Note Action Button
-                                    var isVideoNoteMode by remember { mutableStateOf(false) }
-                                    Box(
-                                        modifier = Modifier
-                                            .size(48.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0x14FFFFFF))
-                                            .clickable(enabled = enabled) {
-                                                if (isVideoNoteMode) {
-                                                    onOpenVideoNote()
-                                                } else {
-                                                    onVoiceNoteRecorded()
+                                    "send" -> {
+                                        // Send Action Button
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(CircleShape)
+                                                .background(AetherAccent.actionBrush)
+                                                .clickable(enabled = enabled) {
+                                                    if (text.isNotBlank() && enabled) {
+                                                        onSendMessage(text.trimEnd(), formatting)
+                                                        field = TextFieldValue("")
+                                                        formatting = emptyList()
+                                                    }
                                                 }
-                                            }
-                                            .testTag(if (isVideoNoteMode) "video_note_button" else "voice_record_button"),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isVideoNoteMode) Icons.Default.Videocam else Icons.Default.Mic,
-                                            contentDescription = if (isVideoNoteMode) "Record Video Message" else "Record Voice Note",
-                                            tint = control,
-                                            modifier = Modifier.size(20.dp)
-                                        )
+                                                .testTag("send_message_button"),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                                contentDescription = "Send",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(22.dp)
+                                            )
+                                        }
+                                    }
+                                    else -> {
+                                        // Voice Note / Video Note Action Button
+                                        var isVideoNoteMode by remember { mutableStateOf(false) }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0x14FFFFFF))
+                                                .clickable(enabled = enabled) {
+                                                    if (isVideoNoteMode) {
+                                                        onOpenVideoNote()
+                                                    } else {
+                                                        onVoiceNoteRecorded()
+                                                    }
+                                                }
+                                                .testTag(if (isVideoNoteMode) "video_note_button" else "voice_record_button"),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isVideoNoteMode) Icons.Default.Videocam else Icons.Default.Mic,
+                                                contentDescription = if (isVideoNoteMode) "Record Video Message" else "Record Voice Note",
+                                                tint = control,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }

@@ -42,6 +42,20 @@
             android:name=".data.notifications.NotificationActionReceiver"
             android:exported="false" />
 
+        <!--
+          Bound by the FCM SDK, not a foreground service: it runs briefly to
+          hand a push to TDLib (see AetherFirebaseMessagingService) and is not
+          a persistent "Aether is running" notification. Registering it does
+          not require FOREGROUND_SERVICE or any related permission.
+        -->
+        <service
+            android:name=".data.push.AetherFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

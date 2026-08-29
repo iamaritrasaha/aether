@@ -1,6 +1,6 @@
 package com.foresightlabs.aether.ui.components
 
-import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -8,8 +8,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -25,6 +28,27 @@ import com.foresightlabs.aether.domain.text.EntityActions
 private const val ENTITY_TAG = "aether:entity"
 
 /**
+ * Lets a single ancestor gesture handler (the message bubble) resolve taps
+ * against this text's entities, instead of the text installing its own
+ * pointer input. Two independent gesture detectors racing on the same touch
+ * stream is what made long-press selection unreliable over message text —
+ * the bubble is now the sole owner of pointer geometry, and this controller
+ * is just its window into text layout and entity hit-testing.
+ */
+class AetherRichTextController {
+    var layoutResult: TextLayoutResult? = null
+        internal set
+    var textCoordinates: LayoutCoordinates? = null
+        internal set
+    internal var tapHandler: ((Int) -> Boolean)? = null
+
+    /** Resolve a tap at the given character offset (from [layoutResult].getOffsetForPosition). Returns true if handled. */
+    fun handleTap(charOffset: Int): Boolean {
+        return tapHandler?.invoke(charOffset) ?: false
+    }
+}
+
+/**
  * Renders message text with the formatting Telegram actually attached to it.
  *
  * Spoilers are the one span whose *content* is affected: until the reader reveals
@@ -32,6 +56,10 @@ private const val ENTITY_TAG = "aether:entity"
  * colour, so it occupies its true width and the message does not reflow when
  * revealed. Reveal state is local to this reader and this composition — it never
  * touches the message on the server.
+ *
+ * This text is deliberately non-interactive on its own (no ClickableText, no
+ * pointerInput): a [controller] lets the enclosing bubble resolve taps against
+ * entities so tap, long-press and swipe all belong to one gesture owner.
  */
 @Composable
 fun AetherRichText(
@@ -42,6 +70,7 @@ fun AetherRichText(
     spoilerCover: Color,
     modifier: Modifier = Modifier,
     codeBackground: Color = spoilerCover,
+    controller: AetherRichTextController? = null,
     onAction: (EntityAction) -> Unit = {}
 ) {
     var revealedSpoilers by remember(value) { mutableStateOf(emptySet<Int>()) }
@@ -58,26 +87,35 @@ fun AetherRichText(
         revealedSpoilers = revealedSpoilers
     )
 
-    ClickableText(
-        text = annotated,
-        style = style.copy(color = color),
-        modifier = modifier,
-        onClick = { position ->
+    if (controller != null) {
+        controller.tapHandler = handler@{ position ->
             val hit = annotated
                 .getStringAnnotations(ENTITY_TAG, position, position)
                 .firstOrNull()
                 ?.item
                 ?.toIntOrNull()
-                ?: return@ClickableText
-            val entity = ordered.getOrNull(hit) ?: return@ClickableText
+                ?: return@handler false
+            val entity = ordered.getOrNull(hit) ?: return@handler false
 
             if (entity is AetherEntity.Spoiler) {
                 // Revealing is a local reading choice, not an edit.
                 revealedSpoilers = revealedSpoilers + hit
-                return@ClickableText
+                return@handler true
             }
             EntityActions.resolve(entity, value.text)?.let(onAction)
+            return@handler true
         }
+    }
+
+    BasicText(
+        text = annotated,
+        style = style.copy(color = color),
+        modifier = if (controller != null) {
+            modifier.onGloballyPositioned { controller.textCoordinates = it }
+        } else {
+            modifier
+        },
+        onTextLayout = { result -> controller?.layoutResult = result }
     )
 }
 

@@ -210,41 +210,92 @@ class ConversationViewModel(
         }
     }
 
-    private suspend fun loadInitial() {
-        val page = loadPage(0L)
-        if (page.isNotEmpty()) {
-            oldestId = page.first().id.toLongOrNull() ?: 0L
-            telegram.upsertConversation(activeChatId, page, prepend = true)
-            markVisible(page.map { it.id })
-        }
-        if (page.size < 20) historyComplete = true
-    }
-
     /**
-     * One page of history for whatever this screen is showing.
-     *
-     * A forum topic has its own history endpoint; reading the chat's history instead
-     * returns every topic interleaved.
+     * Renders whatever TDLib's local database already has for this chat, with no
+     * network wait -- a short local page does not mean history is short, only
+     * that this page was thin, so any shortfall is topped up in the background
+     * afterward rather than blocking the first render on it.
      */
-    private suspend fun loadPage(fromMessageId: Long): List<Message> {
+    private suspend fun loadInitial() {
         val topic = forumTopicId
-        return if (topic != null) {
-            telegram.loadTopicHistory(activeChatId, topic, fromMessageId)
-        } else {
-            telegram.loadHistory(activeChatId, fromMessageId)
+        if (topic != null) {
+            // GetForumTopicHistory has no onlyLocal option in this TDLib build,
+            // so a forum topic's initial load stays network-capable.
+            val page = telegram.loadTopicHistory(activeChatId, topic, 0L, HISTORY_PAGE_SIZE)
+            if (page.isNotEmpty()) {
+                oldestId = page.first().id.toLongOrNull() ?: 0L
+                telegram.upsertConversation(activeChatId, page, prepend = true)
+                markVisible(page.map { it.id })
+            }
+            // Conservative fallback for topics only: TDLib can legitimately return
+            // a short page without history being exhausted, but there is no
+            // onlyLocal signal here to tell the two apart, so this may mark
+            // completion a little early for large topics with sparse pages.
+            if (page.size < HISTORY_PAGE_SIZE) historyComplete = true
+            return
+        }
+        val local = telegram.loadHistory(
+            activeChatId,
+            0L,
+            HISTORY_PAGE_SIZE,
+            allowNetwork = false,
+            reason = "INITIAL"
+        )
+        if (local.messages.isNotEmpty()) {
+            oldestId = local.oldestId
+            telegram.upsertConversation(activeChatId, local.messages, prepend = true)
+            markVisible(local.messages.map { it.id })
+        }
+        if (local.messages.size >= HISTORY_PAGE_SIZE) return
+        // Local cache didn't fill the first page. Top up over the network in the
+        // background: whatever was just rendered from cache stays on screen the
+        // whole time -- upsertConversation merges by id, it never clears the list.
+        viewModelScope.launch {
+            val filled = telegram.loadHistory(
+                activeChatId,
+                local.oldestId,
+                HISTORY_PAGE_SIZE - local.messages.size,
+                allowNetwork = true,
+                reason = "INITIAL_TOPUP"
+            )
+            if (filled.messages.isNotEmpty()) {
+                oldestId = filled.oldestId
+                telegram.upsertConversation(activeChatId, filled.messages, prepend = true)
+            }
+            if (filled.endOfHistory) historyComplete = true
         }
     }
 
     fun loadOlder() {
         if (historyComplete || _loadingOlder.value || oldestId == 0L) return
+        val topic = forumTopicId
         viewModelScope.launch {
             _loadingOlder.value = true
-            val page = loadPage(oldestId)
-            if (page.isEmpty()) {
-                historyComplete = true
+            if (topic != null) {
+                val page = telegram.loadTopicHistory(activeChatId, topic, oldestId, HISTORY_PAGE_SIZE)
+                if (page.isEmpty()) {
+                    historyComplete = true
+                } else {
+                    oldestId = page.first().id.toLongOrNull() ?: oldestId
+                    telegram.upsertConversation(activeChatId, page, prepend = true)
+                }
             } else {
-                oldestId = page.first().id.toLongOrNull() ?: oldestId
-                telegram.upsertConversation(activeChatId, page, prepend = true)
+                // Local-first fill, network-capable fallback only once the cache
+                // truly has nothing left at this boundary. endOfHistory is only
+                // ever set once a network-capable request returns no new unique
+                // messages -- a short page on its own never sets it.
+                val page = telegram.loadHistory(
+                    activeChatId,
+                    oldestId,
+                    HISTORY_PAGE_SIZE,
+                    allowNetwork = true,
+                    reason = "PAGINATION"
+                )
+                if (page.messages.isNotEmpty()) {
+                    oldestId = page.oldestId
+                    telegram.upsertConversation(activeChatId, page.messages, prepend = true)
+                }
+                if (page.endOfHistory) historyComplete = true
             }
             _loadingOlder.value = false
         }
@@ -287,6 +338,18 @@ class ConversationViewModel(
             if (result.isSuccess) clearPendingDraft()
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
+    }
+
+    /** High-priority request for a media file's full bytes, used when the viewer opens on it. */
+    fun requestFullMediaDownload(fileId: Int) {
+        if (fileId == 0) return
+        telegram.requestFullMediaDownload(fileId)
+    }
+
+    /** Re-requests a media file whose download TDLib already gave up on. */
+    fun retryMediaDownload(fileId: Int) {
+        if (fileId == 0) return
+        telegram.retryMediaDownload(fileId)
     }
 
     fun sendPhoto(photoPath: String, caption: String = "", replyToId: String? = null) {
@@ -1023,6 +1086,9 @@ class ConversationViewModel(
 
         /** Roughly two minutes: long enough for real activity, bounded regardless. */
         const val ACTION_REPEATS = 30
+
+        /** Messages per history page, initial load and each older-history fetch. */
+        const val HISTORY_PAGE_SIZE = 40
     }
 
     class Factory(

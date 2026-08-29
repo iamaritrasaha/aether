@@ -5,6 +5,11 @@ plugins {
   alias(libs.plugins.kotlin.compose)
 }
 
+// Applied below, after hasFcmConfig is known, rather than in this block --
+// applying it unconditionally would fail the build for every clone that
+// hasn't configured Firebase, since the plugin requires google-services.json
+// to exist the moment it runs.
+
 val localProperties = Properties().apply {
   val file = rootProject.file("local.properties")
   if (file.exists()) {
@@ -14,6 +19,17 @@ val localProperties = Properties().apply {
 
 val telegramApiId = localProperties.getProperty("TELEGRAM_API_ID").orEmpty().trim()
 val telegramApiHash = localProperties.getProperty("TELEGRAM_API_HASH").orEmpty().trim()
+
+// Real background push (TDLib's RegisterDevice/ProcessPushNotification over
+// FCM) needs a Firebase Android app configured for this applicationId. Absent
+// that file, the app must still build and run with live-process notifications
+// only -- so the google-services plugin is applied only when the file exists,
+// and BuildConfig.HAS_FCM_CONFIG gates every runtime Firebase call.
+val hasFcmConfig = file("google-services.json").exists()
+
+if (hasFcmConfig) {
+  apply(plugin = "com.google.gms.google-services")
+}
 
 val signingProperties = Properties().apply {
   val configuredPath = System.getenv("AETHER_SIGNING_PROPERTIES")
@@ -32,8 +48,8 @@ android {
     applicationId = "com.foresightlabs.aether"
     minSdk = 24
     targetSdk = 37
-    versionCode = 4
-    versionName = "1.3.0"
+    versionCode = 5
+    versionName = "1.4.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -46,6 +62,7 @@ android {
     buildConfigField("String", "TELEGRAM_API_HASH", "\"${telegramApiHash.replace("\"", "\\\"")}\"")
     buildConfigField("boolean", "HAS_TELEGRAM_CREDENTIALS", (telegramApiId.isNotEmpty() && telegramApiHash.isNotEmpty()).toString())
     buildConfigField("String", "TDLIB_COMMIT", "\"89ebded9571b7bb589ec1bd05e585fffa4c580e2\"")
+    buildConfigField("boolean", "HAS_FCM_CONFIG", hasFcmConfig.toString())
   }
 
   signingConfigs {
@@ -121,6 +138,13 @@ dependencies {
   implementation(libs.androidx.camera.video)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
+  // FCM only, for TDLib push delivery -- no Analytics/Crashlytics/Firestore/etc.
+  implementation(platform(libs.firebase.bom))
+  implementation(libs.firebase.messaging)
+  // Bounded background continuation for the one push outcome that genuinely
+  // needs it (TDLib error 406 -- "must connect to fetch new data"). Not used
+  // for anything else; see TelegramClient.processPushNotification.
+  implementation(libs.androidx.work.runtime.ktx)
   // Haze 1.2.2 targets the same Compose 1.7 generation as Aether and provides
   // real backdrop capture/RenderEffect blur with a built-in scrim fallback.
   implementation("dev.chrisbanes.haze:haze:1.2.2")

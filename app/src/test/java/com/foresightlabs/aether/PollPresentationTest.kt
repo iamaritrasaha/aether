@@ -72,7 +72,7 @@ class PollPresentationTest {
         val content = TdApi.MessagePoll().apply {
             this.poll = poll(listOf(option("Pizza", 3, 60), option("Sushi", 2, 40)))
         }
-        val presentation = TelegramMappers.mapPresentation(content, 1L) { null }
+        val presentation = TelegramMappers.mapPresentation(content, 1L, resolvePath = { null })
         assertEquals(MessageType.POLL, presentation.type)
         assertEquals("Lunch?", presentation.poll?.question)
     }

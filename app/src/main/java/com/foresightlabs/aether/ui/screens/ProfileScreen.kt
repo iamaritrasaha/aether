@@ -1,5 +1,8 @@
 package com.foresightlabs.aether.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -56,6 +59,21 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
+import com.foresightlabs.aether.data.telegram.TelegramClient
+import com.foresightlabs.aether.domain.model.Message
+import com.foresightlabs.aether.domain.model.MessageType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -110,15 +128,80 @@ fun ProfileScreen(
     onStartVoiceCall: () -> Unit = {},
     onStartVideoCall: () -> Unit = {},
     onChatAction: (Chat, ChatAction) -> Unit = { _, _ -> },
+    onLoadSharedMedia: suspend (Long, TelegramClient.SharedMediaCategory, Long) -> TelegramClient.SharedMediaPage = { _, _, _ -> TelegramClient.SharedMediaPage(emptyList(), 0L, 0) },
+    onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
     canCallAudio: Boolean = false,
     canCallVideo: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalAetherColors.current
+    val context = LocalContext.current
     val user = chat.directUser
     val isSecretChat = chat.type == ChatType.SECRET
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     val tabs = listOf("Media", "Files", "Links", "Voice")
+
+    val chatIdLong = chat.id.toLongOrNull() ?: 0L
+    var mediaItems by remember(chat.id) { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var fileItems by remember(chat.id) { mutableStateOf<List<Message>>(emptyList()) }
+    var linkItems by remember(chat.id) { mutableStateOf<List<SharedLinkData>>(emptyList()) }
+    var voiceItems by remember(chat.id) { mutableStateOf<List<Message>>(emptyList()) }
+
+    var mediaNextOffset by remember(chat.id) { mutableLongStateOf(0L) }
+    var filesNextOffset by remember(chat.id) { mutableLongStateOf(0L) }
+    var linksNextOffset by remember(chat.id) { mutableLongStateOf(0L) }
+    var voiceNextOffset by remember(chat.id) { mutableLongStateOf(0L) }
+
+    var isLoadingMedia by remember(chat.id) { mutableStateOf(false) }
+    var isMediaLoaded by remember(chat.id) { mutableStateOf(false) }
+
+    LaunchedEffect(chatIdLong) {
+        if (chatIdLong != 0L) {
+            isLoadingMedia = true
+            val page = onLoadSharedMedia(chatIdLong, TelegramClient.SharedMediaCategory.MEDIA, 0L)
+            mediaItems = page.messages.flatMap { it.mediaItems }.distinctBy { it.id.ifBlank { it.fileId.toString() } }
+            mediaNextOffset = page.nextFromMessageId
+            isLoadingMedia = false
+            isMediaLoaded = true
+        }
+    }
+
+    LaunchedEffect(selectedTabIndex, chatIdLong) {
+        if (chatIdLong == 0L) return@LaunchedEffect
+        when (selectedTabIndex) {
+            0 -> {
+                if (!isMediaLoaded) {
+                    isLoadingMedia = true
+                    val page = onLoadSharedMedia(chatIdLong, TelegramClient.SharedMediaCategory.MEDIA, 0L)
+                    mediaItems = page.messages.flatMap { it.mediaItems }.distinctBy { it.id.ifBlank { it.fileId.toString() } }
+                    mediaNextOffset = page.nextFromMessageId
+                    isLoadingMedia = false
+                    isMediaLoaded = true
+                }
+            }
+            1 -> {
+                if (fileItems.isEmpty() && filesNextOffset == 0L) {
+                    val page = onLoadSharedMedia(chatIdLong, TelegramClient.SharedMediaCategory.FILES, 0L)
+                    fileItems = page.messages.distinctBy { it.id }
+                    filesNextOffset = page.nextFromMessageId
+                }
+            }
+            2 -> {
+                if (linkItems.isEmpty() && linksNextOffset == 0L) {
+                    val page = onLoadSharedMedia(chatIdLong, TelegramClient.SharedMediaCategory.LINKS, 0L)
+                    linkItems = page.messages.mapNotNull { extractLinkFromMessage(it) }
+                    linksNextOffset = page.nextFromMessageId
+                }
+            }
+            3 -> {
+                if (voiceItems.isEmpty() && voiceNextOffset == 0L) {
+                    val page = onLoadSharedMedia(chatIdLong, TelegramClient.SharedMediaCategory.VOICE, 0L)
+                    voiceItems = page.messages.distinctBy { it.id }
+                    voiceNextOffset = page.nextFromMessageId
+                }
+            }
+        }
+    }
 
     var selectedMediaItem by remember { mutableStateOf<MediaItem?>(null) }
     var isMediaViewerVisible by remember { mutableStateOf(false) }
@@ -405,6 +488,65 @@ fun ProfileScreen(
                 }
 
                 // --- SECTION 4: SHARED CONTENT & TABS ---
+                if (mediaItems.isNotEmpty()) {
+                    item(key = "profile_shared_media_preview") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                .clip(AetherEmber.Shapes.L)
+                                .background(colors.surfaceElevated)
+                                .border(1.dp, colors.border, AetherEmber.Shapes.L)
+                                .padding(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "SHARED MEDIA",
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = colors.textTertiary,
+                                    letterSpacing = 1.5.sp
+                                )
+                                Text(
+                                    text = "See all (${mediaItems.size})",
+                                    fontFamily = ManropeFontFamily,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AetherAccent.current,
+                                    modifier = Modifier.clickable { selectedTabIndex = 0 }
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                val previewSubset = mediaItems.take(4)
+                                previewSubset.forEach { item ->
+                                    SharedMediaThumbnail(
+                                        mediaItem = item,
+                                        onClick = {
+                                            selectedMediaItem = item
+                                            isMediaViewerVisible = true
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                repeat((4 - previewSubset.size).coerceAtLeast(0)) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+
                 item(key = "profile_tabs") {
                     Column(
                         modifier = Modifier
@@ -461,31 +603,121 @@ fun ProfileScreen(
                             .clip(AetherEmber.Shapes.L)
                             .background(colors.surfaceElevated)
                             .border(1.dp, colors.border, AetherEmber.Shapes.L)
-                            .padding(24.dp),
+                            .padding(16.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         when (selectedTabIndex) {
-                            0 -> DesignedEmptyState(
-                                icon = Icons.Default.PermMedia,
-                                title = "No Shared Media",
-                                description = "Photos and videos shared in this conversation will appear here."
-                            )
-                            1 -> DesignedEmptyState(
-                                icon = Icons.Default.Description,
-                                title = "No Shared Files",
-                                description = "Documents, archives, and shared files will appear here."
-                            )
-                            2 -> Column(modifier = Modifier.fillMaxWidth()) {
-                                SharedLinkItem(
-                                    url = "https://telegram.org",
-                                    title = "Telegram Official Platform & API"
-                                )
+                            0 -> {
+                                if (mediaItems.isEmpty() && !isLoadingMedia) {
+                                    DesignedEmptyState(
+                                        icon = Icons.Default.PermMedia,
+                                        title = "No Shared Media",
+                                        description = "Photos and videos shared in this conversation will appear here."
+                                    )
+                                } else if (mediaItems.isEmpty() && isLoadingMedia) {
+                                    Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp), color = AetherAccent.current, strokeWidth = 2.dp)
+                                    }
+                                } else {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        mediaItems.chunked(3).forEach { rowItems ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                rowItems.forEach { item ->
+                                                    SharedMediaThumbnail(
+                                                        mediaItem = item,
+                                                        onClick = {
+                                                            selectedMediaItem = item
+                                                            isMediaViewerVisible = true
+                                                        },
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                }
+                                                repeat(3 - rowItems.size) {
+                                                    Spacer(modifier = Modifier.weight(1f))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            else -> DesignedEmptyState(
-                                icon = Icons.Default.Mic,
-                                title = "No Voice Notes",
-                                description = "Voice messages and audio recordings will appear here."
-                            )
+                            1 -> {
+                                if (fileItems.isEmpty()) {
+                                    DesignedEmptyState(
+                                        icon = Icons.Default.Description,
+                                        title = "No Shared Files",
+                                        description = "Documents, archives, and shared files will appear here."
+                                    )
+                                } else {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        fileItems.forEach { msg ->
+                                            SharedFileRow(
+                                                fileName = msg.fileName.orEmpty().ifBlank { "Document" },
+                                                fileSize = msg.fileSize.orEmpty().ifBlank { "File" },
+                                                timestamp = msg.timestamp
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            2 -> {
+                                if (linkItems.isEmpty()) {
+                                    DesignedEmptyState(
+                                        icon = Icons.Default.Link,
+                                        title = "No Shared Links",
+                                        description = "Links shared in this conversation will appear here."
+                                    )
+                                } else {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        linkItems.forEach { link ->
+                                            SharedLinkItem(
+                                                url = link.url,
+                                                title = link.title,
+                                                onClick = {
+                                                    runCatching {
+                                                        context.startActivity(
+                                                            Intent(Intent.ACTION_VIEW, Uri.parse(link.url))
+                                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                        )
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            else -> {
+                                if (voiceItems.isEmpty()) {
+                                    DesignedEmptyState(
+                                        icon = Icons.Default.Mic,
+                                        title = "No Voice Notes",
+                                        description = "Voice messages and audio recordings will appear here."
+                                    )
+                                } else {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        voiceItems.forEach { msg ->
+                                            SharedVoiceRow(
+                                                durationSec = msg.voiceDurationSec,
+                                                timestamp = msg.timestamp
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -714,7 +946,8 @@ fun ProfileScreen(
             onClose = {
                 isMediaViewerVisible = false
                 selectedMediaItem = null
-            }
+            },
+            onRequestDownload = onRequestMediaDownload
         )
     }
 }
@@ -1040,7 +1273,11 @@ private fun DesignedEmptyState(
 }
 
 @Composable
-private fun SharedLinkItem(url: String, title: String) {
+private fun SharedLinkItem(
+    url: String,
+    title: String,
+    onClick: () -> Unit = {}
+) {
     val colors = LocalAetherColors.current
     Row(
         modifier = Modifier
@@ -1048,6 +1285,7 @@ private fun SharedLinkItem(url: String, title: String) {
             .clip(AetherEmber.Shapes.S)
             .background(colors.input)
             .border(1.dp, colors.border, AetherEmber.Shapes.S)
+            .clickable(onClick = onClick)
             .padding(AetherEmber.Spacing.Space12),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1095,4 +1333,260 @@ private fun SharedLinkItem(url: String, title: String) {
             modifier = Modifier.size(16.dp)
         )
     }
+}
+
+@Composable
+private fun SharedMediaThumbnail(
+    mediaItem: MediaItem,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalAetherColors.current
+    val previewBitmap = remember(mediaItem.previewBase64) {
+        mediaItem.previewBase64?.let { encoded ->
+            runCatching {
+                val bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }.getOrNull()
+        }
+    }
+
+    val parsedSource: Any? = remember(mediaItem.url, mediaItem.hasLocalFile) {
+        val url = mediaItem.url.trim()
+        when {
+            url.isBlank() -> null
+            url.startsWith("content://") -> Uri.parse(url)
+            url.startsWith("file://") -> {
+                val file = java.io.File(url.removePrefix("file://"))
+                if (file.exists() && file.length() > 0L) file else null
+            }
+            url.startsWith("/") -> {
+                val file = java.io.File(url)
+                if (file.exists() && file.length() > 0L) file else null
+            }
+            else -> {
+                val file = java.io.File(url)
+                if (file.exists() && file.length() > 0L) file else url
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .aspectRatio(1f)
+            .clip(AetherEmber.Shapes.M)
+            .background(colors.input)
+            .border(0.5.dp, colors.border, AetherEmber.Shapes.M)
+            .clickable(onClick = onClick)
+    ) {
+        if (parsedSource != null) {
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(parsedSource)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Shared media",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                loading = {
+                    if (previewBitmap != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = previewBitmap.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize().background(colors.input))
+                    }
+                },
+                error = {
+                    if (previewBitmap != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = previewBitmap.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize().background(colors.input))
+                    }
+                }
+            )
+        } else if (previewBitmap != null) {
+            androidx.compose.foundation.Image(
+                bitmap = previewBitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Box(
+                modifier = Modifier.fillMaxSize().background(colors.input),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PermMedia,
+                    contentDescription = null,
+                    tint = colors.textTertiary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedFileRow(
+    fileName: String,
+    fileSize: String,
+    timestamp: String,
+    onClick: () -> Unit = {}
+) {
+    val colors = LocalAetherColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(AetherEmber.Shapes.S)
+            .background(colors.input)
+            .border(1.dp, colors.border, AetherEmber.Shapes.S)
+            .clickable(onClick = onClick)
+            .padding(AetherEmber.Spacing.Space12),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(colors.surfaceHighlight),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.InsertDriveFile,
+                contentDescription = "File",
+                tint = AetherAccent.current,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = fileName,
+                fontFamily = ManropeFontFamily,
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = fileSize,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 11.5.sp,
+                    color = colors.textSecondary
+                )
+                if (timestamp.isNotBlank()) {
+                    Text(
+                        text = "•",
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 11.5.sp,
+                        color = colors.textTertiary
+                    )
+                    Text(
+                        text = timestamp,
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 11.5.sp,
+                        color = colors.textTertiary
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedVoiceRow(
+    durationSec: Int,
+    timestamp: String,
+    onClick: () -> Unit = {}
+) {
+    val colors = LocalAetherColors.current
+    val durationText = if (durationSec > 0) {
+        val mins = durationSec / 60
+        val secs = durationSec % 60
+        String.format(java.util.Locale.US, "%d:%02d", mins, secs)
+    } else "Voice Note"
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(AetherEmber.Shapes.S)
+            .background(colors.input)
+            .border(1.dp, colors.border, AetherEmber.Shapes.S)
+            .clickable(onClick = onClick)
+            .padding(AetherEmber.Spacing.Space12),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(colors.surfaceHighlight),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Mic,
+                contentDescription = "Voice",
+                tint = AetherAccent.current,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = durationText,
+                fontFamily = ManropeFontFamily,
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.textPrimary
+            )
+            if (timestamp.isNotBlank()) {
+                Text(
+                    text = timestamp,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 11.5.sp,
+                    color = colors.textTertiary
+                )
+            }
+        }
+    }
+}
+
+private data class SharedLinkData(
+    val url: String,
+    val title: String,
+    val dateText: String = ""
+)
+
+private fun extractLinkFromMessage(message: Message): SharedLinkData? {
+    val urlRegex = Regex("(https?://[\\w\\d:#@%/;$()~_?\\+-=\\\\\\.&]+)")
+    val match = urlRegex.find(message.text)
+    if (match != null) {
+        val url = match.value
+        val title = message.text.lines().firstOrNull { it != url && it.isNotBlank() } ?: url
+        return SharedLinkData(url = url, title = title, dateText = message.timestamp)
+    }
+    return null
+}
+
+private fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB")
+    val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt().coerceIn(0, units.size - 1)
+    return String.format(java.util.Locale.US, "%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
 }

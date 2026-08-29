@@ -154,6 +154,14 @@ data class LinkPreview(
     val thumbnailUrl: String? = null
 )
 
+/**
+ * A message's media, whose existence never depends on whether its bytes have
+ * arrived yet. [url] is the best source Coil can load right now -- a real
+ * local file path, or empty when nothing is available -- and [hasLocalFile]
+ * says which. Until then [previewBase64] (TDLib's minithumbnail, when Telegram
+ * sent one) lets a bubble show something better than a blank rectangle while
+ * [isDownloading]/[isUploading] report real, ongoing TDLib file transfer state.
+ */
 @Immutable
 data class MediaItem(
     val id: String,
@@ -161,7 +169,14 @@ data class MediaItem(
     val caption: String = "",
     val width: Int = 800,
     val height: Int = 600,
-    val timestamp: String = ""
+    val timestamp: String = "",
+    val fileId: Int = 0,
+    val hasLocalFile: Boolean = true,
+    val isDownloading: Boolean = false,
+    val downloadFailed: Boolean = false,
+    val isUploading: Boolean = false,
+    val uploadProgress: Float? = null,
+    val previewBase64: String? = null
 )
 
 @Immutable

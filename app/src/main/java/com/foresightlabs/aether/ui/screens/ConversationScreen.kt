@@ -3,6 +3,8 @@ package com.foresightlabs.aether.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -237,6 +239,8 @@ fun ConversationScreen(
     canUnpin: Boolean = false,
     jumpTarget: String? = null,
     onJumpConsumed: () -> Unit = {},
+    /** fileId, isRetry -- called when the media viewer opens on a file TDLib hasn't finished fetching. */
+    onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -294,7 +298,15 @@ fun ConversationScreen(
     }
     var isContextMenuVisible by remember { mutableStateOf(false) }
 
-    var selectedMediaForViewer by remember { mutableStateOf<MediaItem?>(null) }
+    // Held by id, not by value: a UpdateFile arriving while the viewer is open
+    var selectedMediaItem by remember { mutableStateOf<MediaItem?>(null) }
+    val selectedMediaForViewer = remember(selectedMediaItem, messages) {
+        selectedMediaItem?.let { current ->
+            messages.firstNotNullOfOrNull { m ->
+                m.mediaItems.find { it.id == current.id || (current.fileId != 0 && it.fileId == current.fileId) }
+            } ?: current
+        }
+    }
     var isMediaViewerVisible by remember { mutableStateOf(false) }
     var showVideoNoteRecorder by remember { mutableStateOf(false) }
 
@@ -743,6 +755,12 @@ fun ConversationScreen(
                 onEditSelected = { msg ->
                     editingMessage = msg
                 },
+                editingMessage = editingMessage,
+                onDismissEdit = { editingMessage = null },
+                onSaveEdit = { msg, newText, _ ->
+                    onEditMessage(msg, newText)
+                    editingMessage = null
+                },
                 onCopySelected = { chosen ->
                     clipboardManager.setText(
                         AnnotatedString(chosen.joinToString("\n\n") { it.text })
@@ -857,7 +875,7 @@ fun ConversationScreen(
                             isContextMenuVisible = true
                         },
                         onMediaClick = { media ->
-                            selectedMediaForViewer = media
+                            selectedMediaItem = media
                             isMediaViewerVisible = true
                         }
                     )
@@ -875,6 +893,7 @@ fun ConversationScreen(
                     },
                     isSelected = msg.id in selectedIds,
                     isSelectionActive = isSelecting,
+                    isBeingEdited = msg.id == editingMessage?.id,
                     onSelectToggle = if (isSelecting) {
                         {
                             onRequestCapabilities(msg)
@@ -884,7 +903,7 @@ fun ConversationScreen(
                         null
                     },
                     onMediaClick = { media ->
-                        selectedMediaForViewer = media
+                        selectedMediaItem = media
                         isMediaViewerVisible = true
                     },
                     onReactionClick = { targetMsg, emoji ->
@@ -1144,16 +1163,9 @@ fun ConversationScreen(
             )
         }
 
-        // Edit Message Dialog
-        if (editingMessage != null) {
-            EditMessageModal(
-                initialText = editingMessage!!.text,
-                onDismiss = { editingMessage = null },
-                onSave = { newText ->
-                    editingMessage?.let { onEditMessage(it, newText) }
-                    editingMessage = null
-                }
-            )
+        // Dismiss message edit mode on back press before exiting Conversation
+        BackHandler(enabled = editingMessage != null) {
+            editingMessage = null
         }
 
         // Delete Confirmation Modal for Single/Multi Selection
@@ -1177,118 +1189,20 @@ fun ConversationScreen(
         }
 
         // Full Screen Media Viewer Overlay
+        BackHandler(enabled = isMediaViewerVisible) {
+            isMediaViewerVisible = false
+            selectedMediaItem = null
+        }
         MediaViewer(
             mediaItem = selectedMediaForViewer,
             senderName = chat.title,
             isVisible = isMediaViewerVisible,
             onClose = {
                 isMediaViewerVisible = false
-                selectedMediaForViewer = null
-            }
+                selectedMediaItem = null
+            },
+            onRequestDownload = onRequestMediaDownload
         )
-    }
-}
-
-@Composable
-private fun EditMessageModal(
-    initialText: String,
-    onDismiss: () -> Unit,
-    onSave: (String) -> Unit
-) {
-    var text by remember { mutableStateOf(initialText) }
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0x99000000))
-                .clickable { onDismiss() }
-                .padding(24.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(AetherEmber.Shapes.XL)
-                    .background(AetherEmber.Colors.SurfaceElevated)
-                    .border(1.dp, AetherEmber.Colors.Border, AetherEmber.Shapes.XL)
-                    .clickable(enabled = false) { }
-                    .padding(20.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Edit Message",
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .clickable { onDismiss() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Close",
-                            tint = Color.White.copy(alpha = 0.6f),
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = AetherEmber.Colors.Accent,
-                        unfocusedBorderColor = AetherEmber.Colors.Border
-                    ),
-                    shape = AetherEmber.Shapes.M
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .height(40.dp)
-                            .clip(AetherEmber.Shapes.Pill)
-                            .background(AetherEmber.Colors.Accent)
-                            .clickable {
-                                if (text.isNotBlank()) onSave(text)
-                            }
-                            .padding(horizontal = 20.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Save",
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1466,7 +1380,9 @@ private fun AlbumEntryRow(
                 .fillMaxWidth(0.78f)
                 .clip(AetherEmber.Shapes.L)
                 .background(if (isOutgoing) colors.bubbleOutgoing else colors.bubbleIncoming)
-                .combinedClickable(onClick = {}, onLongClick = onLongPress)
+                .pointerInput(album.albumId) {
+                    detectTapGestures(onLongPress = { onLongPress() })
+                }
                 .padding(4.dp)
         ) {
             AlbumBubble(

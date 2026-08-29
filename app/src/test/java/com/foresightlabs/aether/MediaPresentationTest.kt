@@ -60,7 +60,46 @@ class MediaPresentationTest {
     }
 
     @Test
-    fun aPhotoStillDownloadingCarriesNoMediaItemRatherThanAPlaceholder() {
+    fun anOutgoingLocalPhotoBeforeUploadIsImmediatelyAvailable() {
+        val tempFile = java.io.File.createTempFile("outgoing_test_", ".jpg")
+        tempFile.writeText("photo bytes")
+        try {
+            val localFile = TdApi.File().apply {
+                id = 10
+                size = tempFile.length()
+                local = TdApi.LocalFile().apply {
+                    path = tempFile.absolutePath
+                    isDownloadingCompleted = false
+                    canBeDownloaded = false
+                }
+            }
+            val size = TdApi.PhotoSize("y", localFile, 1024, 768, intArrayOf())
+            val content = TdApi.MessagePhoto().apply {
+                photo = TdApi.Photo(false, null, arrayOf(size))
+                caption = TdApi.FormattedText("", emptyArray())
+            }
+
+            val presentation = TelegramMappers.mapPresentation(content, 99L, ::resolve)
+
+            assertEquals(MessageType.IMAGE, presentation.type)
+            val media = presentation.mediaItems.single()
+            assertTrue(media.hasLocalFile)
+            assertEquals(tempFile.absolutePath, media.url)
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    /**
+     * A message's media EXISTS the instant TDLib reports the message --
+     * independent of whether its file has finished downloading. A photo
+     * message whose file has not arrived yet must still carry a MediaItem
+     * (so the Conversation shows a bubble immediately); what the pending
+     * state changes is only that [hasLocalFile] is false and [isDownloading]
+     * reflects TDLib's real transfer state, never that the item vanishes.
+     */
+    @Test
+    fun aPhotoStillDownloadingCarriesAMediaItemMarkedAsNotYetLocal() {
         val content = TdApi.MessagePhoto().apply {
             photo = TdApi.Photo(
                 false,
@@ -73,7 +112,35 @@ class MediaPresentationTest {
         val presentation = TelegramMappers.mapPresentation(content, 56L, ::resolve)
 
         assertEquals(MessageType.IMAGE, presentation.type)
-        assertTrue(presentation.mediaItems.isEmpty())
+        assertEquals(1, presentation.mediaItems.size)
+        val media = presentation.mediaItems.single()
+        assertTrue(!media.hasLocalFile)
+        assertEquals("", media.url)
+        assertEquals(3, media.fileId)
+        assertEquals(800, media.width)
+    }
+
+    @Test
+    fun aDownloadTdlibStoppedWithoutFinishingIsReportedAsFailed() {
+        val content = TdApi.MessagePhoto().apply {
+            photo = TdApi.Photo(
+                false,
+                null,
+                arrayOf(TdApi.PhotoSize("y", pendingFile(9), 800, 600, intArrayOf()))
+            )
+            caption = TdApi.FormattedText("", emptyArray())
+        }
+
+        val presentation = TelegramMappers.mapPresentation(
+            content,
+            56L,
+            resolvePath = ::resolve,
+            isDownloadFailed = { it == 9 }
+        )
+
+        val media = presentation.mediaItems.single()
+        assertTrue(media.downloadFailed)
+        assertTrue(!media.hasLocalFile)
     }
 
     @Test
