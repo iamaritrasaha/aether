@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.foresightlabs.aether.domain.model.ActiveCall
 import com.foresightlabs.aether.domain.model.CallStateEnum
+import com.foresightlabs.aether.ui.design.AetherAvatar
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.OnlineGreen

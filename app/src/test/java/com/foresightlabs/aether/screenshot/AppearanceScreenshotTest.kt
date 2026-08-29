@@ -12,7 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.foresightlabs.aether.ui.screens.AppearanceScreen
+import com.foresightlabs.aether.ui.appearance.AppearanceScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode

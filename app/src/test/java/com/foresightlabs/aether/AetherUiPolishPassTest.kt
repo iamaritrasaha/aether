@@ -27,12 +27,12 @@ import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.ChatType
 import com.foresightlabs.aether.domain.model.Presence
 import com.foresightlabs.aether.domain.model.User
-import com.foresightlabs.aether.ui.components.AttachmentSheet
-import com.foresightlabs.aether.ui.components.MessageComposer
+import com.foresightlabs.aether.ui.conversation.AttachmentSheet
+import com.foresightlabs.aether.ui.conversation.MessageComposer
 import com.foresightlabs.aether.ui.design.AetherFloatingHeaderDefaults
 import com.foresightlabs.aether.ui.design.AetherMinTouchTarget
 import com.foresightlabs.aether.ui.design.AetherNavPillDefaults
-import com.foresightlabs.aether.ui.screens.ProfileScreen
+import com.foresightlabs.aether.ui.profile.ProfileScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
@@ -247,7 +247,7 @@ class AetherUiPolishPassTest {
             }
             CompositionLocalProvider(LocalAppThemeState provides themeState) {
                 AetherTheme(themeState = themeState) {
-                    com.foresightlabs.aether.ui.screens.ConversationIdentityHeader(
+                    com.foresightlabs.aether.ui.conversation.ConversationIdentityHeader(
                         chat = testChat,
                         onOpenProfile = { profileClicked = true },
                         onOpenSearch = { searchClicked = true },

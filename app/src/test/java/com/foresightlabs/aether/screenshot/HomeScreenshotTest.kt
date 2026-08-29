@@ -16,7 +16,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.ConnectionStatus
-import com.foresightlabs.aether.ui.screens.HomeScreen
+import com.foresightlabs.aether.ui.home.HomeScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode

@@ -18,7 +18,7 @@ import com.foresightlabs.aether.domain.model.StoryItem
 import com.foresightlabs.aether.domain.model.User
 import com.foresightlabs.aether.domain.model.UserPulse
 import com.foresightlabs.aether.ui.pulse.PulseViewerState
-import com.foresightlabs.aether.ui.screens.PulseScreen
+import com.foresightlabs.aether.ui.pulse.PulseScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode

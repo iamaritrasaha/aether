@@ -22,7 +22,7 @@ import com.foresightlabs.aether.domain.model.MessageType
 import com.foresightlabs.aether.domain.model.Presence
 import com.foresightlabs.aether.domain.model.Reaction
 import com.foresightlabs.aether.domain.model.User
-import com.foresightlabs.aether.ui.screens.ConversationScreen
+import com.foresightlabs.aether.ui.conversation.ConversationScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode

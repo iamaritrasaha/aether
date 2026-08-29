@@ -15,11 +15,11 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.foresightlabs.aether.domain.model.AuthUiState
 import com.foresightlabs.aether.data.preferences.AppearanceRepository
-import com.foresightlabs.aether.ui.screens.AuthScreen
-import com.foresightlabs.aether.ui.screens.ChatAppearanceScreen
-import com.foresightlabs.aether.ui.screens.ProfileScreen
-import com.foresightlabs.aether.ui.screens.SearchScreen
-import com.foresightlabs.aether.ui.screens.SettingsScreen
+import com.foresightlabs.aether.ui.auth.AuthScreen
+import com.foresightlabs.aether.ui.appearance.ChatAppearanceScreen
+import com.foresightlabs.aether.ui.profile.ProfileScreen
+import com.foresightlabs.aether.ui.search.SearchScreen
+import com.foresightlabs.aether.ui.settings.SettingsScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode

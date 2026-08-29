@@ -54,27 +54,27 @@ import com.foresightlabs.aether.AetherApplication
 import com.foresightlabs.aether.data.contacts.DefaultContactsRepository
 import com.foresightlabs.aether.domain.model.AuthUiState
 import com.foresightlabs.aether.ui.auth.AuthViewModel
-import com.foresightlabs.aether.ui.chats.ChatsViewModel
+import com.foresightlabs.aether.ui.home.ChatsViewModel
 import com.foresightlabs.aether.ui.forum.ForumTopicsViewModel
-import com.foresightlabs.aether.ui.screens.ForumTopicsScreen
+import com.foresightlabs.aether.ui.forum.ForumTopicsScreen
 import com.foresightlabs.aether.ui.contacts.ContactsViewModel
 import com.foresightlabs.aether.ui.conversation.ConversationViewModel
 import androidx.compose.runtime.rememberCoroutineScope
 import com.foresightlabs.aether.ui.calls.CallsViewModel
-import com.foresightlabs.aether.ui.screens.AppearanceScreen
-import com.foresightlabs.aether.ui.screens.AuthScreen
-import com.foresightlabs.aether.ui.screens.OnboardingScreen
-import com.foresightlabs.aether.ui.screens.CallsScreen
-import com.foresightlabs.aether.ui.screens.ChatAppearanceScreen
-import com.foresightlabs.aether.ui.screens.ContactsScreen
-import com.foresightlabs.aether.ui.screens.FullCallScreen
-import com.foresightlabs.aether.ui.screens.HomeScreen
-import com.foresightlabs.aether.ui.screens.OngoingCallBar
-import com.foresightlabs.aether.ui.screens.ConversationScreen
-import com.foresightlabs.aether.ui.screens.ProfileScreen
-import com.foresightlabs.aether.ui.screens.PulseScreen
-import com.foresightlabs.aether.ui.screens.SearchScreen
-import com.foresightlabs.aether.ui.screens.SettingsScreen
+import com.foresightlabs.aether.ui.appearance.AppearanceScreen
+import com.foresightlabs.aether.ui.auth.AuthScreen
+import com.foresightlabs.aether.ui.onboarding.OnboardingScreen
+import com.foresightlabs.aether.ui.calls.CallsScreen
+import com.foresightlabs.aether.ui.appearance.ChatAppearanceScreen
+import com.foresightlabs.aether.ui.contacts.ContactsScreen
+import com.foresightlabs.aether.ui.calls.FullCallScreen
+import com.foresightlabs.aether.ui.home.HomeScreen
+import com.foresightlabs.aether.ui.calls.OngoingCallBar
+import com.foresightlabs.aether.ui.conversation.ConversationScreen
+import com.foresightlabs.aether.ui.profile.ProfileScreen
+import com.foresightlabs.aether.ui.pulse.PulseScreen
+import com.foresightlabs.aether.ui.search.SearchScreen
+import com.foresightlabs.aether.ui.settings.SettingsScreen
 import com.foresightlabs.aether.ui.search.SearchViewModel
 import com.foresightlabs.aether.ui.settings.SettingsViewModel
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
@@ -362,7 +362,7 @@ fun AetherApp(
                     val isPosting by pulseViewModel.isPosting.collectAsStateWithLifecycle()
                     val postError by pulseViewModel.postError.collectAsStateWithLifecycle()
 
-                    com.foresightlabs.aether.ui.screens.PulseScreen(
+                    com.foresightlabs.aether.ui.pulse.PulseScreen(
                         myPulse = myPulse,
                         pulses = pulses,
                         canPostPulse = canPostPulse,

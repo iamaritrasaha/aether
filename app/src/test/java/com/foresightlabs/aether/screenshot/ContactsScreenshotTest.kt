@@ -16,7 +16,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.foresightlabs.aether.domain.contacts.DiscoveredContact
 import com.foresightlabs.aether.domain.model.Presence
 import com.foresightlabs.aether.domain.model.User
-import com.foresightlabs.aether.ui.screens.ContactsScreen
+import com.foresightlabs.aether.ui.contacts.ContactsScreen
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
