@@ -7,10 +7,12 @@ Aether is an independent Android messenger from Foresight Labs, built on Telegra
 Currently distributed through closed testing.
 
 <p>
-  <img src="play-console-assets/phone-screenshots/01-home.png" width="24%" alt="Home">
-  <img src="play-console-assets/phone-screenshots/03-conversation.png" width="24%" alt="Conversation">
-  <img src="play-console-assets/phone-screenshots/02-contacts.png" width="24%" alt="Contacts">
-  <img src="play-console-assets/phone-screenshots/04-pulse.png" width="24%" alt="Pulse">
+  <img src="docs/screenshots/aether-home.png" width="49%" alt="Home">
+  <img src="docs/screenshots/aether-conversation.png" width="49%" alt="Conversation">
+</p>
+<p>
+  <img src="docs/screenshots/aether-attachments.png" width="49%" alt="Attachments open in the Curtain">
+  <img src="docs/screenshots/aether-forwarding.png" width="49%" alt="Forwarding in the Curtain">
 </p>
 
 ## What Aether is
