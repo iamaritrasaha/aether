@@ -94,6 +94,13 @@ Kotlin and Jetpack Compose throughout, with the official TDLib Java/JNI bindings
 
 Place local Telegram API values in the untracked `local.properties` file. Never commit credentials or signing material.
 
+Background notifications additionally require a Firebase Android app for this
+`applicationId` (`app/google-services.json`, untracked) and, separately, Firebase
+credentials attached to the Telegram application at my.telegram.org — Telegram is
+the sender, and it refuses device registration until it has them. Without that
+configuration the app builds and runs with notifications from the live connection
+only. See [docs/architecture/push-notifications.md](docs/architecture/push-notifications.md).
+
 Common development checks:
 
 ```shell

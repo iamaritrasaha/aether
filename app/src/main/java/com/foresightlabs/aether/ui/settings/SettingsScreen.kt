@@ -68,6 +68,7 @@ fun SettingsScreen(
     confirmLogout: Boolean,
     onBack: () -> Unit,
     onNavigateToAppearance: () -> Unit,
+    onNavigateToAbout: () -> Unit = {},
     onRequestLogout: () -> Unit,
     onConfirmLogout: () -> Unit,
     onDismissLogout: () -> Unit,
@@ -84,7 +85,7 @@ fun SettingsScreen(
         ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().testTag("settings_list"),
                 contentPadding = PaddingValues(top = aetherFloatingHeaderContentTopPadding())
             ) {
                 // Profile Card (Ember glass styled)
@@ -276,7 +277,8 @@ fun SettingsScreen(
                             icon = Icons.Default.Info,
                             title = "About Aether",
                             subtitle = "Version ${BuildConfig.VERSION_NAME} • TDLib ${BuildConfig.TDLIB_COMMIT.take(8)}",
-                            onClick = { }
+                            onClick = onNavigateToAbout,
+                            testTag = "settings_about_item"
                         )
                         HorizontalDivider(
                             color = colors.divider,
@@ -299,15 +301,8 @@ fun SettingsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 24.dp, vertical = 12.dp)
+                            .testTag("settings_legal_footer")
                     ) {
-                        Text(
-                            text = "Aether",
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Spacer(modifier = Modifier.height(3.dp))
                         Text(
                             text = "© 2026 Aritra Saha / Foresight Labs. All rights reserved.",
                             fontFamily = ManropeFontFamily,
@@ -315,7 +310,7 @@ fun SettingsScreen(
                             fontWeight = FontWeight.SemiBold,
                             color = AetherEmber.Colors.AtmosphereTextSecondary
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = "Aether is an independent third-party client that uses the Telegram API. Aether is not affiliated with or endorsed by Telegram.",
                             fontFamily = ManropeFontFamily,
@@ -323,7 +318,7 @@ fun SettingsScreen(
                             color = AetherEmber.Colors.AtmosphereTextTertiary,
                             lineHeight = 17.sp
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = "Includes bundled open source software: TDLib (Boost Software License 1.0), Haze (Apache License 2.0), Manrope Variable Font (SIL Open Font License 1.1), Space Grotesk (SIL Open Font License 1.1).",
                             fontFamily = ManropeFontFamily,

@@ -45,6 +45,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.drinkless.tdlib.Client
 import org.drinkless.tdlib.NativeLoader
 import org.drinkless.tdlib.TdApi
@@ -144,6 +145,10 @@ class TelegramClient(private val application: Application) {
     fun start() {
         if (!BuildConfig.HAS_TELEGRAM_CREDENTIALS) {
             _authState.value = AuthUiState.MissingCredentials
+            // Readiness is resolved, not granted: nothing will ever apply
+            // parameters, so anything waiting on them -- a push, above all --
+            // must find that out now rather than sit out its whole timeout.
+            parametersApplied.complete(Unit)
             return
         }
         if (client != null) return
@@ -160,6 +165,7 @@ class TelegramClient(private val application: Application) {
                     "64-bit ARM (arm64-v8a) and this device reports " +
                     "${Build.SUPPORTED_ABIS.joinToString().ifBlank { "an unsupported ABI" }}."
             )
+            parametersApplied.complete(Unit)
             return
         }
         val verbosity = if (BuildConfig.DEBUG) 1 else 0
@@ -168,10 +174,37 @@ class TelegramClient(private val application: Application) {
         } catch (_: Client.ExecutionException) {
         }
         client = Client.create(
-            { update -> scope.launch { handleUpdate(update) } },
+            { update -> dispatchUpdate(update) },
             { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib update handler error", error) },
             { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib handler error", error) }
         )
+    }
+
+    private val parametersApplied = CompletableDeferred<Unit>()
+
+    /**
+     * Notification updates are handled one at a time, in arrival order, and a
+     * push can wait for that work to actually finish -- see
+     * [NotificationWorkQueue][com.foresightlabs.aether.data.push.NotificationWorkQueue]
+     * for why both properties matter. Every other update keeps its own
+     * coroutine, as before.
+     */
+    private val notificationWork = com.foresightlabs.aether.data.push.NotificationWorkQueue(
+        scope = scope,
+        onError = { error ->
+            if (BuildConfig.DEBUG) android.util.Log.w(TAG, "NOTIFICATION_RENDER_FAILED", error)
+        }
+    )
+
+    private fun dispatchUpdate(update: TdApi.Object) {
+        if (update is TdApi.UpdateNotificationGroup ||
+            update is TdApi.UpdateNotification ||
+            update is TdApi.UpdateActiveNotifications
+        ) {
+            notificationWork.submit { handleUpdate(update) }
+        } else {
+            scope.launch { handleUpdate(update) }
+        }
     }
 
     /** Mirrors actual app visibility to TDLib without repeating equivalent writes. */
@@ -2295,6 +2328,11 @@ class TelegramClient(private val application: Application) {
                     }
                 }
                 _connection.value = next
+                if (next == com.foresightlabs.aether.domain.model.ConnectionStatus.READY &&
+                    previous != com.foresightlabs.aether.domain.model.ConnectionStatus.READY
+                ) {
+                    onConnectionReady()
+                }
             }
             is TdApi.UpdateChatFolders -> {
                 // Telegram decides where the main list sits among the folders; it is
@@ -2641,8 +2679,12 @@ class TelegramClient(private val application: Application) {
     // UpdateNotification / UpdateActiveNotifications updates a live connection
     // would have produced. Android notifications are never built directly from
     // an FCM payload.
-    @Volatile private var lastRegisteredFcmToken: String? = null
-    @Volatile private var pendingFcmToken: String? = null
+    /**
+     * Which token still needs registering with Telegram, and whether a failed
+     * attempt is worth repeating -- see
+     * [PushRegistration][com.foresightlabs.aether.data.push.PushRegistration].
+     */
+    private val pushRegistration = com.foresightlabs.aether.data.push.PushRegistration()
 
     /**
      * The identifier TDLib returned from the RegisterDevice call this client
@@ -2695,17 +2737,34 @@ class TelegramClient(private val application: Application) {
      * first is held and flushed once [AuthUiState.Ready] is reached.
      */
     fun registerFcmToken(token: String) {
-        if (token.isBlank() || token == lastRegisteredFcmToken) return
-        pendingFcmToken = token
+        if (!pushRegistration.onTokenAvailable(token)) return
         if (BuildConfig.DEBUG) android.util.Log.d(TAG, "FCM_TOKEN_AVAILABLE")
         if (_authState.value is AuthUiState.Ready) {
             scope.launch { flushPendingFcmToken() }
         }
     }
 
-    private suspend fun flushPendingFcmToken() {
-        val token = pendingFcmToken ?: return
-        if (token == lastRegisteredFcmToken) return
+    /**
+     * Re-attempts a registration that failed for a reason repeating it could
+     * fix (see [PushRegistration][com.foresightlabs.aether.data.push.PushRegistration]).
+     *
+     * Driven by the connection coming back, not by a timer: without this, a
+     * device whose first attempt happened during a bad moment on the network
+     * would hold an unregistered token -- and therefore receive no pushes at
+     * all -- until the process next started. Bounded by the registration's own
+     * attempt budget, so this is a reaction to an event, not a retry loop.
+     */
+    private fun onConnectionReady() {
+        if (_authState.value !is AuthUiState.Ready) return
+        if (pushRegistration.tokenToRetryOnReconnect() == null) return
+        if (BuildConfig.DEBUG) android.util.Log.d(TAG, "REGISTER_DEVICE_RETRY_ON_CONNECT")
+        scope.launch { flushPendingFcmToken() }
+    }
+
+    private val registrationMutex = Mutex()
+
+    private suspend fun flushPendingFcmToken() = registrationMutex.withLock {
+        val token = pushRegistration.beginAttempt() ?: return@withLock
         if (BuildConfig.DEBUG) android.util.Log.d(TAG, "REGISTER_DEVICE_REQUEST")
         // encrypt=true: per TDLib's Notification API docs, an FCM push
         // registered without encryption carries no message content at all
@@ -2719,13 +2778,25 @@ class TelegramClient(private val application: Application) {
         val deviceToken = TdApi.DeviceTokenFirebaseCloudMessaging(token, true)
         when (val result = send(TdApi.RegisterDevice(deviceToken, LongArray(0)))) {
             is TdApi.PushReceiverId -> {
-                lastRegisteredFcmToken = token
+                pushRegistration.onRegistered(token)
                 pushReceiverId = result.id
                 persistPushReceiverId(result.id)
                 if (BuildConfig.DEBUG) android.util.Log.d(TAG, "REGISTER_DEVICE_SUCCESS")
             }
             is TdApi.Error -> {
-                if (BuildConfig.DEBUG) android.util.Log.w(TAG, "REGISTER_DEVICE_ERROR code=${result.code}")
+                val failure = pushRegistration.onAttemptFailed(result.code)
+                if (BuildConfig.DEBUG) {
+                    // The symbol Telegram answers with is what distinguishes a
+                    // token problem from the server-side application having no
+                    // push credentials configured (APP_PUSH_APIKEY_MISSING),
+                    // which is not something the client can resolve. It names a
+                    // server-side condition and carries nothing private -- no
+                    // token, no credential, no message content.
+                    android.util.Log.w(
+                        TAG,
+                        "REGISTER_DEVICE_ERROR code=${result.code} reason=${result.message} disposition=$failure"
+                    )
+                }
             }
             else -> {}
         }
@@ -2759,46 +2830,40 @@ class TelegramClient(private val application: Application) {
      * instead and returns. Any other error is logged and otherwise dropped;
      * there is nothing more to try.
      */
-    suspend fun processPushNotification(payload: String) {
-        if (BuildConfig.DEBUG) android.util.Log.d(TAG, "FCM_MESSAGE_RECEIVED")
-        val receiverId = getPushReceiverId(payload)
-        val ourId = pushReceiverId
-        if (receiverId != 0L && ourId != null && receiverId != ourId) {
-            if (BuildConfig.DEBUG) android.util.Log.w(TAG, "PUSH_RECEIVER_MISMATCH")
-            return
-        }
-        if (BuildConfig.DEBUG && receiverId != 0L && ourId != null && receiverId == ourId) {
-            android.util.Log.d(TAG, "PUSH_RECEIVER_MATCH")
-        }
-        start()
-        if (BuildConfig.DEBUG) android.util.Log.d(TAG, "PROCESS_PUSH_STARTED")
-        val result = send(TdApi.ProcessPushNotification(payload))
-        when {
-            result is TdApi.Ok -> {
-                // TDLib's own contract: every update this push caused has
-                // already been emitted by the time Ok is returned. Nothing
-                // further to wait for -- blocking here would only add
-                // latency to the FCM callback for no benefit. No Worker.
-                if (BuildConfig.DEBUG) android.util.Log.d(TAG, "PUSH_PROCESS_OK")
-            }
-            result is TdApi.Error && result.code == 406 -> {
-                // TDLib: push lacked enough data locally; only a live fetch
-                // resolves it, and that can genuinely outlast the FCM
-                // callback's execution window -- hand it off rather than
-                // block here.
-                if (BuildConfig.DEBUG) android.util.Log.d(TAG, "PUSH_PROCESS_406")
-                enqueuePushFetchWork()
-            }
-            result is TdApi.Error -> {
-                // A parse/decryption failure or similar -- not the "needs a
-                // connection" case, so it does not get the 406 continuation.
-                // There is nothing else to try from here.
-                if (BuildConfig.DEBUG) android.util.Log.w(TAG, "PUSH_PROCESS_ERROR code=${result.code}")
-            }
-            else -> {
-                if (BuildConfig.DEBUG) android.util.Log.w(TAG, "PUSH_PROCESS_ERROR unexpected")
-            }
-        }
+    suspend fun processPushNotification(payload: String): String =
+        pushDelivery.deliver(payload).name
+
+    /**
+     * The push sequence itself, wired to this client. Every step it needs is
+     * supplied here; the ordering and the lifetime rules live in
+     * [PushDelivery][com.foresightlabs.aether.data.push.PushDelivery] so they
+     * can be exercised without TDLib.
+     */
+    private val pushDelivery by lazy {
+        com.foresightlabs.aether.data.push.PushDelivery(
+            resolveReceiverId = { payload -> getPushReceiverId(payload) },
+            registeredReceiverId = { pushReceiverId },
+            awaitTdlibReady = {
+                start()
+                withTimeoutOrNull(PUSH_PARAMETERS_TIMEOUT_MS) { parametersApplied.await() }
+                Unit
+            },
+            processPush = { payload ->
+                when (val result = send(TdApi.ProcessPushNotification(payload))) {
+                    is TdApi.Ok -> com.foresightlabs.aether.data.push.PushDelivery.ProcessResult.Ok
+                    is TdApi.Error ->
+                        if (result.code == 406) {
+                            com.foresightlabs.aether.data.push.PushDelivery.ProcessResult.NeedsLiveFetch
+                        } else {
+                            com.foresightlabs.aether.data.push.PushDelivery.ProcessResult.Failed(result.code)
+                        }
+                    else -> com.foresightlabs.aether.data.push.PushDelivery.ProcessResult.Failed(0)
+                }
+            },
+            awaitNotificationWork = { timeoutMs -> notificationWork.awaitDrained(timeoutMs) },
+            handOffToLiveFetch = { enqueuePushFetchWork() },
+            log = { line -> if (BuildConfig.DEBUG) android.util.Log.d(TAG, line) }
+        )
     }
 
     /**
@@ -2889,10 +2954,23 @@ class TelegramClient(private val application: Application) {
             id
         } catch (_: Client.ExecutionException) {
             0L
+        } catch (error: Throwable) {
+            // This runs before anything else in a push, in a process the push
+            // itself may have started -- including on a device where the native
+            // library could not load at all. An unroutable push means "process
+            // it, there is nowhere else for it to go"; it must never mean an
+            // uncaught throw out of the Firebase callback.
+            if (BuildConfig.DEBUG) {
+                android.util.Log.w(TAG, "PUSH_RECEIVER_ID_UNAVAILABLE error=${error.javaClass.simpleName}")
+            }
+            0L
         }
     }
 
     private suspend fun onAuth(state: TdApi.AuthorizationState) {
+        if (state !is TdApi.AuthorizationStateWaitTdlibParameters) {
+            parametersApplied.complete(Unit)
+        }
         when (state) {
             is TdApi.AuthorizationStateWaitTdlibParameters -> applyParameters()
             is TdApi.AuthorizationStateClosed -> {
@@ -2942,11 +3020,18 @@ class TelegramClient(private val application: Application) {
             "Aether ${BuildConfig.VERSION_NAME}"
         )
         when (val result = send(params)) {
+            is TdApi.Ok -> {
+                parametersApplied.complete(Unit)
+            }
             is TdApi.Error -> {
                 if (BuildConfig.DEBUG) {
                     android.util.Log.e(TAG, "SetTdlibParameters failed: ${result.code}")
                 }
+                parametersApplied.complete(Unit)
                 _authState.value = AuthUiState.Unsupported(TdErrors.userMessage(result))
+            }
+            else -> {
+                parametersApplied.complete(Unit)
             }
         }
         send(TdApi.SetNetworkType(TdApi.NetworkTypeOther()))
@@ -3466,8 +3551,7 @@ class TelegramClient(private val application: Application) {
         // The account this token was registered against no longer has a
         // session; a future login must register fresh rather than trusting
         // this as already-done.
-        lastRegisteredFcmToken = null
-        pendingFcmToken = null
+        pushRegistration.onSessionCleared()
         pushReceiverId = null
         persistPushReceiverId(null)
     }
@@ -3513,6 +3597,11 @@ class TelegramClient(private val application: Application) {
         // loop, and it is never used on the ProcessPushNotification success
         // path, which needs no waiting at all.
         private const val PUSH_PENDING_TIMEOUT_MS = 8_000L
+        // How long a push waits for TDLib parameters to be applied before
+        // sending ProcessPushNotification. In a process the push itself
+        // started, initialization has only just begun; this bounds that wait
+        // so a stuck start-up cannot hold the push callback open.
+        private const val PUSH_PARAMETERS_TIMEOUT_MS = 5_000L
         private const val PREF_PUSH_RECEIVER_ID = "push_receiver_id"
         private const val PUSH_FETCH_WORK_NAME = "aether_push_fetch"
     }

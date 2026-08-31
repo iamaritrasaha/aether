@@ -71,6 +71,7 @@ import com.foresightlabs.aether.ui.onboarding.OnboardingScreen
 import com.foresightlabs.aether.ui.calls.CallsScreen
 import com.foresightlabs.aether.ui.appearance.ChatAppearanceScreen
 import com.foresightlabs.aether.ui.contacts.ContactsScreen
+import com.foresightlabs.aether.ui.about.AboutScreen
 import com.foresightlabs.aether.ui.calls.FullCallScreen
 import com.foresightlabs.aether.ui.home.HomeScreen
 import com.foresightlabs.aether.ui.calls.OngoingCallBar
@@ -98,6 +99,7 @@ object Destinations {
     const val SEARCH = "search"
     const val CALLS = "calls"
     const val SETTINGS = "settings"
+    const val ABOUT = "about"
     const val APPEARANCE = "appearance"
     const val CHAT_APPEARANCE = "chat-appearance/{chatId}"
     const val FORUM_TOPICS = "forum/{chatId}"
@@ -707,10 +709,21 @@ fun AetherApp(
                         confirmLogout = confirm,
                         onBack = { navController.popBackStack() },
                         onNavigateToAppearance = { navController.navigate(Destinations.APPEARANCE) },
+                        onNavigateToAbout = { navController.navigate(Destinations.ABOUT) },
                         onRequestLogout = settingsViewModel::requestLogout,
                         onConfirmLogout = settingsViewModel::confirmLogout,
                         onDismissLogout = settingsViewModel::dismissLogout
                     )
+                }
+
+                composable(
+                    route = Destinations.ABOUT,
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
+                ) {
+                    AboutScreen(onBack = { navController.popBackStack() })
                 }
 
                 composable(

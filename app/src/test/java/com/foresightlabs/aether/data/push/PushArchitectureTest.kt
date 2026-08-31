@@ -152,4 +152,44 @@ class PushArchitectureTest {
         assertEquals("", parsed.getString("empty"))
         assertEquals(1L, parsed.getLong("google.sent_time"))
     }
+
+    @Test
+    fun fcm_service_and_notification_manager_do_not_depend_on_ui_or_main_activity() {
+        val service = source("com/foresightlabs/aether/data/push/AetherFirebaseMessagingService.kt")
+        val manager = source("com/foresightlabs/aether/data/notifications/AetherNotificationManager.kt")
+
+        assertFalse(
+            "FCM Service must process background push without requiring MainActivity",
+            service.contains("MainActivity")
+        )
+        assertFalse(
+            "Notification generation must not require Compose state",
+            manager.contains("androidx.compose")
+        )
+    }
+
+    @Test
+    fun push_processing_is_wired_to_the_sequencing_and_waiting_it_is_tested_for() {
+        // The ordering and lifetime rules themselves are verified behaviourally
+        // in PushDeliveryTest and NotificationWorkQueueTest. What can only be
+        // checked here is that the client actually uses them rather than
+        // hand-rolling a second, untested sequence next to them.
+        val client = source("com/foresightlabs/aether/data/telegram/TelegramClient.kt")
+        assertTrue(
+            "The push path must go through the tested delivery sequence",
+            client.contains("pushDelivery.deliver(")
+        )
+        assertTrue(
+            "Notification updates must go through the serialized, awaitable queue",
+            client.contains("notificationWork.submit")
+        )
+        assertTrue(
+            "The delivery must be able to wait for notification work to drain",
+            client.contains("notificationWork.awaitDrained")
+        )
+        assertTrue(
+            "Push processing must await TDLib parameters before sending ProcessPushNotification",
+            client.contains("parametersApplied.await()")
+        )
+    }
 }

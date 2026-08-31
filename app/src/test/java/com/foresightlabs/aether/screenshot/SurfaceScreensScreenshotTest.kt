@@ -87,7 +87,16 @@ class SurfaceScreensScreenshotTest {
             AetherTheme(active.theme) {
                 when (active.screen) {
                     Screen.PROFILE -> ProfileScreen(HomeFixtures.populated.first(), {}, {})
-                    Screen.SETTINGS -> SettingsScreen(HomeFixtures.me, false, {}, {}, {}, {}, {})
+                    Screen.SETTINGS -> SettingsScreen(
+                        currentUser = HomeFixtures.me,
+                        confirmLogout = false,
+                        onBack = {},
+                        onNavigateToAppearance = {},
+                        onNavigateToAbout = {},
+                        onRequestLogout = {},
+                        onConfirmLogout = {},
+                        onDismissLogout = {}
+                    )
                     Screen.SEARCH -> SearchScreen(HomeFixtures.populated, {}, {}, {})
                     Screen.CHAT_APPEARANCE -> ChatAppearanceScreen(chatId = 103L, onBack = {})
                     Screen.AUTH_PHONE -> Auth(AuthUiState.Phone())

@@ -21,6 +21,7 @@ import com.foresightlabs.aether.R
 import com.foresightlabs.aether.domain.messaging.ConversationClass
 import com.foresightlabs.aether.domain.messaging.ConversationFacts
 import com.foresightlabs.aether.domain.messaging.TelegramIdentity
+import com.foresightlabs.aether.domain.messaging.classifyByChatIdentifier
 import com.foresightlabs.aether.domain.messaging.classifyConversation
 import org.drinkless.tdlib.TdApi
 import java.util.concurrent.ConcurrentHashMap
@@ -126,6 +127,89 @@ class AetherNotificationManager(
     }
 
     /**
+     * What the notification path should do about a chat, which is a different
+     * question from what the chat *is*.
+     *
+     * [classifyChat] answers from the chat record, and answers
+     * [ConversationClass.UNKNOWN] when it cannot be read. Treating that as "not
+     * deliverable" is right for the running app, where a failed lookup means
+     * something is genuinely wrong -- but it is wrong for a process the push
+     * itself just started, where the local database may simply not be able to
+     * answer offline for the very chat the push is about. Failing closed there
+     * discards a real message, and the previous behaviour went further and
+     * cancelled whatever was already on screen for that chat.
+     *
+     * So an unreadable record is not an answer of "no". It falls back to what
+     * Telegram's own identifier scheme settles ([classifyByChatIdentifier]),
+     * and where even that cannot decide, the notification is withheld without
+     * cancelling anything -- a later update with a readable record posts it
+     * properly.
+     */
+    sealed interface Eligibility {
+        /** Post it. [chat] is null when the record could not be read. */
+        data class Deliver(
+            val conversationClass: ConversationClass,
+            val chat: TdApi.Chat?,
+            val chatResolved: Boolean
+        ) : Eligibility
+
+        /** Known not to be deliverable: existing notifications for it are cleared. */
+        object Withhold : Eligibility
+
+        /** Cannot be decided right now: suppressed, but nothing is cancelled or discarded. */
+        object Defer : Eligibility
+    }
+
+    suspend fun evaluate(chatId: Long): Eligibility {
+        val chat = getChat(chatId)
+        if (chat == null) {
+            val fallback = classifyByChatIdentifier(chatId, getMyUserId())
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, "NOTIFICATION_ELIGIBILITY_FALLBACK chatHash=${hashChatId(chatId)} $fallback reason=CHAT_NOT_FOUND")
+            }
+            return if (fallback.isDeliverable) {
+                Eligibility.Deliver(fallback, chat = null, chatResolved = false)
+            } else {
+                Eligibility.Withhold
+            }
+        }
+
+        val counterpartUserId = when (val type = chat.type) {
+            is TdApi.ChatTypePrivate -> type.userId
+            is TdApi.ChatTypeSecret -> type.userId
+            else -> null
+        } ?: return Eligibility.Withhold
+
+        val resolved = classifyChat(chatId)
+        if (resolved != ConversationClass.UNKNOWN) {
+            return if (resolved.isDeliverable) {
+                Eligibility.Deliver(resolved, chat, chatResolved = true)
+            } else {
+                Eligibility.Withhold
+            }
+        }
+
+        // The chat is readable and is one-to-one, but its counterpart is not.
+        // The identifier still settles service account and Saved Messages; a
+        // counterpart id of 0 settles nothing, so that defers.
+        if (counterpartUserId == 0L) {
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, "ANDROID_NOTIFICATION_DEFERRED chatHash=${hashChatId(chatId)} reason=NO_COUNTERPART_ID")
+            }
+            return Eligibility.Defer
+        }
+        val fallback = classifyByChatIdentifier(counterpartUserId, getMyUserId())
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "NOTIFICATION_ELIGIBILITY_FALLBACK chatHash=${hashChatId(chatId)} $fallback reason=USER_NOT_FOUND")
+        }
+        return if (fallback.isDeliverable) {
+            Eligibility.Deliver(fallback, chat, chatResolved = false)
+        } else {
+            Eligibility.Withhold
+        }
+    }
+
+    /**
      * Whether this chat is a 1:1 conversation with a real person.
      *
      * Telegram's service account is deliberately not one -- it is not a person --
@@ -156,11 +240,19 @@ class AetherNotificationManager(
         )
 
         // Aether product policy: Android notifications are personal 1:1 human conversations only
-        if (!isDeliverableChat(chatId)) {
+        val eligibility = evaluate(chatId)
+        if (eligibility is Eligibility.Withhold) {
             if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_SUPPRESSED reason=NOT_DELIVERABLE_CONVERSATION chatHash=${hashChatId(chatId)} groupId=$groupId")
             cancelNotification(chatId, groupId, "NOT_DELIVERABLE_CONVERSATION")
             activeGroups.remove(groupId)
             updateSummaryNotification()
+            return
+        }
+        if (eligibility is Eligibility.Defer) {
+            // Not "no", only "not yet": whatever is already showing for this
+            // chat stays, and the group's state is kept for a later update
+            // that can be classified.
+            if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_DEFERRED reason=CHAT_UNRESOLVED chatHash=${hashChatId(chatId)} groupId=$groupId")
             return
         }
 
@@ -203,7 +295,7 @@ class AetherNotificationManager(
             cancelNotification(chatId, groupId, "EMPTY_GROUP_ITEMS")
             activeGroups.remove(groupId)
         } else {
-            postGroupNotification(group)
+            postGroupNotification(group, eligibility as Eligibility.Deliver)
         }
 
         updateSummaryNotification()
@@ -216,11 +308,16 @@ class AetherNotificationManager(
         }
         val group = activeGroups[groupId] ?: return
 
-        if (!isDeliverableChat(group.chatId)) {
+        val eligibility = evaluate(group.chatId)
+        if (eligibility is Eligibility.Withhold) {
             if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_SUPPRESSED reason=NOT_DELIVERABLE_CONVERSATION chatHash=${hashChatId(group.chatId)} groupId=$groupId")
             cancelNotification(group.chatId, groupId, "NOT_DELIVERABLE_CONVERSATION")
             activeGroups.remove(groupId)
             updateSummaryNotification()
+            return
+        }
+        if (eligibility is Eligibility.Defer) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_DEFERRED reason=CHAT_UNRESOLVED chatHash=${hashChatId(group.chatId)} groupId=$groupId")
             return
         }
 
@@ -235,7 +332,7 @@ class AetherNotificationManager(
         val item = parseNotification(update.notification)
         if (item != null) {
             group.items[update.notification.id] = item
-            postGroupNotification(group)
+            postGroupNotification(group, eligibility as Eligibility.Deliver)
             updateSummaryNotification()
         }
     }
@@ -262,10 +359,15 @@ class AetherNotificationManager(
             val groupId = activeGroup.id
             val chatId = activeGroup.chatId
 
-            if (!isDeliverableChat(chatId)) {
+            val eligibility = evaluate(chatId)
+            if (eligibility is Eligibility.Withhold) {
                 if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_SUPPRESSED reason=NOT_DELIVERABLE_CONVERSATION chatHash=${hashChatId(chatId)} groupId=$groupId")
                 cancelNotification(chatId, groupId, "NOT_DELIVERABLE_CONVERSATION")
                 activeGroups.remove(groupId)
+                continue
+            }
+            if (eligibility is Eligibility.Defer) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_DEFERRED reason=CHAT_UNRESOLVED chatHash=${hashChatId(chatId)} groupId=$groupId")
                 continue
             }
 
@@ -298,7 +400,7 @@ class AetherNotificationManager(
                 cancelNotification(chatId, groupId, "ACTIVE_FOREGROUND_CONVERSATION")
                 activeGroups.remove(groupId)
             } else {
-                postGroupNotification(group)
+                postGroupNotification(group, eligibility as Eligibility.Deliver)
             }
         }
         updateSummaryNotification()
@@ -383,7 +485,7 @@ class AetherNotificationManager(
         }
     }
 
-    private suspend fun postGroupNotification(group: GroupData) {
+    private suspend fun postGroupNotification(group: GroupData, eligibility: Eligibility.Deliver) {
         if (!notificationManager.areNotificationsEnabled()) {
             if (BuildConfig.DEBUG) Log.w(TAG, "ANDROID_NOTIFICATIONS_DISABLED")
             return
@@ -401,16 +503,22 @@ class AetherNotificationManager(
         }
 
         val chatId = group.chatId
-        val conversationClass = classifyChat(chatId)
         // Telegram's own account: delivered, but not treated as a conversation
         // with a person. It gets no reply affordance and no lock-screen preview.
-        val isTelegramService = conversationClass == ConversationClass.TELEGRAM_SERVICE
-        val chat = getChat(chatId)
-        val chatTitle = chat?.title.orEmpty().ifBlank { "Telegram" }
+        // This holds whether the class came from the chat record or, in a cold
+        // process, from Telegram's identifier scheme -- the privacy rules must
+        // not depend on which.
+        val isTelegramService = eligibility.conversationClass == ConversationClass.TELEGRAM_SERVICE
+        val chat = eligibility.chat
         val isGroup = chat?.type is TdApi.ChatTypeBasicGroup || chat?.type is TdApi.ChatTypeSupergroup
 
         val allItems = group.items.values.sortedBy { it.date }
         if (allItems.isEmpty()) return
+        // Without a chat record there is still a name to show: the push itself
+        // carries the sender's, which is what TDLib built these items from.
+        val chatTitle = chat?.title.orEmpty()
+            .ifBlank { allItems.lastOrNull { !it.isOutgoing }?.senderName.orEmpty() }
+            .ifBlank { "Telegram" }
         // Reconciliation retains every active item in GroupData; only the recent
         // meaningful window is sent to MessagingStyle so expanded shade stays compact.
         val sortedItems = allItems.takeLast(MAX_PRESENTED_HISTORY)
@@ -427,14 +535,19 @@ class AetherNotificationManager(
         val privateUser = (chat?.type as? TdApi.ChatTypePrivate)?.userId?.let { getUser(it) }
         val otherDisplayName = privateUser?.let { "${it.firstName} ${it.lastName}".trim() }
             ?.ifBlank { chatTitle } ?: chatTitle
+        // With no user record there is no photo to load, and the avatar falls
+        // back to its initials rendering -- seeded on the chat id, which for a
+        // private chat is the counterpart's user id, so the colour a contact
+        // gets is the same one they get once the record is readable again.
+        val avatarSeedId = privateUser?.id ?: chatId
         val otherPerson = Person.Builder()
             .setName(otherDisplayName)
-            .setKey("private_user_${privateUser?.id ?: 0L}")
+            .setKey("private_user_${privateUser?.id ?: chatId}")
             .setIcon(
                 NotificationAvatars.circularIcon(
                     photoPath = privateUser?.profilePhoto?.small?.local?.path,
                     displayName = otherDisplayName,
-                    colorSeedId = privateUser?.id ?: 0L
+                    colorSeedId = avatarSeedId
                 )
             )
             .build()
@@ -445,7 +558,7 @@ class AetherNotificationManager(
         // does not exist. Personal chats get one; service does not.
         val shortcutId = if (isTelegramService) null else privateConversationShortcutId(chatId)
         if (shortcutId != null) {
-            registerConversationShortcut(shortcutId, chatTitle, otherPerson, chat)
+            registerConversationShortcut(shortcutId, chatTitle, otherPerson, chatId)
         }
 
         val messagingStyle = NotificationCompat.MessagingStyle(selfPerson)
@@ -677,12 +790,12 @@ class AetherNotificationManager(
         shortcutId: String,
         label: String,
         person: Person,
-        chat: TdApi.Chat?
+        chatId: Long
     ) {
         val intent = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_CHAT_ID, chat?.id ?: 0L)
+            putExtra(EXTRA_CHAT_ID, chatId)
         }
         val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
             .setShortLabel(label)

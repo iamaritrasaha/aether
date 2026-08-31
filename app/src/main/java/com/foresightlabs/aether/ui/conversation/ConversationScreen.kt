@@ -1200,7 +1200,6 @@ fun ConversationScreen(
             onSearchOlder = onSearchOlder,
             onSearchNewer = onSearchNewer,
             onOpenProfile = onNavigateToProfile,
-            onTogglePin = onTogglePin,
             pinned = pinnedMessage,
             pinnedCount = pinnedMessages.size,
             pinnedIndex = pinnedCursor,
@@ -1846,56 +1845,6 @@ fun ConversationSearchButton(
 }
 
 /**
- * Pins or unpins this whole conversation in the chat list, from inside the
- * conversation itself. Same button geometry as [ConversationSearchButton] --
- * the same 48dp target, 40dp glass circle -- so it reads as one more ordinary
- * conversation control, not a louder or separately-styled affordance. Only its
- * accent wash changes to show the chat is currently pinned, the same
- * selected-state treatment Aether already uses elsewhere.
- */
-@Composable
-fun ConversationPinButton(
-    isPinned: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val colors = LocalAetherColors.current
-    val accent = AetherAccent.current
-    Box(
-        modifier = modifier
-            .size(48.dp)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = ripple(bounded = false, radius = 24.dp),
-                onClick = onClick
-            )
-            .semantics { this.contentDescription = if (isPinned) "Unpin conversation" else "Pin conversation" }
-            .testTag("conversation_pin_button"),
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(if (isPinned) accent.copy(alpha = 0.24f) else Color(0x22FFFFFF))
-                .border(
-                    width = 0.5.dp,
-                    color = if (isPinned) accent.copy(alpha = 0.4f) else Color(0x18FFFFFF),
-                    shape = CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.PushPin,
-                contentDescription = null,
-                tint = if (isPinned) accent else colors.atmosphereTextPrimary.copy(alpha = 0.88f),
-                modifier = Modifier.size(20.dp)
-            )
-        }
-    }
-}
-
-/**
  * Frosted Floating Identity & Search Header.
  *
  * Uses Aether's canonical frosted glass primitive. The header smoothly morphs between
@@ -1912,7 +1861,6 @@ fun ConversationIdentityHeader(
     onSearchOlder: () -> Unit = {},
     onSearchNewer: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
-    onTogglePin: () -> Unit = {},
     pinned: Message? = null,
     pinnedCount: Int = 0,
     pinnedIndex: Int = 0,
@@ -2012,15 +1960,6 @@ fun ConversationIdentityHeader(
                                 )
                             }
                         }
-
-                        Spacer(modifier = Modifier.width(4.dp))
-
-                        // The same chat-list pin Home's selection dock offers,
-                        // reachable without leaving the conversation.
-                        ConversationPinButton(
-                            isPinned = chat.isPinned,
-                            onClick = onTogglePin
-                        )
 
                         Spacer(modifier = Modifier.width(4.dp))
 

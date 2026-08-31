@@ -107,3 +107,32 @@ fun classifyConversation(facts: ConversationFacts): ConversationClass = when {
 
     else -> ConversationClass.PERSONAL_HUMAN
 }
+
+/**
+ * Classification from Telegram's identifiers alone, for the one case where the
+ * chat record itself cannot be read.
+ *
+ * Telegram encodes what a chat is in its identifier: a private chat's id *is*
+ * the other person's user id and is positive, while every group form -- basic
+ * group, supergroup, channel, secret chat -- is negative. That is Telegram's
+ * own scheme rather than a guess about the data, so it can answer the only
+ * question the notification path must answer without a chat record: is this a
+ * one-to-one conversation, or is it secondary content.
+ *
+ * It cannot answer everything the record can. Whether the counterpart is a bot
+ * or a deleted account is not encoded in the id, so a bot's message can reach a
+ * notification through this path where the full rule set would have filed it as
+ * secondary content. That is the deliberate direction to be wrong in: this is
+ * only ever consulted when a real message has already arrived and the
+ * alternative is discarding it unseen, which for a messaging application is the
+ * worse failure by a wide margin. Everything the id *does* settle -- groups and
+ * channels stay secondary, Saved Messages stays secondary, and Telegram's
+ * service account keeps its own class and therefore its lock-screen privacy --
+ * is settled exactly as it would have been with the record in hand.
+ */
+fun classifyByChatIdentifier(chatId: Long, myUserId: Long): ConversationClass = when {
+    chatId == TelegramIdentity.SERVICE_NOTIFICATIONS_USER_ID -> ConversationClass.TELEGRAM_SERVICE
+    chatId <= 0L -> ConversationClass.SECONDARY_TELEGRAM_CONTENT
+    myUserId != 0L && chatId == myUserId -> ConversationClass.SECONDARY_TELEGRAM_CONTENT
+    else -> ConversationClass.PERSONAL_HUMAN
+}
