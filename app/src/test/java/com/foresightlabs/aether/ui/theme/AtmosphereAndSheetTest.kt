@@ -1,14 +1,10 @@
 package com.foresightlabs.aether.ui.theme
 import com.foresightlabs.aether.ui.design.SheetAnchor
 import com.foresightlabs.aether.ui.design.SheetAnchors
-import com.foresightlabs.aether.ui.theme.AtmosphereWeatherService
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
-import com.foresightlabs.aether.ui.theme.WeatherCondition
-import com.foresightlabs.aether.ui.theme.WeatherReading
 import com.foresightlabs.aether.ui.theme.buildAtmosphere
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -57,9 +53,9 @@ class AtmosphereAndSheetTest {
 
     @Test
     fun accentFollowsTheTimePalette() {
-        val day = buildAtmosphere(TimeAtmospherePalette.DAY, WeatherReading.Idle)
-        val golden = buildAtmosphere(TimeAtmospherePalette.GOLDEN_HOUR, WeatherReading.Idle)
-        val night = buildAtmosphere(TimeAtmospherePalette.NIGHT, WeatherReading.Idle)
+        val day = buildAtmosphere(TimeAtmospherePalette.DAY)
+        val golden = buildAtmosphere(TimeAtmospherePalette.GOLDEN_HOUR)
+        val night = buildAtmosphere(TimeAtmospherePalette.NIGHT)
 
         assertNotEquals(day.accent, golden.accent)
         assertNotEquals(golden.accent, night.accent)
@@ -67,45 +63,6 @@ class AtmosphereAndSheetTest {
         assertTrue("day accent should be cool", day.accent.blue > day.accent.red)
         assertTrue("golden accent should be warm", golden.accent.red > golden.accent.blue)
         assertTrue("night accent should be cool", night.accent.blue > night.accent.red)
-    }
-
-    @Test
-    fun weatherModulatesButOnlyWhenActuallyKnown() {
-        val plain = buildAtmosphere(TimeAtmospherePalette.DAY, WeatherReading.Idle)
-        val rainy = buildAtmosphere(
-            TimeAtmospherePalette.DAY,
-            WeatherReading.Known(WeatherCondition.RAIN)
-        )
-        assertNotEquals(plain.accent, rainy.accent)
-        assertTrue(rainy.isWeatherModulated)
-
-        // Unavailable and loading readings must fall back to time-only, unmodulated.
-        val unavailable = buildAtmosphere(
-            TimeAtmospherePalette.DAY,
-            WeatherReading.Unavailable(
-                com.foresightlabs.aether.ui.theme.WeatherUnavailableReason.SERVICE
-            )
-        )
-        assertEquals(plain.colors, unavailable.colors)
-        assertNull(unavailable.weatherCondition)
-        assertEquals(plain.colors, buildAtmosphere(TimeAtmospherePalette.DAY, WeatherReading.Loading).colors)
-    }
-
-    @Test
-    fun wmoCodesMapToConditions() {
-        assertEquals(WeatherCondition.CLEAR, AtmosphereWeatherService.mapWmoCodeToWeather(0))
-        assertEquals(WeatherCondition.CLEAR, AtmosphereWeatherService.mapWmoCodeToWeather(1))
-        assertEquals(WeatherCondition.PARTLY_CLOUDY, AtmosphereWeatherService.mapWmoCodeToWeather(2))
-        assertEquals(WeatherCondition.CLOUDY, AtmosphereWeatherService.mapWmoCodeToWeather(3))
-        assertEquals(WeatherCondition.FOG, AtmosphereWeatherService.mapWmoCodeToWeather(45))
-        assertEquals(WeatherCondition.FOG, AtmosphereWeatherService.mapWmoCodeToWeather(48))
-        assertEquals(WeatherCondition.DRIZZLE, AtmosphereWeatherService.mapWmoCodeToWeather(51))
-        assertEquals(WeatherCondition.RAIN, AtmosphereWeatherService.mapWmoCodeToWeather(61))
-        assertEquals(WeatherCondition.HEAVY_RAIN, AtmosphereWeatherService.mapWmoCodeToWeather(65))
-        assertEquals(WeatherCondition.SNOW, AtmosphereWeatherService.mapWmoCodeToWeather(71))
-        assertEquals(WeatherCondition.STORM, AtmosphereWeatherService.mapWmoCodeToWeather(95))
-        assertEquals(WeatherCondition.UNKNOWN, AtmosphereWeatherService.mapWmoCodeToWeather(999))
-        assertEquals(WeatherCondition.UNKNOWN, AtmosphereWeatherService.mapWmoCodeToWeather(-1))
     }
 
     // --- sheet anchors are derived, never a fixed screen split ----------------
@@ -142,7 +99,7 @@ class AtmosphereAndSheetTest {
     }
 
     @Test
-    fun collapsedLipAnchorLeavesHandleVisibleForWeatherHero() {
+    fun collapsedLipAnchorLeavesHandleVisibleForCollapsedHero() {
         val anchors = SheetAnchors.derive(
             containerHeightPx = 1000f,
             heroBottomPx = 300f,

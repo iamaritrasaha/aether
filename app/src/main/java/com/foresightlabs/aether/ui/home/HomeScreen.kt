@@ -70,10 +70,10 @@ import com.foresightlabs.aether.domain.daily.DailyLine
 import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.ConnectionStatus
 import com.foresightlabs.aether.domain.model.User
+import com.foresightlabs.aether.domain.model.Presence
 import com.foresightlabs.aether.domain.presence.ActiveNow
 import com.foresightlabs.aether.domain.presence.ActiveNowState
 import com.foresightlabs.aether.domain.presence.ActivePerson
-import com.foresightlabs.aether.ui.design.AetherAtmosphericBackground
 import com.foresightlabs.aether.ui.design.AetherAvatar
 import com.foresightlabs.aether.ui.design.AetherSearchPill
 import com.foresightlabs.aether.domain.chats.ChatAction
@@ -88,12 +88,10 @@ import com.foresightlabs.aether.ui.design.edgePx
 import com.foresightlabs.aether.ui.home.PresenceDensity
 import com.foresightlabs.aether.ui.home.PresenceStripTokens
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
+import com.foresightlabs.aether.ui.home.atmosphere.AetherTimeAtmosphere
 import com.foresightlabs.aether.ui.theme.AetherEmber
-import com.foresightlabs.aether.ui.theme.LocalAtmosphere
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
-import com.foresightlabs.aether.ui.weather.AetherWeatherVisuals
-import com.foresightlabs.aether.ui.weather.buildWeatherHeroState
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
@@ -129,14 +127,14 @@ fun HomeScreen(
     onEditFolder: (Int, String) -> Unit = { _, _ -> },
     onDeleteFolder: (Int) -> Unit = {},
     onReorderFolders: (List<Int>) -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    timeAtmosphere: com.foresightlabs.aether.ui.home.atmosphere.TimeAtmosphere = com.foresightlabs.aether.ui.home.atmosphere.rememberCurrentTimeAtmosphere()
 ) {
     val colors = LocalAetherColors.current
     val density = LocalDensity.current
     val frostState = rememberAetherFrostState()
 
     var searchQuery by remember { mutableStateOf("") }
-    var showLocationPicker by remember { mutableStateOf(false) }
     var actionSheetChat by remember { mutableStateOf<Chat?>(null) }
     var selectedChatIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val isSelectionActive = selectedChatIds.isNotEmpty()
@@ -149,10 +147,6 @@ fun HomeScreen(
     // start clear of its lower edge whatever the greeting and strip come to.
     var heroHeightPx by remember { mutableIntStateOf(0) }
 
-    val themeState = com.foresightlabs.aether.ui.theme.LocalAppThemeState.current
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
-
     val listState = rememberLazyListState()
 
     // Real presence only. Never a fabricated dot.
@@ -161,16 +155,14 @@ fun HomeScreen(
     // Stable for the whole local day, offline, no external quote source.
     val dailyLine = rememberAetherDaily()
 
-    // Primary Home feed shows 1:1 personal conversations only.
+    // Primary Home feed shows 1:1 personal conversations, plus Telegram's own
+    // service account. The latter is not a person and never reaches the presence
+    // strip, but it carries login codes and security notices -- filtering it out
+    // for being "not a human conversation" loses messages the user needs.
     val visibleChats = remember(chats, searchQuery) {
         chats.filter { chat ->
-            chat.isPersonalChat && matchesQuery(chat, searchQuery)
+            chat.isDeliverableConversation && matchesQuery(chat, searchQuery)
         }
-    }
-
-    val atmosphere = LocalAtmosphere.current
-    val weatherState = remember(atmosphere) {
-        buildWeatherHeroState(atmosphere, atmosphere.palette)
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -300,7 +292,7 @@ fun HomeScreen(
                         ) {
                             HomeEmptyState(
                                 isLoading = isLoading,
-                                hasAnyPersonalChats = chats.any { it.isPersonalChat },
+                                hasAnyPersonalChats = chats.any { it.isDeliverableConversation },
                                 query = searchQuery
                             )
                         }
@@ -366,64 +358,53 @@ fun HomeScreen(
                 )
                 .testTag("home_hero")
         ) {
-                AetherAtmosphericBackground(
+                AetherTimeAtmosphere(
                     modifier = Modifier.matchParentSize(),
                     heroFraction = 1f,
                     enableAmbientMotion = true,
-                    frostState = frostState
-                ) {}
+                    frostState = frostState,
+                    timeAtmosphere = timeAtmosphere
+                )
 
-                    // Real weather still shapes this screen; it simply does so
-                    // quietly, behind the greeting, instead of taking the stage.
-                    AetherWeatherVisuals(
-                        condition = weatherState.condition,
-                        timeBand = weatherState.timeBand,
-                        revealProgress = HeroWeatherPresence,
-                        weatherState = weatherState,
-                        modifier = Modifier.matchParentSize()
-                    )
-
-                    Column(
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                ) {
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .statusBarsPadding()
+                            .graphicsLayer {
+                                alpha = topControlsAlpha
+                                translationY = topControlsTranslationY
+                            }
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .graphicsLayer {
-                                    alpha = topControlsAlpha
-                                    translationY = topControlsTranslationY
-                                }
-                        ) {
-                            HomeHeroControls(
-                                connection = connection,
-                                searchQuery = searchQuery,
-                                onSearchQueryChange = { searchQuery = it },
-                                onNavigateToSettings = onNavigateToSettings
-                            )
-                        }
+                        HomeHeroControls(
+                            connection = connection,
+                            searchQuery = searchQuery,
+                            onSearchQueryChange = { searchQuery = it },
+                            onNavigateToSettings = onNavigateToSettings
+                        )
+                    }
 
-                        Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space20))
+                    Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space20))
 
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .graphicsLayer {
-                                    alpha = greetingAlpha
-                                    translationY = greetingTranslationY
-                                    scaleX = greetingScale
-                                    scaleY = greetingScale
-                                }
-                        ) {
-                            HomeGreeting(
-                                currentUser = currentUser,
-                                daily = dailyLine,
-                                greetingSize = greetingSize,
-                                weatherLine = weatherState.quietLine(),
-                                onWeatherClick = { showLocationPicker = true }
-                            )
-                        }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                alpha = greetingAlpha
+                                translationY = greetingTranslationY
+                                scaleX = greetingScale
+                                scaleY = greetingScale
+                            }
+                    ) {
+                        HomeGreeting(
+                            currentUser = currentUser,
+                            daily = dailyLine,
+                            greetingSize = greetingSize
+                        )
+                    }
 
                         Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space24))
 
@@ -461,49 +442,10 @@ fun HomeScreen(
                 actionSheetChat?.let { onChatAction(it, action) }
             }
         )
-
-        if (showLocationPicker) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0x80000000))
-                    .clickable { showLocationPicker = false },
-                contentAlignment = Alignment.BottomCenter
-            ) {
-                com.foresightlabs.aether.ui.weather.AetherLocationPickerSheet(
-                    currentMode = themeState.weatherLocationMode,
-                    currentManualLocation = themeState.manualWeatherLocation,
-                    onSelectAutomatic = {
-                        themeState.clearManualWeatherLocation()
-                        scope.launch {
-                            themeState.weatherReading = com.foresightlabs.aether.ui.theme.AtmosphereWeatherService.read(
-                                context = context,
-                                locationMode = com.foresightlabs.aether.data.preferences.WeatherLocationMode.AUTOMATIC,
-                                manualLocation = null,
-                                forceRefresh = true
-                            )
-                        }
-                    },
-                    onSelectLocation = { location ->
-                        themeState.setAndPersistManualWeatherLocation(location)
-                        scope.launch {
-                            themeState.weatherReading = com.foresightlabs.aether.ui.theme.AtmosphereWeatherService.read(
-                                context = context,
-                                locationMode = com.foresightlabs.aether.data.preferences.WeatherLocationMode.MANUAL,
-                                manualLocation = location,
-                                forceRefresh = true
-                            )
-                        }
-                    },
-                    onDismiss = { showLocationPicker = false }
-                )
-            }
-        }
     }
 }
 
-/** How much of the weather scene the calm hero carries. Present, never theatrical. */
-private const val HeroWeatherPresence = 0.26f
+
 
 /** The foreground hero owns the curve; the conversations behind it do not. */
 private val HeroCornerRadius = 34.dp
@@ -631,9 +573,7 @@ fun HomeSettingsButton(
 private fun HomeGreeting(
     currentUser: User?,
     daily: DailyLine,
-    greetingSize: androidx.compose.ui.unit.TextUnit,
-    weatherLine: String?,
-    onWeatherClick: () -> Unit
+    greetingSize: androidx.compose.ui.unit.TextUnit
 ) {
     val colors = LocalAetherColors.current
     Column(modifier = Modifier.padding(horizontal = AetherEmber.Spacing.Space20)) {
@@ -664,23 +604,6 @@ private fun HomeGreeting(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.testTag("aether_daily")
         )
-
-        if (weatherLine != null) {
-            Spacer(modifier = Modifier.height(AetherEmber.Spacing.Space4))
-            Text(
-                text = weatherLine,
-                fontFamily = ManropeFontFamily,
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.Medium,
-                color = colors.atmosphereTextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .clip(AetherEmber.Shapes.Pill)
-                    .clickable { onWeatherClick() }
-                    .testTag("home_weather_line")
-            )
-        }
     }
 }
 
@@ -760,10 +683,14 @@ private fun PresenceSection(
             }
 
             items(state.people, key = { "person_${it.id}" }) { person ->
-                val descriptionSuffix = when (state) {
-                    is ActiveNowState.Online -> "online now"
-                    is ActiveNowState.RecentlyActive -> "recently active"
-                    ActiveNowState.Empty -> ""
+                // The row's label describes its best claim (e.g. "Active now" once
+                // anyone qualifies), but a mixed row can hold people who don't meet
+                // that claim themselves -- each dot and description must speak for
+                // that one person's own status, not the row's.
+                val descriptionSuffix = when (person.presence) {
+                    Presence.ONLINE -> "online now"
+                    Presence.RECENTLY -> "recently active"
+                    else -> ""
                 }
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -779,8 +706,9 @@ private fun PresenceSection(
                         initials = person.chat.avatarInitials,
                         gradient = person.chat.avatarGradient,
                         size = avatarSize,
-                        // Only an exact TDLib online status lights the dot.
-                        isOnline = state is ActiveNowState.Online,
+                        // Only an exact TDLib online status lights the dot -- this
+                        // person's own status, not whatever the row's overall claim is.
+                        isOnline = person.presence == Presence.ONLINE,
                         hasUnseenPulse = person.hasUnseenPulse,
                         chatType = person.chat.type,
                         photoPath = person.chat.photoPath,
@@ -863,12 +791,66 @@ private fun greetingFor(user: User?): String {
     return if (firstName == null) greeting else "$greeting,\n$firstName"
 }
 
-/**
- * The weather reading as one unobtrusive line, or nothing at all when Aether does
- * not actually have a reading.
- */
-private fun com.foresightlabs.aether.ui.weather.WeatherHeroState.quietLine(): String? {
-    if (!isAvailable) return null
-    val name = conditionName ?: return temperatureDisplay
-    return "$temperatureDisplay · $name"
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+fun HomeScreenPreviewPreDawn() {
+    HomeScreenPreviewForTime(4, 30)
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+fun HomeScreenPreviewMorning() {
+    HomeScreenPreviewForTime(8, 30)
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+fun HomeScreenPreviewNoon() {
+    HomeScreenPreviewForTime(12, 30)
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+fun HomeScreenPreviewAfternoon() {
+    HomeScreenPreviewForTime(16, 0)
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+fun HomeScreenPreviewEvening() {
+    HomeScreenPreviewForTime(20, 0)
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+fun HomeScreenPreviewNight() {
+    HomeScreenPreviewForTime(23, 0)
+}
+
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+fun HomeScreenPreviewMidnight() {
+    HomeScreenPreviewForTime(0, 0)
+}
+
+@Composable
+private fun HomeScreenPreviewForTime(hour: Int, minute: Int) {
+    val atmosphere = com.foresightlabs.aether.ui.home.atmosphere.TimeAtmospherePolicy.resolve(hour, minute)
+    com.foresightlabs.aether.ui.theme.AetherTheme {
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalInspectionMode provides true
+        ) {
+            HomeScreen(
+                chats = emptyList(),
+                currentUser = User("1", "Aether User", "aether", "AU", listOf(Color.Blue, Color.Cyan), Presence.ONLINE),
+                connection = ConnectionStatus.READY,
+                isLoading = false,
+                onChatClick = {},
+                onNavigateToCalls = {},
+                onNavigateToSettings = {},
+                onNewMessageClick = {},
+                timeAtmosphere = atmosphere
+            )
+        }
+    }
 }

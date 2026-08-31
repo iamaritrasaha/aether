@@ -299,6 +299,7 @@ object TelegramMappers {
             voiceWaveform = presentation.voiceWaveform,
             formatted = presentation.formatted,
             poll = presentation.poll,
+            linkPreview = presentation.linkPreview,
             mediaAlbumId = message.mediaAlbumId,
             reactions = mapReactions(message.interactionInfo),
             isPinned = message.isPinned,
@@ -386,7 +387,8 @@ object TelegramMappers {
 
     private fun replyContentType(content: TdApi.MessageContent?): MessageType {
         return when (content) {
-            is TdApi.MessagePhoto, is TdApi.MessageVideo -> MessageType.IMAGE
+            is TdApi.MessagePhoto -> MessageType.IMAGE
+            is TdApi.MessageVideo -> MessageType.VIDEO
             is TdApi.MessageVoiceNote -> MessageType.VOICE
             is TdApi.MessageAudio -> MessageType.AUDIO
             is TdApi.MessageDocument -> MessageType.FILE
@@ -454,7 +456,9 @@ object TelegramMappers {
         val fileSize: String? = null,
         val fileExtension: String? = null,
         val voiceDurationSec: Int = 0,
-        val voiceWaveform: List<Float> = emptyList()
+        val voiceWaveform: List<Float> = emptyList(),
+        /** Telegram's preview for a link in a text message, when it made one. */
+        val linkPreview: com.foresightlabs.aether.domain.model.LinkPreview? = null
     )
 
     /**
@@ -522,10 +526,15 @@ object TelegramMappers {
         return when (content) {
             is TdApi.MessageText -> {
                 val formatted = mapFormattedText(content.text)
+                // Telegram attaches the preview to the message itself, so a sent
+                // or received link arrives already previewed -- nothing is
+                // fetched here to build one.
+                val preview = mapLinkPreview(content.linkPreview, resolvePath)
                 MediaPresentation(
                     text = formatted.text,
-                    type = MessageType.TEXT,
-                    formatted = formatted
+                    type = if (preview != null) MessageType.LINK_PREVIEW else MessageType.TEXT,
+                    formatted = formatted,
+                    linkPreview = preview
                 )
             }
             is TdApi.MessagePhoto -> {
@@ -550,17 +559,56 @@ object TelegramMappers {
                 val captionText = mapFormattedText(content.caption)
                 val caption = captionText.text
                 val video = content.video
+                val thumbFile = video?.thumbnail?.file
+                val videoFile = video?.video
+                // The thumbnail is small and auto-downloads like a photo's, exactly
+                // as before. The video's own content file never goes through
+                // resolvePath here -- that would silently queue every video in the
+                // conversation for a full-size background download the instant its
+                // message loads. localPath() only reports whether it already
+                // happens to be on disk; playback requests the real download later,
+                // on demand, when the viewer actually opens.
+                val videoLocalPath = localPath(videoFile).orEmpty()
+                val thumbItems = mediaItem(
+                    thumbFile,
+                    caption,
+                    video?.width ?: 0,
+                    video?.height ?: 0,
+                    minithumbnail = video?.minithumbnail
+                )
+                val mediaItems = if (thumbItems.isNotEmpty()) {
+                    thumbItems.map { thumb ->
+                        thumb.copy(isVideo = true, videoFileId = videoFile?.id ?: 0, videoLocalPath = videoLocalPath)
+                    }
+                } else if (videoFile != null) {
+                    // No thumbnail at all -- still a real video, not a missing
+                    // message. The bubble falls back to Telegram's minithumbnail
+                    // (if any) or a plain video placeholder; tapping still opens
+                    // the viewer, which downloads and plays the content file.
+                    listOf(
+                        MediaItem(
+                            id = "$messageId:${videoFile.id}",
+                            url = "",
+                            caption = caption,
+                            width = (video.width).coerceAtLeast(1),
+                            height = (video.height).coerceAtLeast(1),
+                            fileId = 0,
+                            hasLocalFile = false,
+                            previewBase64 = minithumbnailBase64(video.minithumbnail),
+                            isVideo = true,
+                            videoFileId = videoFile.id,
+                            videoLocalPath = videoLocalPath
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
                 MediaPresentation(
                     text = caption,
-                    type = MessageType.IMAGE,
+                    type = MessageType.VIDEO,
                     formatted = captionText,
-                    mediaItems = mediaItem(
-                        video?.thumbnail?.file ?: video?.video,
-                        caption,
-                        video?.width ?: 0,
-                        video?.height ?: 0,
-                        minithumbnail = video?.minithumbnail
-                    )
+                    voiceDurationSec = video?.duration ?: 0,
+                    mediaItems = mediaItems
                 )
             }
             is TdApi.MessageDocument -> {
@@ -1014,6 +1062,28 @@ object TelegramMappers {
      * message itself rather than downloaded, so it is available the instant
      * the message arrives -- long before the real photo or video file is.
      */
+    /**
+     * Telegram's own preview for a message's link.
+     *
+     * The message carries it: `messageText.linkPreview` is generated by Telegram
+     * when the message is sent, so displaying one costs no request and reads no
+     * page. Returns null when Telegram attached none, and the message is then an
+     * ordinary text message.
+     */
+    fun mapLinkPreview(
+        preview: TdApi.LinkPreview?,
+        resolvePath: (TdApi.File?) -> String?
+    ): com.foresightlabs.aether.domain.model.LinkPreview? {
+        val card = LinkPreviewSupport.cardOf(preview, resolvePath) ?: return null
+        return com.foresightlabs.aether.domain.model.LinkPreview(
+            url = card.url,
+            title = card.title,
+            description = card.description,
+            siteName = card.siteName,
+            thumbnailUrl = card.thumbnailPath
+        )
+    }
+
     fun minithumbnailBase64(thumbnail: TdApi.Minithumbnail?): String? {
         val data = thumbnail?.data
         if (data == null || data.isEmpty()) return null

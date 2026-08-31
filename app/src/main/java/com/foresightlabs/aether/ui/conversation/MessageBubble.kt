@@ -524,7 +524,7 @@ fun MessageBubble(
                             }
                         }
                         .then(
-                            if (message.type == MessageType.IMAGE) {
+                            if (message.type == MessageType.IMAGE || message.type == MessageType.VIDEO) {
                                 Modifier.padding(4.dp)
                             } else {
                                 Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
@@ -587,6 +587,19 @@ fun MessageBubble(
                                     ImageAttachmentContent(
                                         media = firstMedia,
                                         caption = message.text,
+                                        onMediaClick = onMediaClick,
+                                        isOutgoing = isOutgoing,
+                                        isSelectionActive = isSelectionActive
+                                    )
+                                }
+                            }
+                            MessageType.VIDEO -> {
+                                val firstMedia = message.mediaItems.firstOrNull()
+                                if (firstMedia != null) {
+                                    VideoAttachmentContent(
+                                        media = firstMedia,
+                                        caption = message.text,
+                                        durationSec = message.voiceDurationSec,
                                         onMediaClick = onMediaClick,
                                         isOutgoing = isOutgoing,
                                         isSelectionActive = isSelectionActive
@@ -723,7 +736,7 @@ fun MessageBubble(
                         }
 
                         // Message Metadata (Timestamp, Edited, Read status)
-                        if (message.type != MessageType.IMAGE) {
+                        if (message.type != MessageType.IMAGE && message.type != MessageType.VIDEO) {
                             // The stamp tucks up against the last line rather than
                             // sitting on a row of its own, which is what keeps a
                             // one-word message a one-word bubble.
@@ -1035,6 +1048,7 @@ private fun ImageAttachmentContent(
             // Tapping opens the viewer at ANY stage, downloaded or not; the
             // viewer itself owns driving the download the rest of the way.
             .clickable(enabled = !isSelectionActive) { onMediaClick(media) }
+            .testTag("image_attachment_content")
     ) {
         Box(
             modifier = Modifier
@@ -1108,6 +1122,160 @@ private fun ImageAttachmentContent(
                             strokeWidth = 1.5.dp
                         )
                     }
+                }
+            }
+        }
+
+        if (caption.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = caption,
+                fontFamily = ManropeFontFamily,
+                color = contentColor,
+                fontSize = 15.sp,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+    }
+}
+
+/**
+ * A regular video message's bubble: the same frame geometry as
+ * [ImageAttachmentContent] -- same width, same TDLib-derived aspect ratio, same
+ * loading/download states -- with a restrained play affordance and a duration
+ * pill so it reads as video rather than a photo. [media.url] is always the
+ * thumbnail here, never the playable file; tapping opens the full viewer, which
+ * is what actually plays it, the same way tapping a photo opens the viewer that
+ * actually shows it full size.
+ */
+@Composable
+private fun VideoAttachmentContent(
+    media: MediaItem,
+    caption: String,
+    durationSec: Int,
+    onMediaClick: (MediaItem) -> Unit,
+    isOutgoing: Boolean,
+    isSelectionActive: Boolean = false
+) {
+    val colors = LocalAetherColors.current
+    val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+
+    val boxWidth = 230.dp
+    val aspect = remember(media.width, media.height) {
+        val raw = media.width.toFloat() / media.height.toFloat()
+        if (raw.isFinite() && raw > 0f) raw.coerceIn(0.55f, 1.9f) else 230f / 170f
+    }
+    val boxHeight = remember(aspect) { (boxWidth.value / aspect).dp.coerceIn(140.dp, 320.dp) }
+
+    val previewBitmap = remember(media.previewBase64) {
+        media.previewBase64?.let { encoded ->
+            runCatching {
+                val bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }.getOrNull()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .width(boxWidth)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(enabled = !isSelectionActive) { onMediaClick(media) }
+            .testTag("video_attachment_content")
+    ) {
+        Box(
+            modifier = Modifier
+                .width(boxWidth)
+                .height(boxHeight)
+                .clip(RoundedCornerShape(16.dp))
+                .background(colors.surfaceHighlight)
+        ) {
+            if (media.hasLocalFile) {
+                SubcomposeAsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(media.url)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = caption.ifEmpty { "Video" },
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize(),
+                    loading = { MediaPreviewLayer(previewBitmap) }
+                )
+            } else {
+                MediaPreviewLayer(previewBitmap)
+            }
+
+            // A restrained play affordance -- the one signal that separates this
+            // from a photo at a glance. Shown regardless of thumbnail/download
+            // state: even a missing thumbnail still reads as "video, tap to play."
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x80000000)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            if (durationSec > 0) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(8.dp)
+                        .clip(AetherEmber.Shapes.Pill)
+                        .background(Color(0x80000000))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = formatDuration(durationSec),
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+
+            if (media.downloadFailed) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .padding(6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "Retry download",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            } else if (media.isDownloading || media.isUploading) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.32f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        color = Color.White.copy(alpha = 0.85f),
+                        strokeWidth = 1.5.dp
+                    )
                 }
             }
         }

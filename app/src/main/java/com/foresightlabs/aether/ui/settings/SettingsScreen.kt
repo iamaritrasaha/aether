@@ -169,7 +169,7 @@ fun SettingsScreen(
                         SettingsRowItem(
                             icon = Icons.Default.Palette,
                             title = "Appearance & Atmosphere",
-                            subtitle = "Atmospheric palettes, weather modulation, accents, typography",
+                            subtitle = "Atmospheric palettes, accents, typography",
                             onClick = onNavigateToAppearance,
                             testTag = "settings_appearance_item"
                         )
@@ -238,7 +238,7 @@ fun SettingsScreen(
                         SettingsRowItem(
                             icon = Icons.Default.LocationOn,
                             title = "Approximate Location",
-                            subtitle = if (isLocGranted) "Allowed" else "Not allowed (Used for weather atmosphere)",
+                            subtitle = if (isLocGranted) "Allowed" else "Not allowed (Used when sharing your location in chats)",
                             onClick = { coordinator.openAppSettings(context) }
                         )
                         HorizontalDivider(color = colors.divider, thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp))

@@ -12,8 +12,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import com.foresightlabs.aether.data.preferences.AetherAppearancePreferences
 import com.foresightlabs.aether.data.preferences.AppearanceRepository
-import com.foresightlabs.aether.data.preferences.ManualWeatherLocation
-import com.foresightlabs.aether.data.preferences.WeatherLocationMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -25,7 +23,6 @@ import java.util.Calendar
 enum class AtmosphereMode(val displayName: String, val description: String) {
     STATIC("Static", "Fixed palette of your choice"),
     TIME_BASED("Time of Day", "Automatically shifts from Dawn to Night"),
-    TIME_AND_WEATHER("Time + Weather", "Time palette subtly modulated by weather"),
     MANUAL("Manual", "Select any atmospheric mood directly")
 }
 
@@ -137,19 +134,6 @@ enum class TimeAtmospherePalette(
     }
 }
 
-enum class WeatherCondition(val displayName: String, val icon: String, val description: String) {
-    CLEAR("Clear", "☀️", "Brighter, vivid atmospheric saturation"),
-    PARTLY_CLOUDY("Partly Cloudy", "⛅", "Soft drifting cloud layers with warm light"),
-    CLOUDY("Cloudy", "☁️", "Muted, subtle soft tones"),
-    DRIZZLE("Drizzle", "🌦️", "Gentle translucent mist and light rain"),
-    RAIN("Rain", "🌧️", "Cooler, oceanic cyan-blue tint"),
-    HEAVY_RAIN("Heavy Rain", "🌧️", "Deep atmospheric depth and dense rain"),
-    STORM("Storm", "⚡", "Darker electric indigo shift"),
-    FOG("Fog", "🌫️", "Soft desaturated lilac mist"),
-    SNOW("Snow", "❄️", "Icy crystalline highlights"),
-    UNKNOWN("Unknown", "🌤️", "Atmospheric time-based sky")
-}
-
 enum class AccentColorChoice(
     val id: String,
     val displayName: String,
@@ -187,16 +171,12 @@ class AppThemeState(
     private val repository: AppearanceRepository? = null,
     private val coroutineScope: CoroutineScope? = null
 ) {
-    var atmosphereMode by mutableStateOf(AtmosphereMode.TIME_AND_WEATHER)
+    var atmosphereMode by mutableStateOf(AtmosphereMode.TIME_BASED)
     var manualAtmosphere by mutableStateOf(TimeAtmospherePalette.GOLDEN_HOUR)
-    var weatherReading by mutableStateOf<WeatherReading>(WeatherReading.Idle)
-    var weatherOverride by mutableStateOf<WeatherCondition?>(null)
     var useAtmosphereAccent by mutableStateOf(true)
     var accentChoice by mutableStateOf(AccentColorChoice.MIST_BLUE)
     var messageDensity by mutableStateOf(MessageDensity.COMFORTABLE)
     var fontScale by mutableFloatStateOf(1.0f)
-    var weatherLocationMode by mutableStateOf(WeatherLocationMode.AUTOMATIC)
-    var manualWeatherLocation by mutableStateOf<ManualWeatherLocation?>(null)
 
     init {
         repository?.let { repo ->
@@ -218,8 +198,6 @@ class AppThemeState(
         accentChoice = prefs.accentChoice
         messageDensity = prefs.messageDensity
         fontScale = prefs.fontScale
-        weatherLocationMode = prefs.weatherLocationMode
-        manualWeatherLocation = prefs.manualWeatherLocation
     }
 
     fun setAndPersistAtmosphereMode(mode: AtmosphereMode) {
@@ -264,29 +242,6 @@ class AppThemeState(
         }
     }
 
-    fun setAndPersistWeatherLocationMode(mode: WeatherLocationMode) {
-        weatherLocationMode = mode
-        coroutineScope?.launch {
-            repository?.updateWeatherLocationMode(mode)
-        }
-    }
-
-    fun setAndPersistManualWeatherLocation(location: ManualWeatherLocation) {
-        weatherLocationMode = WeatherLocationMode.MANUAL
-        manualWeatherLocation = location
-        coroutineScope?.launch {
-            repository?.setManualWeatherLocation(location)
-        }
-    }
-
-    fun clearManualWeatherLocation() {
-        weatherLocationMode = WeatherLocationMode.AUTOMATIC
-        manualWeatherLocation = null
-        coroutineScope?.launch {
-            repository?.clearManualWeatherLocation()
-        }
-    }
-
     /**
      * Resolves the current active atmospheric palette based on mode.
      * Prefer [LocalAtmosphere] in composables — this exists for non-composable callers.
@@ -294,93 +249,8 @@ class AppThemeState(
     fun activePalette(): TimeAtmospherePalette {
         return when (atmosphereMode) {
             AtmosphereMode.STATIC, AtmosphereMode.MANUAL -> manualAtmosphere
-            AtmosphereMode.TIME_BASED, AtmosphereMode.TIME_AND_WEATHER -> TimeAtmospherePalette.fromCurrentHour()
+            AtmosphereMode.TIME_BASED -> TimeAtmospherePalette.fromCurrentHour()
         }
-    }
-}
-
-fun modulatePaletteWithWeather(baseColors: List<Color>, weather: WeatherCondition): List<Color> {
-    return baseColors.map { modulateSingleColor(it, weather) }
-}
-
-fun modulateSingleColor(c: Color, weather: WeatherCondition): Color {
-    return when (weather) {
-        WeatherCondition.CLEAR -> {
-            Color(
-                red = (c.red * 1.04f).coerceIn(0f, 1f),
-                green = (c.green * 1.04f).coerceIn(0f, 1f),
-                blue = (c.blue * 1.04f).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-        WeatherCondition.PARTLY_CLOUDY -> {
-            val gray = (c.red * 0.3f + c.green * 0.59f + c.blue * 0.11f)
-            Color(
-                red = (c.red * 0.92f + gray * 0.08f).coerceIn(0f, 1f),
-                green = (c.green * 0.92f + gray * 0.08f).coerceIn(0f, 1f),
-                blue = (c.blue * 0.92f + gray * 0.08f).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-        WeatherCondition.CLOUDY -> {
-            val gray = (c.red * 0.3f + c.green * 0.59f + c.blue * 0.11f)
-            Color(
-                red = (c.red * 0.82f + gray * 0.18f).coerceIn(0f, 1f),
-                green = (c.green * 0.82f + gray * 0.18f).coerceIn(0f, 1f),
-                blue = (c.blue * 0.82f + gray * 0.18f).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-        WeatherCondition.DRIZZLE -> {
-            Color(
-                red = (c.red * 0.86f).coerceIn(0f, 1f),
-                green = (c.green * 0.92f + 0.02f).coerceIn(0f, 1f),
-                blue = (c.blue * 0.96f + 0.05f).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-        WeatherCondition.RAIN -> {
-            Color(
-                red = (c.red * 0.82f).coerceIn(0f, 1f),
-                green = (c.green * 0.90f + 0.03f).coerceIn(0f, 1f),
-                blue = (c.blue * 0.95f + 0.08f).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-        WeatherCondition.HEAVY_RAIN -> {
-            Color(
-                red = (c.red * 0.74f).coerceIn(0f, 1f),
-                green = (c.green * 0.82f + 0.04f).coerceIn(0f, 1f),
-                blue = (c.blue * 0.92f + 0.10f).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-        WeatherCondition.STORM -> {
-            Color(
-                red = (c.red * 0.80f + 0.04f).coerceIn(0f, 1f),
-                green = (c.green * 0.70f).coerceIn(0f, 1f),
-                blue = (c.blue * 0.92f + 0.09f).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-        WeatherCondition.FOG -> {
-            val gray = (c.red * 0.3f + c.green * 0.59f + c.blue * 0.11f)
-            Color(
-                red = (c.red * 0.75f + gray * 0.22f + 0.03f).coerceIn(0f, 1f),
-                green = (c.green * 0.75f + gray * 0.22f).coerceIn(0f, 1f),
-                blue = (c.blue * 0.78f + gray * 0.18f + 0.05f).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-        WeatherCondition.SNOW -> {
-            Color(
-                red = (c.red * 0.88f + 0.08f).coerceIn(0f, 1f),
-                green = (c.green * 0.92f + 0.10f).coerceIn(0f, 1f),
-                blue = (c.blue * 0.95f + 0.14f).coerceIn(0f, 1f),
-                alpha = c.alpha
-            )
-        }
-        WeatherCondition.UNKNOWN -> c
     }
 }
 

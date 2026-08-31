@@ -14,12 +14,14 @@ import androidx.core.app.RemoteInput
 import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
-import androidx.core.graphics.drawable.IconCompat
-import android.graphics.BitmapFactory
 import com.foresightlabs.aether.AetherApplication
 import com.foresightlabs.aether.BuildConfig
 import com.foresightlabs.aether.MainActivity
 import com.foresightlabs.aether.R
+import com.foresightlabs.aether.domain.messaging.ConversationClass
+import com.foresightlabs.aether.domain.messaging.ConversationFacts
+import com.foresightlabs.aether.domain.messaging.TelegramIdentity
+import com.foresightlabs.aether.domain.messaging.classifyConversation
 import org.drinkless.tdlib.TdApi
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
@@ -56,65 +58,84 @@ class AetherNotificationManager(
 
     private fun hashChatId(chatId: Long): String = Integer.toHexString(chatId.hashCode())
 
-    suspend fun isPersonalHumanChat(chatId: Long): Boolean {
+    /**
+     * What a chat is, for notification purposes, via the one canonical rule set in
+     * [classifyConversation].
+     *
+     * Every lookup that fails yields [ConversationClass.UNKNOWN] rather than a
+     * guess, and UNKNOWN is not deliverable -- so a chat or user TDLib could not
+     * resolve still produces no notification, exactly as before.
+     */
+    suspend fun classifyChat(chatId: Long): ConversationClass {
         val chat = getChat(chatId)
         if (chat == null) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=CHAT_NOT_FOUND")
-            return false
+            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} UNKNOWN reason=CHAT_NOT_FOUND")
+            return ConversationClass.UNKNOWN
         }
-        val targetUserId = when (val type = chat.type) {
+        val counterpartUserId = when (val type = chat.type) {
             is TdApi.ChatTypePrivate -> type.userId
             is TdApi.ChatTypeSecret -> type.userId
-            is TdApi.ChatTypeBasicGroup -> {
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=BASIC_GROUP")
-                return false
-            }
-            is TdApi.ChatTypeSupergroup -> {
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=SUPERGROUP_OR_CHANNEL")
-                return false
-            }
-            else -> {
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=UNKNOWN_CHAT_TYPE")
-                return false
-            }
+            else -> null
         }
-        if (targetUserId == 0L || targetUserId == 777000L) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=TELEGRAM_SERVICE_CHAT")
-            return false
+        if (counterpartUserId == null) {
+            // Groups, supergroups and channels: secondary content by policy, and
+            // no user lookup is meaningful for them.
+            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SECONDARY reason=NOT_ONE_TO_ONE")
+            return ConversationClass.SECONDARY_TELEGRAM_CONTENT
+        }
+        // Checked before any user lookup: TDLib reports Telegram's service account
+        // as a bot, so resolving the user first and classifying on that flag is
+        // what used to hide login codes.
+        if (counterpartUserId == TelegramIdentity.SERVICE_NOTIFICATIONS_USER_ID) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} TELEGRAM_SERVICE")
+            return ConversationClass.TELEGRAM_SERVICE
+        }
+        if (counterpartUserId == 0L) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} UNKNOWN reason=NO_COUNTERPART_ID")
+            return ConversationClass.UNKNOWN
         }
         val myId = getMyUserId()
-        if (myId != 0L && targetUserId == myId) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=SAVED_MESSAGES")
-            return false
+        if (myId != 0L && counterpartUserId == myId) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SECONDARY reason=SAVED_MESSAGES")
+            return ConversationClass.SECONDARY_TELEGRAM_CONTENT
         }
-        val user = getUser(targetUserId)
+        val user = getUser(counterpartUserId)
         if (user == null) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=USER_NOT_FOUND")
-            return false
+            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} UNKNOWN reason=USER_NOT_FOUND")
+            return ConversationClass.UNKNOWN
         }
-        return when (user.type) {
-            is TdApi.UserTypeRegular -> {
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} PERSONAL reason=REGULAR_HUMAN_1_TO_1")
-                true
-            }
-            is TdApi.UserTypeBot -> {
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=BOT_USER")
-                false
-            }
-            is TdApi.UserTypeDeleted -> {
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=DELETED_USER")
-                false
-            }
-            is TdApi.UserTypeUnknown -> {
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=UNKNOWN_USER")
-                false
-            }
-            else -> {
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} SUPPRESSED reason=UNSUPPORTED_USER_TYPE")
-                false
-            }
+        val userType = user.type
+        if (userType !is TdApi.UserTypeRegular && userType !is TdApi.UserTypeBot &&
+            userType !is TdApi.UserTypeDeleted
+        ) {
+            // UserTypeUnknown, or a type this build has never been taught about.
+            if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} UNKNOWN reason=UNSUPPORTED_USER_TYPE")
+            return ConversationClass.UNKNOWN
         }
+        val result = classifyConversation(
+            ConversationFacts(
+                isOneToOne = true,
+                counterpartUserId = counterpartUserId,
+                isBot = userType is TdApi.UserTypeBot,
+                isDeleted = userType is TdApi.UserTypeDeleted,
+                isCounterpartKnown = true
+            )
+        )
+        if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFICATION_ELIGIBILITY chatHash=${hashChatId(chatId)} $result")
+        return result
     }
+
+    /**
+     * Whether this chat is a 1:1 conversation with a real person.
+     *
+     * Telegram's service account is deliberately not one -- it is not a person --
+     * but it is still delivered; see [isDeliverableChat].
+     */
+    suspend fun isPersonalHumanChat(chatId: Long): Boolean =
+        classifyChat(chatId) == ConversationClass.PERSONAL_HUMAN
+
+    /** Whether Aether posts an Android notification for this chat at all. */
+    suspend fun isDeliverableChat(chatId: Long): Boolean = classifyChat(chatId).isDeliverable
 
     suspend fun onUpdateNotificationGroup(update: TdApi.UpdateNotificationGroup) {
         val groupId = update.notificationGroupId
@@ -135,9 +156,9 @@ class AetherNotificationManager(
         )
 
         // Aether product policy: Android notifications are personal 1:1 human conversations only
-        if (!isPersonalHumanChat(chatId)) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_SUPPRESSED reason=NON_PERSONAL_CHAT chatHash=${hashChatId(chatId)} groupId=$groupId")
-            cancelNotification(chatId, groupId, "NON_PERSONAL_CHAT")
+        if (!isDeliverableChat(chatId)) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_SUPPRESSED reason=NOT_DELIVERABLE_CONVERSATION chatHash=${hashChatId(chatId)} groupId=$groupId")
+            cancelNotification(chatId, groupId, "NOT_DELIVERABLE_CONVERSATION")
             activeGroups.remove(groupId)
             updateSummaryNotification()
             return
@@ -195,9 +216,9 @@ class AetherNotificationManager(
         }
         val group = activeGroups[groupId] ?: return
 
-        if (!isPersonalHumanChat(group.chatId)) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_SUPPRESSED reason=NON_PERSONAL_CHAT chatHash=${hashChatId(group.chatId)} groupId=$groupId")
-            cancelNotification(group.chatId, groupId, "NON_PERSONAL_CHAT")
+        if (!isDeliverableChat(group.chatId)) {
+            if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_SUPPRESSED reason=NOT_DELIVERABLE_CONVERSATION chatHash=${hashChatId(group.chatId)} groupId=$groupId")
+            cancelNotification(group.chatId, groupId, "NOT_DELIVERABLE_CONVERSATION")
             activeGroups.remove(groupId)
             updateSummaryNotification()
             return
@@ -241,9 +262,9 @@ class AetherNotificationManager(
             val groupId = activeGroup.id
             val chatId = activeGroup.chatId
 
-            if (!isPersonalHumanChat(chatId)) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_SUPPRESSED reason=NON_PERSONAL_CHAT chatHash=${hashChatId(chatId)} groupId=$groupId")
-                cancelNotification(chatId, groupId, "NON_PERSONAL_CHAT")
+            if (!isDeliverableChat(chatId)) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "ANDROID_NOTIFICATION_SUPPRESSED reason=NOT_DELIVERABLE_CONVERSATION chatHash=${hashChatId(chatId)} groupId=$groupId")
+                cancelNotification(chatId, groupId, "NOT_DELIVERABLE_CONVERSATION")
                 activeGroups.remove(groupId)
                 continue
             }
@@ -380,6 +401,10 @@ class AetherNotificationManager(
         }
 
         val chatId = group.chatId
+        val conversationClass = classifyChat(chatId)
+        // Telegram's own account: delivered, but not treated as a conversation
+        // with a person. It gets no reply affordance and no lock-screen preview.
+        val isTelegramService = conversationClass == ConversationClass.TELEGRAM_SERVICE
         val chat = getChat(chatId)
         val chatTitle = chat?.title.orEmpty().ifBlank { "Telegram" }
         val isGroup = chat?.type is TdApi.ChatTypeBasicGroup || chat?.type is TdApi.ChatTypeSupergroup
@@ -400,20 +425,28 @@ class AetherNotificationManager(
             .build()
 
         val privateUser = (chat?.type as? TdApi.ChatTypePrivate)?.userId?.let { getUser(it) }
+        val otherDisplayName = privateUser?.let { "${it.firstName} ${it.lastName}".trim() }
+            ?.ifBlank { chatTitle } ?: chatTitle
         val otherPerson = Person.Builder()
-            .setName(
-                privateUser?.let { "${it.firstName} ${it.lastName}".trim() }
-                    ?.ifBlank { chatTitle } ?: chatTitle
-            )
+            .setName(otherDisplayName)
             .setKey("private_user_${privateUser?.id ?: 0L}")
-            .apply {
-                privateUser?.profilePhoto?.small?.local?.path
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { path -> BitmapFactory.decodeFile(path)?.let { setIcon(IconCompat.createWithBitmap(it)) } }
-            }
+            .setIcon(
+                NotificationAvatars.circularIcon(
+                    photoPath = privateUser?.profilePhoto?.small?.local?.path,
+                    displayName = otherDisplayName,
+                    colorSeedId = privateUser?.id ?: 0L
+                )
+            )
             .build()
-        val shortcutId = privateConversationShortcutId(chatId)
-        registerConversationShortcut(shortcutId, chatTitle, otherPerson, chat)
+        // A long-lived conversation shortcut is what promotes a notification into
+        // Android's Conversation section, and it is meant for someone you talk to.
+        // Telegram's service account is not that: it cannot be replied to, so
+        // publishing a launcher shortcut for it would offer a conversation that
+        // does not exist. Personal chats get one; service does not.
+        val shortcutId = if (isTelegramService) null else privateConversationShortcutId(chatId)
+        if (shortcutId != null) {
+            registerConversationShortcut(shortcutId, chatTitle, otherPerson, chat)
+        }
 
         val messagingStyle = NotificationCompat.MessagingStyle(selfPerson)
             .setConversationTitle(if (isGroup) chatTitle else null)
@@ -518,12 +551,27 @@ class AetherNotificationManager(
         val builder = NotificationCompat.Builder(context, AetherApplication.CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_stat_aether)
             .setStyle(messagingStyle)
-            .setShortcutId(shortcutId)
-            .setLocusId(LocusIdCompat(shortcutId))
             .setContentIntent(tapPendingIntent)
             .setDeleteIntent(deletePendingIntent)
-            .addAction(replyAction)
-            .addAction(readAction)
+            .apply {
+                if (shortcutId != null) {
+                    setShortcutId(shortcutId)
+                    setLocusId(LocusIdCompat(shortcutId))
+                }
+                // Direct Reply is offered only where a reply is actually valid.
+                // Replying to Telegram's service account does nothing useful, so
+                // the affordance is absent rather than present and inert.
+                if (!isTelegramService) addAction(replyAction)
+                addAction(readAction)
+                if (isTelegramService) {
+                    // Login codes and security notices must not be readable from a
+                    // locked device. The full notification stays available once the
+                    // device is unlocked; the public version the lock screen shows
+                    // instead says only that something arrived.
+                    setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                    setPublicVersion(buildServicePublicVersion(tapPendingIntent))
+                }
+            }
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(if (isMuted || isAllSilent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .setSilent(isMuted || isAllSilent)
@@ -600,6 +648,25 @@ class AetherNotificationManager(
         notificationManager.cancel(tag, groupId)
     }
 
+    /**
+     * The lock-screen stand-in for a Telegram service notification.
+     *
+     * Carries no message text at all -- deliberately not a truncated or masked
+     * version of it, because a login code is short enough that any partial
+     * rendering risks showing the whole thing. Anyone looking at a locked screen
+     * learns that Telegram sent a security message and nothing more.
+     */
+    private fun buildServicePublicVersion(tapPendingIntent: PendingIntent): android.app.Notification =
+        NotificationCompat.Builder(context, AetherApplication.CHANNEL_MESSAGES)
+            .setSmallIcon(R.drawable.ic_stat_aether)
+            .setContentTitle("Telegram")
+            .setContentText(PUBLIC_SERVICE_MESSAGE_TEXT)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setContentIntent(tapPendingIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .build()
+
     private fun notificationTag(chatId: Long): String = "aether_chat_$chatId"
 
     private fun useLegacyGrouping(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.R
@@ -647,5 +714,8 @@ class AetherNotificationManager(
 
         const val KEY_TEXT_REPLY = "key_text_reply"
         private const val MAX_PRESENTED_HISTORY = 4
+
+        /** Generic lock-screen wording for Telegram service messages. Never a code. */
+        const val PUBLIC_SERVICE_MESSAGE_TEXT = "Telegram security message"
     }
 }

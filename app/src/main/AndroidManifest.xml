@@ -24,15 +24,46 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
+        <!--
+          singleTask so a share from another application reaches the Aether that
+          is already running, through onNewIntent, instead of starting a second
+          copy of the app inside the sending application's task. Notification
+          taps already arrive with NEW_TASK|CLEAR_TOP and are unaffected.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.MyApplication">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+              Android Sharesheet. Aether receives what another application shares
+              and carries it to recipient selection; nothing is sent without the
+              person choosing a conversation and pressing send. No permission is
+              needed for any of this: the sending application grants read access
+              to the URIs it hands over, for as long as this Intent lives.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <!--
+                  One wildcard rather than a list: Telegram sends text, photos,
+                  videos and arbitrary files, so enumerating types would only
+                  leave working ones out. What each share actually is comes from
+                  the content resolver at runtime, not from this declaration.
+                -->
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
 

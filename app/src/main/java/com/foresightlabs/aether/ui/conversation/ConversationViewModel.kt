@@ -12,7 +12,10 @@ import com.foresightlabs.aether.data.telegram.TelegramClient
 import com.foresightlabs.aether.data.telegram.TelegramMappers
 import com.foresightlabs.aether.domain.text.AetherEntity
 import com.foresightlabs.aether.domain.text.AetherText
+import com.foresightlabs.aether.data.telegram.LinkPreviewSupport
 import com.foresightlabs.aether.domain.text.ComposerFormatting
+import com.foresightlabs.aether.domain.text.ComposerLinkPreviewCoordinator
+import com.foresightlabs.aether.domain.text.ComposerLinkPreviewState
 import com.foresightlabs.aether.domain.text.ReplyQuote
 import com.foresightlabs.aether.domain.messages.MessageCapabilities
 import com.foresightlabs.aether.domain.messages.MessageMotionEvent
@@ -163,6 +166,17 @@ class ConversationViewModel(
     private var pendingDraft: String = ""
     private var searchJob: Job? = null
     private var activeAction: TelegramClient.OutgoingChatAction? = null
+    /**
+     * Telegram's preview for the link in the draft, if there is one.
+     *
+     * Held here rather than in composition so that recomposition -- of which
+     * typing produces a great deal -- can never restart a request.
+     */
+    private val linkPreviews = ComposerLinkPreviewCoordinator(viewModelScope) { draft ->
+        telegram.linkPreview(draft)
+    }
+
+    val linkPreview: StateFlow<ComposerLinkPreviewState> = linkPreviews.state
 
     init {
         viewModelScope.launch {
@@ -364,6 +378,7 @@ class ConversationViewModel(
                 entities = ComposerFormatting.sanitise(formatting, trimmedEnd.length)
             )
         )
+        val previewOptions = LinkPreviewSupport.optionsFor(linkPreviews.intentFor(trimmedEnd))
         sendInFlight = true
         viewModelScope.launch {
             val result = telegram.sendText(
@@ -373,7 +388,8 @@ class ConversationViewModel(
                 entities = entities,
                 forumTopicId = forumTopicId,
                 options = telegram.sendOptionsOf(options),
-                quote = quote?.takeIf { !it.isEmpty }
+                quote = quote?.takeIf { !it.isEmpty },
+                linkPreviewOptions = previewOptions
             )
             sendInFlight = false
             if (result.isSuccess) clearPendingDraft()
@@ -393,16 +409,36 @@ class ConversationViewModel(
         telegram.retryMediaDownload(fileId)
     }
 
-    fun sendPhoto(photoPath: String, caption: String = "", replyToId: String? = null) {
+    fun sendPhoto(photoPath: String, caption: String = "", replyToId: String? = null, viewOnce: Boolean = false) {
         viewModelScope.launch {
-            val result = telegram.sendPhoto(activeChatId, photoPath, caption, replyToId?.toLongOrNull(), forumTopicId)
+            val result = telegram.sendPhoto(activeChatId, photoPath, caption, replyToId?.toLongOrNull(), forumTopicId, viewOnce)
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
 
-    fun sendVideo(videoPath: String, caption: String = "", duration: Int = 0, replyToId: String? = null) {
+    /**
+     * Several photos as one Telegram album.
+     *
+     * The album path TelegramClient already owns; nothing about a share needed a
+     * second one. A single photo goes through the ordinary photo send inside it.
+     */
+    fun sendPhotoAlbum(photoPaths: List<String>, caption: String = "", replyToId: String? = null) {
+        if (photoPaths.isEmpty()) return
         viewModelScope.launch {
-            val result = telegram.sendVideo(activeChatId, videoPath, caption, duration, 0, 0, replyToId?.toLongOrNull(), forumTopicId)
+            val result = telegram.sendPhotoAlbum(
+                activeChatId,
+                photoPaths,
+                caption,
+                replyToId?.toLongOrNull(),
+                forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    fun sendVideo(videoPath: String, caption: String = "", duration: Int = 0, replyToId: String? = null, viewOnce: Boolean = false) {
+        viewModelScope.launch {
+            val result = telegram.sendVideo(activeChatId, videoPath, caption, duration, 0, 0, replyToId?.toLongOrNull(), forumTopicId, viewOnce)
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
@@ -535,9 +571,10 @@ class ConversationViewModel(
     }
 
     fun editMessage(message: Message, newText: String) {
+        val previewOptions = LinkPreviewSupport.optionsFor(linkPreviews.intentFor(newText))
         viewModelScope.launch {
             val messageId = message.id.toLongOrNull() ?: return@launch
-            val result = telegram.editMessage(activeChatId, messageId, newText)
+            val result = telegram.editMessage(activeChatId, messageId, newText, previewOptions)
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
@@ -585,6 +622,27 @@ class ConversationViewModel(
             }
             result.exceptionOrNull()?.let {
                 _sendError.value = if (message.isPinned) "Couldn't unpin message" else "Couldn't pin message"
+            }
+        }
+    }
+
+    /**
+     * Pins or unpins this whole conversation in the chat list -- the same
+     * chat-list operation Home's selection dock performs, through the same
+     * [TelegramClient.setChatPinned]. Distinct from [pinMessage]/[unpinMessage],
+     * which pin a message inside the conversation.
+     *
+     * [header] is fed by the same `telegram.chatList` collector Home reads, so
+     * once Telegram reports the change this toggles against, this screen's own
+     * Pin/Unpin control updates from that one authoritative state -- nothing
+     * here is set optimistically.
+     */
+    fun toggleChatPinned() {
+        val chat = header.value ?: return
+        viewModelScope.launch {
+            val result = telegram.setChatPinned(activeChatId, !chat.isPinned, chat.isArchived)
+            result.exceptionOrNull()?.let {
+                _sendError.value = if (chat.isPinned) "Couldn't unpin chat" else "Couldn't pin chat"
             }
         }
     }
@@ -766,11 +824,34 @@ class ConversationViewModel(
         // Held so leaving the conversation can store it as a real Telegram draft,
         // which then follows the account to its other clients.
         pendingDraft = text
+        updateLinkPreview(text)
         if (text.isBlank()) {
             clearChatAction()
             return
         }
         reportActivity(TelegramClient.OutgoingChatAction.TYPING)
+    }
+
+    /**
+     * Asks Telegram about the draft's link, or stops showing one.
+     *
+     * The decision is [ComposerLinkPreviewPolicy]'s; this only carries it out.
+     * A request is debounced and the previous one cancelled, so typing a URL out
+     * character by character costs one round trip rather than thirty, and an
+     * answer for a link the draft has moved off is discarded rather than shown.
+     */
+    private fun updateLinkPreview(text: String) {
+        linkPreviews.onDraftChanged(text)
+    }
+
+    /**
+     * Closes the preview without touching the draft.
+     *
+     * The link stays where the user typed it; only the preview goes, and the
+     * message then sends with previews disabled for that link.
+     */
+    fun dismissLinkPreview() {
+        linkPreviews.dismiss()
     }
 
     /** Reports that the user has started recording a voice message. */
@@ -819,6 +900,7 @@ class ConversationViewModel(
     /** Records that the composer's contents were sent, so no draft is left behind. */
     private fun clearPendingDraft() {
         pendingDraft = ""
+        linkPreviews.reset()
     }
 
     fun markVisible(ids: List<String>) {

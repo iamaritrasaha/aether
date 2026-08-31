@@ -163,6 +163,7 @@ object MessageActionPolicy {
 
     private fun isSaveableMedia(message: Message): Boolean = when (message.type) {
         MessageType.IMAGE,
+        MessageType.VIDEO,
         MessageType.ALBUM,
         MessageType.FILE,
         MessageType.VOICE,

@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import com.foresightlabs.aether.domain.messages.ConversationMotion
+import com.foresightlabs.aether.domain.sharing.SharedAttachmentKind
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.aetherDuration
 
@@ -42,13 +43,54 @@ enum class CurtainState {
     EMOJI,
     STICKERS,
     GIFS,
-    FORWARDING;
+    FORWARDING,
+    /** Reviewing one picked photo/video -- caption-free preview plus the View once toggle -- before it sends. */
+    MEDIA_PREVIEW,
+    /** Reviewing what another application shared into this conversation, before it sends. */
+    SHARE_PREVIEW;
 
     /** True for every state that exposes more Curtain than the resting composer. */
     val isExpanded: Boolean get() = this != COMPOSER
 
     val isPicker: Boolean get() = this == EMOJI || this == STICKERS || this == GIFS
 }
+
+/**
+ * One photo or video picked from the gallery or camera, held while the user
+ * reviews it in [CurtainState.MEDIA_PREVIEW] and decides whether to send it
+ * as View once.
+ */
+/**
+ * What another application shared, once its bytes are in Aether's hands and it
+ * is waiting to be reviewed in [CurtainState.SHARE_PREVIEW].
+ *
+ * Separate from [PendingMedia] on purpose. View once is a decision people make
+ * about a photo they picked themselves, in private chats, on a single item; a
+ * share carries no such intent and may carry several files at once, so it is
+ * never given that flag by default -- there is no field here to set.
+ */
+@Immutable
+data class PendingShare(
+    val attachments: List<SharedAttachmentFile>,
+    val caption: String = ""
+) {
+    val isEmpty: Boolean get() = attachments.isEmpty()
+}
+
+/** One shared file on disk, ready for the ordinary Telegram send path. */
+@Immutable
+data class SharedAttachmentFile(
+    val path: String,
+    val kind: SharedAttachmentKind,
+    val name: String? = null
+)
+
+@Immutable
+data class PendingMedia(
+    val path: String,
+    val isVideo: Boolean,
+    val viewOnce: Boolean = false
+)
 
 /**
  * How much Curtain is showing.
@@ -124,8 +166,10 @@ fun AetherConversationCurtain(
                 // Outside animateContentSize, so this reports the height actually
                 // exposed this frame rather than the settled target.
                 .onSizeChanged { size ->
-                    if (state == CurtainState.COMPOSER &&
-                        (!settling || restingPx == 0 || size.height <= restingPx)
+                    if (state == CurtainState.COMPOSER && !settling) {
+                        restingPx = size.height
+                    } else if (state == CurtainState.COMPOSER && settling &&
+                        (restingPx == 0 || size.height <= restingPx)
                     ) {
                         restingPx = size.height
                         settling = false

@@ -28,10 +28,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.IOException
 
-import androidx.datastore.preferences.core.doublePreferencesKey
-import com.foresightlabs.aether.data.preferences.ManualWeatherLocation
-import com.foresightlabs.aether.data.preferences.WeatherLocationMode
-
 private val Context.appearanceDataStore: DataStore<Preferences> by preferencesDataStore(name = "aether_appearance_prefs")
 
 /**
@@ -49,14 +45,6 @@ class AppearanceRepository(
         val ACCENT_CHOICE = stringPreferencesKey("accent_choice")
         val MESSAGE_DENSITY = stringPreferencesKey("message_density")
         val FONT_SCALE = floatPreferencesKey("font_scale")
-
-        val WEATHER_LOCATION_MODE = stringPreferencesKey("weather_location_mode")
-        val WEATHER_MANUAL_NAME = stringPreferencesKey("weather_manual_name")
-        val WEATHER_MANUAL_ADMIN1 = stringPreferencesKey("weather_manual_admin1")
-        val WEATHER_MANUAL_COUNTRY = stringPreferencesKey("weather_manual_country")
-        val WEATHER_MANUAL_LAT = doublePreferencesKey("weather_manual_lat")
-        val WEATHER_MANUAL_LON = doublePreferencesKey("weather_manual_lon")
-        val WEATHER_MANUAL_TIMEZONE = stringPreferencesKey("weather_manual_timezone")
 
         fun chatKey(chatId: Long) = stringPreferencesKey("chat_appearance_$chatId")
     }
@@ -79,7 +67,7 @@ class AppearanceRepository(
     private fun mapPreferences(prefs: Preferences): AetherAppearancePreferences {
         val atmosphereMode = runCatching {
             prefs[PreferencesKeys.ATMOSPHERE_MODE]?.let { AtmosphereMode.valueOf(it) }
-        }.getOrNull() ?: AtmosphereMode.TIME_AND_WEATHER
+        }.getOrNull() ?: AtmosphereMode.TIME_BASED
 
         val manualAtmosphere = runCatching {
             prefs[PreferencesKeys.MANUAL_ATMOSPHERE]?.let { TimeAtmospherePalette.valueOf(it) }
@@ -108,33 +96,13 @@ class AppearanceRepository(
 
         val fontScale = prefs[PreferencesKeys.FONT_SCALE] ?: 1.0f
 
-        val weatherLocationMode = runCatching {
-            prefs[PreferencesKeys.WEATHER_LOCATION_MODE]?.let { WeatherLocationMode.valueOf(it) }
-        }.getOrNull() ?: WeatherLocationMode.AUTOMATIC
-
-        val manualName = prefs[PreferencesKeys.WEATHER_MANUAL_NAME]
-        val manualLat = prefs[PreferencesKeys.WEATHER_MANUAL_LAT]
-        val manualLon = prefs[PreferencesKeys.WEATHER_MANUAL_LON]
-        val manualLocation = if (!manualName.isNullOrBlank() && manualLat != null && manualLon != null) {
-            ManualWeatherLocation(
-                name = manualName,
-                admin1 = prefs[PreferencesKeys.WEATHER_MANUAL_ADMIN1],
-                country = prefs[PreferencesKeys.WEATHER_MANUAL_COUNTRY],
-                latitude = manualLat,
-                longitude = manualLon,
-                timezone = prefs[PreferencesKeys.WEATHER_MANUAL_TIMEZONE]
-            )
-        } else null
-
         return AetherAppearancePreferences(
             atmosphereMode = atmosphereMode,
             manualAtmosphere = manualAtmosphere,
             useAtmosphereAccent = resolvedUseAtmosphereAccent,
             accentChoice = accentChoice,
             messageDensity = messageDensity,
-            fontScale = fontScale,
-            weatherLocationMode = weatherLocationMode,
-            manualWeatherLocation = manualLocation
+            fontScale = fontScale
         )
     }
 
@@ -174,48 +142,6 @@ class AppearanceRepository(
         }
     }
 
-    suspend fun updateWeatherLocationMode(mode: WeatherLocationMode) {
-        dataStore.edit { prefs ->
-            prefs[PreferencesKeys.WEATHER_LOCATION_MODE] = mode.name
-        }
-    }
-
-    suspend fun setManualWeatherLocation(location: ManualWeatherLocation) {
-        dataStore.edit { prefs ->
-            prefs[PreferencesKeys.WEATHER_LOCATION_MODE] = WeatherLocationMode.MANUAL.name
-            prefs[PreferencesKeys.WEATHER_MANUAL_NAME] = location.name
-            if (location.admin1 != null) {
-                prefs[PreferencesKeys.WEATHER_MANUAL_ADMIN1] = location.admin1
-            } else {
-                prefs.remove(PreferencesKeys.WEATHER_MANUAL_ADMIN1)
-            }
-            if (location.country != null) {
-                prefs[PreferencesKeys.WEATHER_MANUAL_COUNTRY] = location.country
-            } else {
-                prefs.remove(PreferencesKeys.WEATHER_MANUAL_COUNTRY)
-            }
-            prefs[PreferencesKeys.WEATHER_MANUAL_LAT] = location.latitude
-            prefs[PreferencesKeys.WEATHER_MANUAL_LON] = location.longitude
-            if (location.timezone != null) {
-                prefs[PreferencesKeys.WEATHER_MANUAL_TIMEZONE] = location.timezone
-            } else {
-                prefs.remove(PreferencesKeys.WEATHER_MANUAL_TIMEZONE)
-            }
-        }
-    }
-
-    suspend fun clearManualWeatherLocation() {
-        dataStore.edit { prefs ->
-            prefs[PreferencesKeys.WEATHER_LOCATION_MODE] = WeatherLocationMode.AUTOMATIC.name
-            prefs.remove(PreferencesKeys.WEATHER_MANUAL_NAME)
-            prefs.remove(PreferencesKeys.WEATHER_MANUAL_ADMIN1)
-            prefs.remove(PreferencesKeys.WEATHER_MANUAL_COUNTRY)
-            prefs.remove(PreferencesKeys.WEATHER_MANUAL_LAT)
-            prefs.remove(PreferencesKeys.WEATHER_MANUAL_LON)
-            prefs.remove(PreferencesKeys.WEATHER_MANUAL_TIMEZONE)
-        }
-    }
-
     suspend fun updateGlobalPreferences(transform: (AetherAppearancePreferences) -> AetherAppearancePreferences) {
         val current = globalPreferences.value
         val updated = transform(current)
@@ -226,28 +152,6 @@ class AppearanceRepository(
             prefs[PreferencesKeys.ACCENT_CHOICE] = updated.accentChoice.name
             prefs[PreferencesKeys.MESSAGE_DENSITY] = updated.messageDensity.name
             prefs[PreferencesKeys.FONT_SCALE] = updated.fontScale
-            prefs[PreferencesKeys.WEATHER_LOCATION_MODE] = updated.weatherLocationMode.name
-            if (updated.manualWeatherLocation != null) {
-                prefs[PreferencesKeys.WEATHER_MANUAL_NAME] = updated.manualWeatherLocation.name
-                if (updated.manualWeatherLocation.admin1 != null) {
-                    prefs[PreferencesKeys.WEATHER_MANUAL_ADMIN1] = updated.manualWeatherLocation.admin1
-                }
-                if (updated.manualWeatherLocation.country != null) {
-                    prefs[PreferencesKeys.WEATHER_MANUAL_COUNTRY] = updated.manualWeatherLocation.country
-                }
-                prefs[PreferencesKeys.WEATHER_MANUAL_LAT] = updated.manualWeatherLocation.latitude
-                prefs[PreferencesKeys.WEATHER_MANUAL_LON] = updated.manualWeatherLocation.longitude
-                if (updated.manualWeatherLocation.timezone != null) {
-                    prefs[PreferencesKeys.WEATHER_MANUAL_TIMEZONE] = updated.manualWeatherLocation.timezone
-                }
-            } else {
-                prefs.remove(PreferencesKeys.WEATHER_MANUAL_NAME)
-                prefs.remove(PreferencesKeys.WEATHER_MANUAL_ADMIN1)
-                prefs.remove(PreferencesKeys.WEATHER_MANUAL_COUNTRY)
-                prefs.remove(PreferencesKeys.WEATHER_MANUAL_LAT)
-                prefs.remove(PreferencesKeys.WEATHER_MANUAL_LON)
-                prefs.remove(PreferencesKeys.WEATHER_MANUAL_TIMEZONE)
-            }
         }
     }
 
@@ -281,7 +185,7 @@ class AppearanceRepository(
         } else {
             when (global.atmosphereMode) {
                 AtmosphereMode.STATIC, AtmosphereMode.MANUAL -> global.manualAtmosphere
-                AtmosphereMode.TIME_BASED, AtmosphereMode.TIME_AND_WEATHER -> TimeAtmospherePalette.fromCurrentHour()
+                AtmosphereMode.TIME_BASED -> TimeAtmospherePalette.fromCurrentHour()
             }
         }
         val bubbleStyle = if (isCustom) override.bubbleStyle else ChatBubbleStyle.ATMOSPHERE

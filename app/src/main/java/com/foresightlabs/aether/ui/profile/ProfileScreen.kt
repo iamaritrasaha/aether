@@ -152,7 +152,6 @@ fun ProfileScreen(
     var voiceNextOffset by remember(chat.id) { mutableLongStateOf(0L) }
 
     var isLoadingMedia by remember(chat.id) { mutableStateOf(false) }
-    var isMediaLoaded by remember(chat.id) { mutableStateOf(false) }
 
     LaunchedEffect(chatIdLong) {
         if (chatIdLong != 0L) {
@@ -161,23 +160,16 @@ fun ProfileScreen(
             mediaItems = page.messages.flatMap { it.mediaItems }.distinctBy { it.id.ifBlank { it.fileId.toString() } }
             mediaNextOffset = page.nextFromMessageId
             isLoadingMedia = false
-            isMediaLoaded = true
         }
     }
 
     LaunchedEffect(selectedTabIndex, chatIdLong) {
         if (chatIdLong == 0L) return@LaunchedEffect
         when (selectedTabIndex) {
-            0 -> {
-                if (!isMediaLoaded) {
-                    isLoadingMedia = true
-                    val page = onLoadSharedMedia(chatIdLong, TelegramClient.SharedMediaCategory.MEDIA, 0L)
-                    mediaItems = page.messages.flatMap { it.mediaItems }.distinctBy { it.id.ifBlank { it.fileId.toString() } }
-                    mediaNextOffset = page.nextFromMessageId
-                    isLoadingMedia = false
-                    isMediaLoaded = true
-                }
-            }
+            // Tab 0 (Media) is deliberately absent: the LaunchedEffect above already
+            // owns loading it on entry. Duplicating it here fired two identical
+            // SearchChatMessages requests on every profile open -- both effects start
+            // at first composition, so neither guard stopped the other.
             1 -> {
                 if (fileItems.isEmpty() && filesNextOffset == 0L) {
                     val page = onLoadSharedMedia(chatIdLong, TelegramClient.SharedMediaCategory.FILES, 0L)

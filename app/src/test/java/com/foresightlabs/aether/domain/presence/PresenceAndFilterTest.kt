@@ -106,7 +106,7 @@ class PresenceAndFilterTest {
     // --- Active Now derivation ------------------------------------------------
 
     @Test
-    fun activeNowShowsOnlyGenuinelyOnlinePeople() {
+    fun activeNowShowsOnlinePeopleFirstThenBackfillsWithTheRestOfYourContacts() {
         val state = ActiveNow.from(
             listOf(
                 chat("1", ChatType.DIRECT, user("1", Presence.ONLINE)),
@@ -115,7 +115,9 @@ class PresenceAndFilterTest {
             )
         )
         assertTrue(state is ActiveNowState.Online)
-        assertEquals(listOf("1"), state.people.map { it.id })
+        // "1" is live; "2" and "3" aren't online or recently-active, but they're
+        // still contacts, so they backfill the row rather than being dropped.
+        assertEquals(listOf("1", "2", "3"), state.people.map { it.id })
         assertEquals("Active now", state.label)
     }
 
@@ -152,9 +154,21 @@ class PresenceAndFilterTest {
     }
 
     @Test
-    fun activeNowIsEmptyWhenNothingIsKnown() {
+    fun activeNowFallsBackToMostUsedWhenNobodyIsLive() {
         val state = ActiveNow.from(
             listOf(chat("1", ChatType.DIRECT, user("1", Presence.UNKNOWN)))
+        )
+        // Nobody is online or recently active, but this contact still exists --
+        // the row backfills with them under "Your people" rather than sitting empty.
+        assertTrue(state is ActiveNowState.MostUsed)
+        assertEquals(listOf("1"), state.people.map { it.id })
+        assertEquals("Your people", state.label)
+    }
+
+    @Test
+    fun activeNowIsEmptyWhenNothingIsKnown() {
+        val state = ActiveNow.from(
+            listOf(chat("1", ChatType.DIRECT, user("1", Presence.UNKNOWN, isContact = false)))
         )
         assertEquals(ActiveNowState.Empty, state)
         assertTrue(state.people.isEmpty())
@@ -169,6 +183,20 @@ class PresenceAndFilterTest {
             )
         )
         assertEquals(listOf("friend", "stranger"), state.people.map { it.id })
+    }
+
+    @Test
+    fun mostUsedBackfillRespectsTheOverallLimitAlongsideLivePeople() {
+        val live = chat("live", ChatType.DIRECT, user("live", Presence.ONLINE), order = 1000L)
+        val contacts = (1..20).map {
+            chat("c$it", ChatType.DIRECT, user("c$it", Presence.OFFLINE), order = it.toLong())
+        }
+        val state = ActiveNow.from(listOf(live) + contacts, limit = 5)
+
+        assertTrue(state is ActiveNowState.Online)
+        assertEquals(5, state.people.size)
+        // The live person is never bumped by backfill.
+        assertEquals("live", state.people.first().id)
     }
 
     @Test

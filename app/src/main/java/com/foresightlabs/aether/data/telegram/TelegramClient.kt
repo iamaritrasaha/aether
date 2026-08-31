@@ -11,6 +11,7 @@ import com.foresightlabs.aether.domain.messages.MessageMotionEventType
 import com.foresightlabs.aether.domain.messages.ConversationMotion
 import com.foresightlabs.aether.domain.messages.SendOptions
 import com.foresightlabs.aether.domain.messages.SendSchedule
+import com.foresightlabs.aether.domain.text.LinkPreviewCard
 import com.foresightlabs.aether.domain.text.ReplyQuote
 import com.foresightlabs.aether.domain.model.AnimationItem
 import com.foresightlabs.aether.domain.model.AuthUiState
@@ -550,6 +551,56 @@ class TelegramClient(private val application: Application) {
         }
     }
 
+    /**
+     * Telegram's own preview for the first link in [text].
+     *
+     * `TdApi.GetLinkPreview` is the whole implementation: Telegram generates the
+     * preview, Aether displays what comes back. No page is fetched, and no site
+     * content is read here or anywhere else in this feature.
+     *
+     * Returns null whenever Telegram has nothing to show -- TDLib answers a text
+     * with no previewable link with a 404 -- so the caller fails quietly rather
+     * than reporting an error the user cannot act on.
+     */
+    suspend fun linkPreview(text: String): LinkPreviewCard? {
+        if (text.isBlank()) return null
+        val preview = send(
+            TdApi.GetLinkPreview(TdApi.FormattedText(text, emptyArray()), null)
+        ) as? TdApi.LinkPreview ?: return null
+        val thumbnailId = LinkPreviewSupport.thumbnailFileId(preview)
+        val thumbnailPath = if (thumbnailId != 0) awaitThumbnail(thumbnailId) else null
+        return LinkPreviewSupport.cardOf(preview) { file ->
+            if (file != null && file.id == thumbnailId) thumbnailPath else null
+        }
+    }
+
+    /**
+     * The bytes of one preview thumbnail.
+     *
+     * Synchronous because a preview thumbnail is a few kilobytes and the caller
+     * is already waiting on the preview: the alternative is a card that pops a
+     * picture in a moment after it appears. Telegram's embedded thumbnail covers
+     * the case where these bytes never arrive.
+     */
+    private suspend fun awaitThumbnail(fileId: Int): String? {
+        TelegramMappers.localPath(rawFile(fileId))?.let { return it }
+        val file = send(TdApi.DownloadFile(fileId, THUMBNAIL_PRIORITY, 0, 0, true)) as? TdApi.File
+            ?: return null
+        return TelegramMappers.localPath(file)?.also { photoPaths["file:$fileId"] = it }
+    }
+
+    private fun rawFile(fileId: Int): TdApi.File? {
+        val cached = photoPaths["file:$fileId"] ?: return null
+        if (cached.isBlank()) return null
+        return TdApi.File().apply {
+            id = fileId
+            local = TdApi.LocalFile().apply {
+                path = cached
+                isDownloadingCompleted = true
+            }
+        }
+    }
+
     suspend fun sendText(
         chatId: Long,
         text: String,
@@ -557,11 +608,14 @@ class TelegramClient(private val application: Application) {
         entities: Array<TdApi.TextEntity> = emptyArray(),
         forumTopicId: Int? = null,
         options: TdApi.MessageSendOptions? = null,
-        quote: ReplyQuote? = null
+        quote: ReplyQuote? = null,
+        // Null is TDLib's default handling, which is what every message without
+        // a link -- and every link the user left alone -- still sends.
+        linkPreviewOptions: TdApi.LinkPreviewOptions? = null
     ): Result<TdApi.Message> {
         val content = TdApi.InputMessageText(
             TdApi.FormattedText(text, entities),
-            null,
+            linkPreviewOptions,
             // Sending clears the draft this text came from.
             true
         )
@@ -573,20 +627,14 @@ class TelegramClient(private val application: Application) {
         photoPath: String,
         caption: String,
         replyToMessageId: Long?,
-        forumTopicId: Int? = null
+        forumTopicId: Int? = null,
+        // TdApi.InputMessagePhoto.selfDestructType, private chats only. Real
+        // TDLib/Telegram view-once semantics -- MessageSelfDestructTypeImmediately
+        // means "can be opened only once and will be self-destructed once closed" --
+        // never a client-side imitation (no local delete/hide/timer).
+        viewOnce: Boolean = false
     ): Result<TdApi.Message> {
-        val content = TdApi.InputMessagePhoto(
-            TdApi.InputFileLocal(photoPath),
-            null,
-            null,
-            intArrayOf(),
-            0,
-            0,
-            TdApi.FormattedText(caption, emptyArray()),
-            false,
-            null,
-            false
-        )
+        val content = MediaSendContent.photo(photoPath, caption, viewOnce)
         return sendContent(chatId, content, replyToMessageId, forumTopicId)
     }
 
@@ -783,23 +831,12 @@ class TelegramClient(private val application: Application) {
         width: Int = 0,
         height: Int = 0,
         replyToMessageId: Long? = null,
-        forumTopicId: Int? = null
+        forumTopicId: Int? = null,
+        // TdApi.InputMessageVideo.selfDestructType, private chats only -- same
+        // real view-once semantics as sendPhoto's viewOnce param.
+        viewOnce: Boolean = false
     ): Result<TdApi.Message> {
-        val content = TdApi.InputMessageVideo(
-            TdApi.InputFileLocal(videoPath),
-            null,
-            null,
-            0,
-            intArrayOf(),
-            duration,
-            width,
-            height,
-            true,
-            TdApi.FormattedText(caption, emptyArray()),
-            false,
-            null,
-            false
-        )
+        val content = MediaSendContent.video(videoPath, caption, duration, width, height, viewOnce)
         return sendContent(chatId, content, replyToMessageId, forumTopicId)
     }
 
@@ -1025,6 +1062,9 @@ class TelegramClient(private val application: Application) {
                 TdApi.FormattedText(caption, emptyArray()),
                 false, null, false
             )
+            MessageType.VIDEO -> MediaSendContent.video(
+                mediaPath, caption, duration = 0, width = 0, height = 0, viewOnce = false
+            )
             MessageType.VIDEO_NOTE -> TdApi.InputMessageVideoNote(
                 TdApi.InputFileLocal(mediaPath),
                 null, 0, 240, null
@@ -1238,7 +1278,12 @@ class TelegramClient(private val application: Application) {
         return sendExpectOk(TdApi.ReorderChatFolders(folderIds, 0))
     }
 
-    suspend fun editMessage(chatId: Long, messageId: Long, newText: String): Result<TdApi.Message> {
+    suspend fun editMessage(
+        chatId: Long,
+        messageId: Long,
+        newText: String,
+        linkPreviewOptions: TdApi.LinkPreviewOptions? = null
+    ): Result<TdApi.Message> {
         val raw = rawMessages[messageId]
         val function = when (raw?.content) {
             is TdApi.MessagePhoto,
@@ -1258,7 +1303,7 @@ class TelegramClient(private val application: Application) {
             else -> {
                 val content = TdApi.InputMessageText(
                     TdApi.FormattedText(newText, emptyArray()),
-                    null,
+                    linkPreviewOptions,
                     true
                 )
                 TdApi.EditMessageText(chatId, messageId, null, content)
@@ -1518,6 +1563,17 @@ class TelegramClient(private val application: Application) {
     }
 
     // --- chat folders -----------------------------------------------------------
+
+    /**
+     * The most recent unacknowledged service notification from Telegram, or null.
+     * Cleared by [acknowledgeServiceNotice] once the user has seen it.
+     */
+    private val _serviceNotice = MutableStateFlow<com.foresightlabs.aether.domain.messaging.ServiceNotice?>(null)
+    val serviceNotice: kotlinx.coroutines.flow.StateFlow<com.foresightlabs.aether.domain.messaging.ServiceNotice?> = _serviceNotice
+
+    fun acknowledgeServiceNotice() {
+        _serviceNotice.value = null
+    }
 
     private val _chatFolders = MutableStateFlow<List<ChatFolder>>(listOf(ChatFolder.Main))
 
@@ -2153,6 +2209,10 @@ class TelegramClient(private val application: Application) {
                 ?: mapped
         }
         conversationFlows.getOrPut(chatId) { MutableStateFlow(emptyList()) }.update { current ->
+            // A lookup built once, rather than current.firstOrNull{} per entry below --
+            // that scan-per-entry made a single incoming message an O(n^2) update over
+            // the whole loaded history instead of the O(n) it needs to be.
+            val previousById = current.associateBy { it.id }
             val byId = LinkedHashMap<String, Message>()
             if (prepend) {
                 normalized.forEach { byId[it.id] = it }
@@ -2162,7 +2222,7 @@ class TelegramClient(private val application: Application) {
                 normalized.forEach { byId[it.id] = it }
             }
             byId.mapValues { (id, message) ->
-                val previous = current.firstOrNull { it.id == id }
+                val previous = previousById[id]
                 if (message.presentationKey == null && previous?.presentationKey != null) {
                     message.copy(presentationKey = previous.presentationKey)
                 } else message
@@ -2507,6 +2567,25 @@ class TelegramClient(private val application: Application) {
                 scope.launch {
                     delay(ConversationMotion.FAST_MS.toLong() + 80L)
                     removeMessages(update.chatId, update.messageIds.map { it.toString() }.toSet())
+                }
+            }
+            is TdApi.UpdateServiceNotification -> {
+                // Telegram's own account talking to the client directly. TDLib
+                // documents these as requiring the application to show the
+                // content, so they are surfaced rather than dropped -- Aether's
+                // people-first filtering has no business discarding an account
+                // security notice. The text is rendered with the same mapper
+                // ordinary message content uses.
+                val text = com.foresightlabs.aether.data.notifications.NotificationContentMapper
+                    .mapMessageContent(update.content, showPreview = true)
+                val notice = com.foresightlabs.aether.domain.messaging.buildServiceNotice(update.type, text)
+                if (notice != null) {
+                    if (BuildConfig.DEBUG) {
+                        // The notice body can contain a login code. Only its shape
+                        // is logged, never its content.
+                        android.util.Log.d(TAG, "SERVICE_NOTIFICATION_RECEIVED authKeyDrop=${notice.requiresAuthKeyDropPrompt}")
+                    }
+                    _serviceNotice.value = notice
                 }
             }
             is TdApi.UpdateFile -> onFile(update.file)
@@ -3412,6 +3491,9 @@ class TelegramClient(private val application: Application) {
 
     companion object {
         private const val TAG = "AetherTd"
+
+        /** Low: a preview thumbnail must never outrank the media the user opened. */
+        private const val THUMBNAIL_PRIORITY = 8
         // Defensive-only guard for the local-fill loop in collectHistoryPage().
         // The loop's real stopping conditions are "collected enough" and "a
         // round added zero new unique messages" -- both fire well before this

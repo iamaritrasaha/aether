@@ -129,8 +129,17 @@ class AetherApplication : Application(), ImageLoaderFactory {
             }
             return
         }
-        com.google.firebase.messaging.FirebaseMessaging.getInstance().token
-            .addOnSuccessListener { token -> telegram.registerFcmToken(token) }
+        try {
+            if (com.google.firebase.FirebaseApp.getApps(this).isEmpty()) {
+                com.google.firebase.FirebaseApp.initializeApp(this)
+            }
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().token
+                .addOnSuccessListener { token -> telegram.registerFcmToken(token) }
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) {
+                android.util.Log.w("AetherTd", "FCM_INIT_FAILED", e)
+            }
+        }
     }
 
     private fun createNotificationChannels() {

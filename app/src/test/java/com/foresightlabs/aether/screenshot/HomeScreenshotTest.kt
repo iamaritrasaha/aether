@@ -22,7 +22,6 @@ import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.AtmosphereMode
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
 import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
-import com.foresightlabs.aether.ui.theme.WeatherCondition
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -66,12 +65,10 @@ class HomeScreenshotTest {
 
     private fun themeState(
         palette: TimeAtmospherePalette,
-        weather: WeatherCondition? = null,
         fontScale: Float = 1f
     ) = AppThemeState().apply {
         atmosphereMode = AtmosphereMode.MANUAL
         manualAtmosphere = palette
-        weatherOverride = weather
         this.fontScale = fontScale
     }
 
@@ -174,71 +171,6 @@ class HomeScreenshotTest {
             name = "night-frosted-bars",
             chats = HomeFixtures.populated,
             state = themeState(TimeAtmospherePalette.NIGHT)
-        )
-    }
-
-    @Test
-    fun homeWithWeatherModulation() {
-        WeatherCondition.entries.filter { it != WeatherCondition.UNKNOWN }.forEach { weather ->
-            capture(
-                name = "home-weather-${weather.name.lowercase().replace('_', '-')}",
-                chats = HomeFixtures.populated,
-                state = themeState(TimeAtmospherePalette.DAY, weather = weather)
-            )
-        }
-    }
-
-    @Test
-    fun homeWeatherAcrossEveryCondition() {
-        val conditions = listOf(
-            WeatherCondition.CLEAR,
-            WeatherCondition.PARTLY_CLOUDY,
-            WeatherCondition.CLOUDY,
-            WeatherCondition.RAIN,
-            WeatherCondition.HEAVY_RAIN,
-            WeatherCondition.STORM,
-            WeatherCondition.FOG,
-            WeatherCondition.SNOW
-        )
-        conditions.forEach { weather ->
-            capture(
-                name = "home-weather-scene-${weather.name.lowercase().replace('_', '-')}",
-                chats = HomeFixtures.populated,
-                state = themeState(TimeAtmospherePalette.DAY, weather = weather)
-            )
-        }
-    }
-
-    @Test
-    fun homeWeatherAtNightAndGoldenHour() {
-        capture(
-            name = "home-weather-scene-clear-night",
-            chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.NIGHT, weather = WeatherCondition.CLEAR)
-        )
-        capture(
-            name = "home-weather-scene-rain-night",
-            chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.NIGHT, weather = WeatherCondition.RAIN)
-        )
-        capture(
-            name = "home-weather-scene-golden-hour",
-            chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = WeatherCondition.CLEAR)
-        )
-    }
-
-    @Test
-    fun homeWithNoWeatherFallsBackToTimeOnly() {
-        capture(
-            name = "home-weather-unavailable",
-            chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = null)
-        )
-        capture(
-            name = "home-weather-scene-unavailable",
-            chats = HomeFixtures.populated,
-            state = themeState(TimeAtmospherePalette.GOLDEN_HOUR, weather = null)
         )
     }
 

@@ -10,6 +10,11 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -200,14 +205,39 @@ private fun AlbumTile(
     onClick: (MediaItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    AsyncImage(
-        model = item.url,
-        contentDescription = item.caption.ifBlank { "Photo" },
-        contentScale = ContentScale.Crop,
+    Box(
         modifier = modifier
             .clip(AetherEmber.Shapes.S)
             .clickable { onClick(item) }
-    )
+    ) {
+        // item.url is always the thumbnail for a video tile -- the actual
+        // playable file only loads once the viewer opens, same as a full-size
+        // video bubble; this preserves that a video in an album stays VIDEO,
+        // never silently becomes a photo tile.
+        AsyncImage(
+            model = item.url,
+            contentDescription = item.caption.ifBlank { if (item.isVideo) "Video" else "Photo" },
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+        if (item.isVideo) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x80000000)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
 }
 
 @Composable

@@ -23,23 +23,26 @@ data class ActivePerson(
 /**
  * What Aether can honestly say about who is around.
  *
- * Telegram privacy settings frequently withhold exact presence, so there are two
- * distinct truthful shapes plus an empty one. The UI must label them differently:
- * approximate activity is never called "Online".
+ * Telegram privacy settings frequently withhold exact presence, so live status is
+ * never fabricated: a person's dot only lights up from their own exact status, per
+ * [ActivePerson.presence] — never inferred from the row as a whole. The row itself
+ * always tries to show *someone* rather than sit empty: people who are live (online,
+ * or failing that recently active) come first, and the remaining slots are filled
+ * with the contacts you talk to most, whatever their current status.
  */
 @Immutable
 sealed interface ActiveNowState {
 
-    /** Telegram reports these people as genuinely online right now. */
+    /** At least one person here is reported as genuinely online right now. */
     data class Online(override val people: List<ActivePerson>) : ActiveNowState
 
-    /**
-     * Nobody is reported as exactly online, but these contacts were active recently
-     * according to Telegram's own approximate status.
-     */
+    /** Nobody is exactly online, but at least one person was active recently. */
     data class RecentlyActive(override val people: List<ActivePerson>) : ActiveNowState
 
-    /** Nothing meaningful to show. The strip is hidden rather than filled. */
+    /** Nobody is live at all -- every person shown is here on usage alone. */
+    data class MostUsed(override val people: List<ActivePerson>) : ActiveNowState
+
+    /** No personal chats to show anyone from. The strip is hidden rather than filled. */
     data object Empty : ActiveNowState {
         override val people: List<ActivePerson> = emptyList()
     }
@@ -51,6 +54,7 @@ sealed interface ActiveNowState {
         get() = when (this) {
             is Online -> "Active now"
             is RecentlyActive -> "Recently active"
+            is MostUsed -> "Your people"
             Empty -> ""
         }
 }
@@ -62,9 +66,15 @@ object ActiveNow {
     /**
      * Derives the presence strip from real chat state only.
      *
-     * Included: individual people you have a direct conversation with.
-     * Excluded: groups, channels, bots, deleted accounts and Saved Messages —
-     * none of those are a person who can be present.
+     * Included: individual people you have a direct conversation with. Excluded:
+     * groups, channels, bots, deleted accounts and Saved Messages -- none of those
+     * are a person who can be present.
+     *
+     * Live people (online, then recently-active) fill the row first; the remaining
+     * slots, up to [limit], backfill with the rest of your contacts ranked by
+     * [presenceOrder] -- Telegram's own chat-list order, itself recency/usage
+     * weighted -- so someone who talks to you often but happens to be offline right
+     * now still shows up rather than leaving the row sparse or empty.
      */
     fun from(chats: List<Chat>, limit: Int = MAX_PEOPLE): ActiveNowState {
         val candidates = chats.filter { chat ->
@@ -72,25 +82,36 @@ object ActiveNow {
         }
         if (candidates.isEmpty()) return ActiveNowState.Empty
 
-        val online = candidates
+        val ranked = candidates.sortedWith(presenceOrder)
+
+        val online = ranked
             .filter { it.directUser?.presence == Presence.ONLINE }
-            .sortedWith(presenceOrder)
-            .take(limit)
             .map { ActivePerson(it, Presence.ONLINE) }
 
-        if (online.isNotEmpty()) return ActiveNowState.Online(online)
-
-        // Fall back to Telegram's own approximate "recently" status, clearly labelled
-        // as such. Restricted to contacts so the row stays people-first.
-        val recent = candidates
+        // Restricted to contacts, same as the most-used backfill below, so the row
+        // stays people-first rather than surfacing someone from a one-off chat.
+        val recentlyActive = ranked
             .filter { it.directUser?.presence == Presence.RECENTLY && it.directUser?.isContact == true }
-            .sortedWith(presenceOrder)
-            .take(limit)
             .map { ActivePerson(it, Presence.RECENTLY) }
 
-        if (recent.isNotEmpty()) return ActiveNowState.RecentlyActive(recent)
+        val live = if (online.isNotEmpty()) online else recentlyActive
+        val liveIds = live.mapTo(HashSet()) { it.id }
 
-        return ActiveNowState.Empty
+        val mostUsed = ranked
+            .asSequence()
+            .filter { it.id !in liveIds && it.directUser?.isContact == true }
+            .map { ActivePerson(it, it.directUser?.presence ?: Presence.UNKNOWN) }
+            .take((limit - live.size).coerceAtLeast(0))
+            .toList()
+
+        val people = (live + mostUsed).take(limit)
+
+        return when {
+            online.isNotEmpty() -> ActiveNowState.Online(people)
+            recentlyActive.isNotEmpty() -> ActiveNowState.RecentlyActive(people)
+            people.isNotEmpty() -> ActiveNowState.MostUsed(people)
+            else -> ActiveNowState.Empty
+        }
     }
 
     /** Contacts first, then Telegram's own chat ordering. Deterministic. */

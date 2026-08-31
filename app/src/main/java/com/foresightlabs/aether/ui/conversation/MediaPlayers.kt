@@ -127,8 +127,11 @@ fun LoopingVideoSticker(
 }
 
 /**
- * Interactive video note player supporting circular playback, tap-to-toggle play/pause,
- * audio playback with volume, and pause on detachment.
+ * Interactive video player supporting tap-to-toggle play/pause, audio playback
+ * with volume, and pause on detachment. Used both for the circular video note
+ * bubble ([resizeMode] zoomed to fill the circle) and for a regular video
+ * message's full-screen playback in [com.foresightlabs.aether.ui.common.MediaViewer]
+ * ([resizeMode] fit, so the frame is never cropped).
  */
 @OptIn(UnstableApi::class)
 @Composable
@@ -136,7 +139,9 @@ fun VideoNotePlayer(
     filePath: String,
     modifier: Modifier = Modifier,
     autoPlay: Boolean = false,
-    onEnded: () -> Unit = {}
+    onEnded: () -> Unit = {},
+    resizeMode: Int = AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+    playerBackgroundColor: Int = android.graphics.Color.BLACK
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -197,8 +202,8 @@ fun VideoNotePlayer(
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    setBackgroundColor(android.graphics.Color.BLACK)
+                    this.resizeMode = resizeMode
+                    setBackgroundColor(playerBackgroundColor)
                 }
             },
             modifier = Modifier.fillMaxSize()

@@ -110,8 +110,10 @@ import com.foresightlabs.aether.domain.model.Chat
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
+import com.foresightlabs.aether.domain.sharing.SharedAttachmentKind
 import com.foresightlabs.aether.domain.text.AetherEntity
 import com.foresightlabs.aether.domain.text.ComposerFormatting
+import com.foresightlabs.aether.domain.text.ComposerLinkPreviewState
 import com.foresightlabs.aether.domain.text.ComposerStyle
 import com.foresightlabs.aether.domain.text.ReplyQuote
 import com.foresightlabs.aether.ui.design.AetherAccent
@@ -225,6 +227,240 @@ fun AttachmentCurtainContent(
 }
 
 /**
+ * Reviewing one picked photo/video before it sends, with the View once toggle.
+ *
+ * A restrained control on the existing Curtain, not a second modal: a thumbnail,
+ * one toggle row, and Cancel/Send -- the media-send composition state the picker
+ * flows land in, mirroring [AttachmentCurtainContent]'s "direct Curtain content,
+ * no container of its own" shape.
+ */
+@Composable
+fun MediaPreviewCurtainContent(
+    media: com.foresightlabs.aether.ui.conversation.PendingMedia,
+    onToggleViewOnce: () -> Unit,
+    onCancel: () -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val ink = Color(0xFFF2F2F5)
+    val hint = Color(0xFF9A9AA2)
+
+    Column(
+        modifier = modifier
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .testTag("curtain_media_preview_content"),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(180.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0x1AFFFFFF))
+        ) {
+            coil.compose.AsyncImage(
+                model = media.path,
+                contentDescription = if (media.isVideo) "Video to send" else "Photo to send",
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = ripple(),
+                    onClick = onToggleViewOnce
+                )
+                .padding(horizontal = 6.dp, vertical = 8.dp)
+                .testTag("media_preview_view_once_toggle"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(if (media.viewOnce) AetherAccent.current else Color(0x18FFFFFF))
+                    .border(0.5.dp, if (media.viewOnce) AetherAccent.current else Color(0x1AFFFFFF), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                if (media.viewOnce) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = Color(0xFF0B0B0D),
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "View once",
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ink
+                )
+                Text(
+                    text = "Opens once, then disappears",
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 11.sp,
+                    color = hint
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0x14FFFFFF))
+                    .clickable(onClick = onCancel)
+                    .padding(vertical = 12.dp)
+                    .testTag("media_preview_cancel"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Cancel", fontFamily = ManropeFontFamily, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = ink)
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(AetherAccent.current)
+                    .clickable(onClick = onSend)
+                    .padding(vertical = 12.dp)
+                    .testTag("media_preview_send"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Send", fontFamily = ManropeFontFamily, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0B0B0D))
+            }
+        }
+    }
+}
+
+/**
+ * Reviewing what another application shared, before any of it is sent.
+ *
+ * The share-shaped sibling of [MediaPreviewCurtainContent]: the same direct
+ * Curtain content, the same Cancel/Send pair, and no surface, card or sheet of
+ * its own. It carries no View once toggle -- that is a decision about a photo
+ * someone picked here, not something to apply to a file another application
+ * handed over.
+ */
+@Composable
+fun SharedContentCurtainContent(
+    share: PendingShare,
+    onCancel: () -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val ink = Color(0xFFF2F2F5)
+    val hint = Color(0xFF9A9AA2)
+    val first = share.attachments.firstOrNull()
+    val headline = when {
+        share.attachments.size > 1 -> "${share.attachments.size} shared items"
+        first?.kind == SharedAttachmentKind.IMAGE -> "Shared photo"
+        first?.kind == SharedAttachmentKind.VIDEO -> "Shared video"
+        else -> first?.name ?: "Shared file"
+    }
+
+    Column(
+        modifier = modifier
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .testTag("curtain_share_preview_content"),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        val visual = share.attachments.firstOrNull {
+            it.kind == SharedAttachmentKind.IMAGE || it.kind == SharedAttachmentKind.VIDEO
+        }
+        if (visual != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0x1AFFFFFF))
+            ) {
+                coil.compose.AsyncImage(
+                    model = visual.path,
+                    contentDescription = headline,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(30.dp)
+                    .clip(CircleShape)
+                    .background(AetherAccent.current)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = headline,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = share.caption.ifBlank { "Ready to send" },
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 11.sp,
+                    color = hint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0x14FFFFFF))
+                    .clickable(onClick = onCancel)
+                    .padding(vertical = 12.dp)
+                    .testTag("share_preview_cancel"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Cancel", fontFamily = ManropeFontFamily, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = ink)
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(AetherAccent.current)
+                    .clickable(onClick = onSend)
+                    .padding(vertical = 12.dp)
+                    .testTag("share_preview_send"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Send", fontFamily = ManropeFontFamily, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0B0B0D))
+            }
+        }
+    }
+}
+
+/**
  * The content of the Conversation Curtain, in every state it can be in.
  *
  * Everything here is content passed to [AetherConversationCurtain], which owns the
@@ -286,6 +522,8 @@ fun MessageComposer(
     onEditSelected: (Message) -> Unit = {},
     onCopySelected: (List<Message>) -> Unit = {},
     onForwardSelected: (List<Message>) -> Unit = {},
+    /** Toggles pin state for the one selected message -- see [MessageSelectionRow]'s canPin. */
+    onPinSelected: (Message) -> Unit = {},
     onDeleteSelected: (List<Message>) -> Unit = {},
     forwardMessages: List<Message> = emptyList(),
     forwardTargets: List<Chat> = emptyList(),
@@ -295,8 +533,24 @@ fun MessageComposer(
     editingMessage: Message? = null,
     onDismissEdit: () -> Unit = {},
     onSaveEdit: (Message, String, List<AetherEntity>) -> Unit = { _, _, _ -> },
+    pendingMedia: PendingMedia? = null,
+    onToggleViewOnce: () -> Unit = {},
+    onCancelPendingMedia: () -> Unit = {},
+    onSendPendingMedia: () -> Unit = {},
+    /** Files another application shared into this conversation, awaiting review. */
+    pendingShare: PendingShare? = null,
+    onCancelPendingShare: () -> Unit = {},
+    onSendPendingShare: () -> Unit = {},
+    /**
+     * Text to put in the composer, from a share or another hand-off. Applied
+     * once per distinct value, so recomposition never retypes it.
+     */
+    prefillText: String? = null,
     enabled: Boolean = true,
     onTextChanged: (String) -> Unit = {},
+    /** Telegram's preview for the link in the draft; see [ComposerLinkPreviewStrip]. */
+    linkPreview: ComposerLinkPreviewState = ComposerLinkPreviewState.Empty,
+    onDismissLinkPreview: () -> Unit = {},
     /** Reported by the shared Curtain root; see [CurtainHeights]. */
     onCurtainHeightChanged: (CurtainHeights) -> Unit = {},
     modifier: Modifier = Modifier
@@ -306,6 +560,16 @@ fun MessageComposer(
     var formatting by remember { mutableStateOf<List<AetherEntity>>(emptyList()) }
     var sendingTransition by remember { mutableStateOf(false) }
     val composerScope = rememberCoroutineScope()
+
+    LaunchedEffect(prefillText) {
+        val incoming = prefillText
+        if (!incoming.isNullOrEmpty()) {
+            field = TextFieldValue(text = incoming, selection = TextRange(incoming.length))
+            // Reported like typing, so everything keyed on the draft -- the link
+            // preview above all -- sees it exactly as it would a typed message.
+            onTextChanged(incoming)
+        }
+    }
 
     LaunchedEffect(editingMessage?.id) {
         if (editingMessage != null) {
@@ -354,11 +618,32 @@ fun MessageComposer(
                 messages = forwardMessages,
                 targets = forwardTargets,
                 canSendCopy = forwardMessages.all { capabilities[it.id]?.canBeForwarded == true },
-                hasCaption = forwardMessages.any { it.text.isNotBlank() && it.type != com.foresightlabs.aether.domain.model.MessageType.TEXT },
+                // A link preview is still a text message: its text is the
+                // message, not a caption that could be dropped.
+                hasCaption = forwardMessages.any {
+                    it.text.isNotBlank() &&
+                        it.type != com.foresightlabs.aether.domain.model.MessageType.TEXT &&
+                        it.type != com.foresightlabs.aether.domain.model.MessageType.LINK_PREVIEW
+                },
                 state = forwardState,
                 onDismiss = onDismissForward,
                 onForward = onSubmitForward,
                 modifier = Modifier.fillMaxSize()
+            )
+        } else if (curtainState == CurtainState.SHARE_PREVIEW && pendingShare != null) {
+            SharedContentCurtainContent(
+                share = pendingShare,
+                onCancel = onCancelPendingShare,
+                onSend = onSendPendingShare,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.MEDIA_PREVIEW && pendingMedia != null) {
+            MediaPreviewCurtainContent(
+                media = pendingMedia,
+                onToggleViewOnce = onToggleViewOnce,
+                onCancel = onCancelPendingMedia,
+                onSend = onSendPendingMedia,
+                modifier = Modifier.fillMaxWidth()
             )
         } else {
         // Expanded content remains inside the continuous Curtain.
@@ -571,6 +856,20 @@ fun MessageComposer(
                     }
                 }
 
+                // The draft's link preview, directly above the text it belongs
+                // to and inside the same Curtain content column. Never its own
+                // surface; see [ComposerLinkPreviewStrip].
+                AnimatedVisibility(
+                    visible = linkPreview.isVisible && selectedMessages.isEmpty(),
+                    enter = expandVertically(tween(ConversationMotion.STANDARD_MS)) + fadeIn(tween(ConversationMotion.FAST_MS)),
+                    exit = shrinkVertically(tween(ConversationMotion.STANDARD_MS)) + fadeOut(tween(ConversationMotion.FAST_MS))
+                ) {
+                    ComposerLinkPreviewStrip(
+                        state = linkPreview,
+                        onDismiss = onDismissLinkPreview
+                    )
+                }
+
                 // One row: attach, what you are writing, and the action, OR selection action dock when selecting.
                 AnimatedContent(
                     targetState = selectedMessages.isNotEmpty(),
@@ -589,6 +888,7 @@ fun MessageComposer(
                             onEdit = onEditSelected,
                             onCopy = onCopySelected,
                             onForward = onForwardSelected,
+                            onPin = onPinSelected,
                             onDelete = onDeleteSelected,
                             ink = ink,
                             control = control
@@ -597,9 +897,9 @@ fun MessageComposer(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(ComposerRowHeight)
+                                .defaultMinSize(minHeight = ComposerRowHeight)
                                 .padding(horizontal = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.Bottom
                         ) {
                             Box(
                                 modifier = Modifier
@@ -625,8 +925,9 @@ fun MessageComposer(
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .padding(horizontal = 6.dp),
-                                contentAlignment = Alignment.CenterStart
+                                    .padding(horizontal = 6.dp)
+                                    .align(Alignment.CenterVertically),
+                                contentAlignment = Alignment.TopStart
                             ) {
                                 if (text.isEmpty()) {
                                     Text(
@@ -684,7 +985,8 @@ fun MessageComposer(
                                         capitalization = KeyboardCapitalization.Sentences,
                                         imeAction = ImeAction.Default
                                     ),
-                                    maxLines = 5,
+                                    maxLines = 6,
+                                    minLines = 1,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .graphicsLayer { alpha = composerTextAlpha }
@@ -980,6 +1282,13 @@ private fun MessageSelectionRow(
     onEdit: (Message) -> Unit,
     onCopy: (List<Message>) -> Unit,
     onForward: (List<Message>) -> Unit,
+    /**
+     * Toggles pin state for the one selected message. Pinning one message inside
+     * a conversation ([TdApi.PinChatMessage]/[TdApi.UnpinChatMessage]) is a
+     * completely different Telegram operation from pinning the chat itself in
+     * Home ([TdApi.ToggleChatIsPinned]) -- this dock never touches the latter.
+     */
+    onPin: (Message) -> Unit,
     onDelete: (List<Message>) -> Unit,
     ink: Color,
     control: Color,
@@ -995,6 +1304,13 @@ private fun MessageSelectionRow(
     val canCopy = selection.any { it.text.isNotBlank() }
     val canForward = isSingle && (singleCaps.canBeForwarded || singleCaps == MessageCapabilities.Unknown) ||
             (!isSingle && selection.any { capabilities[it.id]?.canBeForwarded != false })
+    // Telegram's message-pin API (PinChatMessage/UnpinChatMessage) targets one
+    // message; a multi-selection is never offered this action, matching
+    // MessageActionPolicy.actionsForSelection dropping PIN/UNPIN from any
+    // selection wider than one. No local guess when capabilities have not
+    // answered yet -- unlike Reply/Forward, a wrong assumption here means
+    // exposing an action Telegram will refuse.
+    val canPin = isSingle && single != null && singleCaps.canBePinned
 
     Row(
         modifier = modifier
@@ -1090,6 +1406,22 @@ private fun MessageSelectionRow(
                     onClearSelection()
                 },
                 testTag = "selection_action_forward"
+            )
+            Spacer(modifier = Modifier.width(2.dp))
+        }
+
+        // Pin / Unpin -- pins this one message inside the conversation, never
+        // the chat itself (that is Home's separate ToggleChatIsPinned action).
+        if (canPin && single != null) {
+            SelectionDockActionButton(
+                icon = Icons.Default.PushPin,
+                label = if (single.isPinned) "Unpin" else "Pin",
+                tint = control,
+                onClick = {
+                    onPin(single)
+                    onClearSelection()
+                },
+                testTag = "selection_action_pin"
             )
             Spacer(modifier = Modifier.width(2.dp))
         }

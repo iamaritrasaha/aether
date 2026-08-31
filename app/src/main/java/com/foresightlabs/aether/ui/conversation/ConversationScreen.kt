@@ -1,6 +1,7 @@
 package com.foresightlabs.aether.ui.conversation
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -135,6 +136,7 @@ import androidx.compose.material.icons.filled.Download
 import com.foresightlabs.aether.domain.messages.MessageActionPolicy
 import kotlinx.coroutines.delay
 import com.foresightlabs.aether.domain.text.AetherEntity
+import com.foresightlabs.aether.domain.text.ComposerLinkPreviewState
 import com.foresightlabs.aether.domain.text.ReplyQuote
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -147,6 +149,9 @@ import com.foresightlabs.aether.domain.messages.ConversationMotion
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageType
 import com.foresightlabs.aether.ui.design.AetherAtmosphericBackground
+import com.foresightlabs.aether.ui.home.atmosphere.AetherTimeAtmosphere
+import com.foresightlabs.aether.ui.home.atmosphere.AtmosphereExpression
+import com.foresightlabs.aether.ui.home.atmosphere.rememberCurrentTimeAtmosphere
 import com.foresightlabs.aether.ui.design.AetherAvatar
 import com.foresightlabs.aether.ui.common.MediaViewer
 import com.foresightlabs.aether.ui.conversation.MessageBubble
@@ -180,6 +185,13 @@ import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.io.File
 import java.io.FileOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.core.net.toUri
+import com.foresightlabs.aether.data.sharing.SharedContentInbox
+import com.foresightlabs.aether.data.sharing.SharedUriGateway
+import com.foresightlabs.aether.domain.sharing.SharedAttachmentKind
+import com.foresightlabs.aether.domain.sharing.SharedContent
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -190,14 +202,21 @@ fun ConversationScreen(
     onBack: () -> Unit,
     onNavigateToProfile: () -> Unit,
     onNavigateToChatAppearance: () -> Unit = {},
+    /** Pins or unpins this conversation in the chat list -- the same operation Home's selection dock performs. */
+    onTogglePin: () -> Unit = {},
     onSendMessage: (String, Message?, List<AetherEntity>, ReplyQuote?) -> Unit,
-    onSendPhoto: (String, String, Message?) -> Unit = { _, _, _ -> },
+    onSendPhoto: (String, String, Message?, Boolean) -> Unit = { _, _, _, _ -> },
+    onSendVideo: (String, String, Int, Message?, Boolean) -> Unit = { _, _, _, _, _ -> },
     onSendDocument: (String, String, Message?) -> Unit = { _, _, _ -> },
+    /** Several photos as one Telegram album; see TelegramClient.sendPhotoAlbum. */
+    onSendPhotoAlbum: (List<String>, String, Message?) -> Unit = { _, _, _ -> },
     onSendVoiceNote: (String, Int, ByteArray, Message?) -> Unit = { _, _, _, _ -> },
     onEditMessage: (Message, String) -> Unit = { _, _ -> },
     onAddReaction: (Message, String) -> Unit = { _, _ -> },
     onPinMessage: (Message) -> Unit = {},
     onComposerChanged: (String) -> Unit,
+    linkPreview: ComposerLinkPreviewState = ComposerLinkPreviewState.Empty,
+    onDismissLinkPreview: () -> Unit = {},
     onLoadOlder: () -> Unit,
     onDeleteMessage: (Message, Boolean) -> Unit,
     onForwardMessages: (List<Message>, Long, Boolean, Boolean) -> Unit = { _, _, _, _ -> },
@@ -299,7 +318,6 @@ fun ConversationScreen(
     var locationError by remember { mutableStateOf<String?>(null) }
     var isResolvingLocation by remember { mutableStateOf(false) }
     val isSelecting = selectedIds.isNotEmpty()
-    var composerFocusRequest by remember { mutableIntStateOf(0) }
     var showJumpToLatest by remember { mutableStateOf(false) }
 
     // Brings a jump target into view and marks it, then hands the request back so a
@@ -339,13 +357,24 @@ fun ConversationScreen(
     var isMediaViewerVisible by remember { mutableStateOf(false) }
     var showVideoNoteRecorder by remember { mutableStateOf(false) }
 
+    // Media picked from the gallery or camera is held here for review --
+    // including the View once decision -- rather than sent the instant it is
+    // picked. See CurtainState.MEDIA_PREVIEW.
+    var pendingMedia by remember { mutableStateOf<PendingMedia?>(null) }
+
+    // What another application shared into this conversation, once its bytes
+    // have been copied out of the sender's URIs. Reviewed in
+    // CurtainState.SHARE_PREVIEW; never sent without an explicit tap.
+    var pendingShare by remember { mutableStateOf<PendingShare?>(null) }
+    var sharedDraft by remember { mutableStateOf<String?>(null) }
+
     var cameraTempFile by remember { mutableStateOf<File?>(null) }
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
         if (success && cameraTempFile != null && cameraTempFile!!.length() > 0) {
-            onSendPhoto(cameraTempFile!!.absolutePath, "", replyingToMessage)
-            replyingToMessage = null
+            pendingMedia = PendingMedia(cameraTempFile!!.absolutePath, isVideo = false)
+            curtainState = CurtainState.MEDIA_PREVIEW
         }
     }
 
@@ -394,14 +423,17 @@ fun ConversationScreen(
         }
     }
 
+    // Image-or-video picker: view-once applies to both, so Gallery offers both
+    // through the one platform picker instead of a photo-only contract.
     val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            val file = copyUriToTempFile(context, uri, "photo_")
+            val isVideo = context.contentResolver.getType(uri)?.startsWith("video/") == true
+            val file = copyUriToTempFile(context, uri, if (isVideo) "video_" else "photo_")
             if (file != null) {
-                onSendPhoto(file.absolutePath, "", replyingToMessage)
-                replyingToMessage = null
+                pendingMedia = PendingMedia(file.absolutePath, isVideo = isVideo)
+                curtainState = CurtainState.MEDIA_PREVIEW
             }
         }
     }
@@ -426,6 +458,7 @@ fun ConversationScreen(
             if (file != null && replacingMediaMessage != null) {
                 val mediaType = when (replacingMediaMessage!!.type) {
                     MessageType.IMAGE -> MessageType.IMAGE
+                    MessageType.VIDEO -> MessageType.VIDEO
                     MessageType.ANIMATION -> MessageType.ANIMATION
                     MessageType.AUDIO -> MessageType.AUDIO
                     MessageType.FILE -> MessageType.FILE
@@ -433,6 +466,50 @@ fun ConversationScreen(
                 }
                 onReplaceMedia(replacingMediaMessage!!, file.absolutePath, mediaType)
                 replacingMediaMessage = null
+            }
+        }
+    }
+
+    // A share addressed to this conversation, collected once when it opens.
+    // The URIs are read here rather than at recipient selection because this is
+    // where the send happens, and the copy is what survives the grant expiring.
+    val sharedChatId = chat?.id?.toLongOrNull()
+    LaunchedEffect(sharedChatId) {
+        val chatIdValue = sharedChatId ?: return@LaunchedEffect
+        when (val shared = SharedContentInbox.consumeDelivery(chatIdValue)) {
+            null -> Unit
+            is SharedContent.Text -> {
+                // The URL is preserved exactly as it was shared; the Composer's
+                // existing link preview asks Telegram about it from there.
+                sharedDraft = shared.text
+            }
+            is SharedContent.Attachments -> {
+                val gateway = SharedUriGateway(context)
+                val files = withContext(Dispatchers.IO) {
+                    shared.items.mapNotNull { attachment ->
+                        gateway.retainAccess(attachment.uri.toUri())
+                        gateway.materialize(attachment)?.let { ready ->
+                            SharedAttachmentFile(ready.path, ready.kind, ready.name)
+                        }
+                    }
+                }
+                if (files.isEmpty()) {
+                    Toast.makeText(
+                        context,
+                        "That shared content could not be opened",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    if (files.size < shared.items.size) {
+                        Toast.makeText(
+                            context,
+                            "Some shared items could not be opened",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    pendingShare = PendingShare(files, shared.caption)
+                    curtainState = CurtainState.SHARE_PREVIEW
+                }
             }
         }
     }
@@ -456,27 +533,14 @@ fun ConversationScreen(
             showJumpToLatest = true
         }
     }
-    // A focus event alone is not enough: the IME changes the usable viewport over
-    // several layout passes. Re-anchor whenever the real IME inset/viewport changes,
-    // while preserving deliberate reply, edit, search and jump context.
-    LaunchedEffect(composerFocusRequest, entries, searchState.isActive, replyingToMessage?.id, editingMessage?.id, highlightedMessageId) {
-        if (composerFocusRequest == 0 || entries.isEmpty()) return@LaunchedEffect
-        if (!shouldAnchorComposerToLatest(
-                composerFocused = true,
-                isReplying = replyingToMessage != null,
-                isEditing = editingMessage != null,
-                isSearching = searchState.isActive,
-                hasJumpTarget = highlightedMessageId != null || jumpTarget != null
-            )) return@LaunchedEffect
-        snapshotFlow<Pair<Int, Int>> {
-            imeInsets.getBottom(density) to listState.layoutInfo.viewportSize.height
-        }.distinctUntilChanged().collect { viewport ->
-            val imeBottom = viewport.first
-            if (imeBottom > 0) {
-                showJumpToLatest = false
-                listState.animateScrollToItem(entries.size)
-            }
-        }
+    // Whether beginning to type a normal message has already settled this
+    // composing session to latest -- see shouldSettleOnComposerActivity. Reset
+    // whenever a new session begins: the reply/edit target changes, or the
+    // latest message changes (a send just went out, clearing the composer
+    // without an onTextChanged callback, or a new message arrived).
+    var composerSessionSettled by remember { mutableStateOf(false) }
+    LaunchedEffect(replyingToMessage?.id, editingMessage?.id, latestMessageId) {
+        composerSessionSettled = false
     }
     LaunchedEffect(listState) {
         snapshotFlow { listState.firstVisibleItemIndex to listState.layoutInfo.totalItemsCount }
@@ -722,11 +786,12 @@ fun ConversationScreen(
                 },
                 onInputFocus = {
                     curtainState = CurtainState.COMPOSER
-                    composerFocusRequest++
                 },
                 onSelectGallery = {
                     curtainState = CurtainState.COMPOSER
-                    photoPickerLauncher.launch("image/*")
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                    )
                 },
                 onSelectCamera = {
                     curtainState = CurtainState.COMPOSER
@@ -786,7 +851,38 @@ fun ConversationScreen(
                     replyingToMessage = null
                     replyQuote = null
                 },
-                onTextChanged = onComposerChanged,
+                onTextChanged = { newText ->
+                    onComposerChanged(newText)
+                    if (newText.isBlank()) {
+                        // Draft cleared or the message just sent: the next
+                        // keystroke starts a new composing session.
+                        composerSessionSettled = false
+                    } else {
+                        val contextAllows = shouldAnchorComposerToLatest(
+                            composerFocused = true,
+                            isReplying = replyingToMessage != null,
+                            isEditing = editingMessage != null,
+                            isSearching = searchState.isActive,
+                            hasJumpTarget = highlightedMessageId != null || jumpTarget != null
+                        )
+                        val lastIndex = entries.size
+                        val alreadyNearLatest = lastIndex > 0 &&
+                            listState.layoutInfo.visibleItemsInfo.any { it.index >= lastIndex - 2 }
+                        if (shouldSettleOnComposerActivity(contextAllows, composerSessionSettled, alreadyNearLatest)) {
+                            composerSessionSettled = true
+                            showJumpToLatest = false
+                            coroutineScope.launch {
+                                if (reducedMotion) listState.scrollToItem(lastIndex) else listState.animateScrollToItem(lastIndex)
+                            }
+                        } else if (contextAllows) {
+                            // Nothing to settle to, but this still counts as
+                            // the session's first genuine mutation.
+                            composerSessionSettled = true
+                        }
+                    }
+                },
+                linkPreview = linkPreview,
+                onDismissLinkPreview = onDismissLinkPreview,
                 onCurtainHeightChanged = { curtainHeights = it },
                 enabled = canSend,
                 installedStickerSets = installedStickerSets,
@@ -862,8 +958,51 @@ fun ConversationScreen(
                     focusManager.clearFocus()
                     curtainState = CurtainState.FORWARDING
                 },
+                // Same toggle the long-press context menu's Pin/Unpin already
+                // uses (onPinMessage) -- one message-pin implementation, two
+                // entry points into it.
+                onPinSelected = { msg -> onPinMessage(msg) },
                 onDeleteSelected = { chosen ->
                     deleteConfirmMessages = chosen
+                },
+                pendingShare = pendingShare,
+                prefillText = sharedDraft,
+                onCancelPendingShare = {
+                    pendingShare = null
+                    curtainState = CurtainState.COMPOSER
+                },
+                onSendPendingShare = {
+                    pendingShare?.let { share -> sendSharedAttachments(
+                        share = share,
+                        replyingTo = replyingToMessage,
+                        onSendPhoto = onSendPhoto,
+                        onSendVideo = onSendVideo,
+                        onSendDocument = onSendDocument,
+                        onSendPhotoAlbum = onSendPhotoAlbum
+                    ) }
+                    replyingToMessage = null
+                    pendingShare = null
+                    curtainState = CurtainState.COMPOSER
+                },
+                pendingMedia = pendingMedia,
+                onToggleViewOnce = {
+                    pendingMedia = pendingMedia?.let { it.copy(viewOnce = !it.viewOnce) }
+                },
+                onCancelPendingMedia = {
+                    pendingMedia = null
+                    curtainState = CurtainState.COMPOSER
+                },
+                onSendPendingMedia = {
+                    pendingMedia?.let { media ->
+                        if (media.isVideo) {
+                            onSendVideo(media.path, "", 0, replyingToMessage, media.viewOnce)
+                        } else {
+                            onSendPhoto(media.path, "", replyingToMessage, media.viewOnce)
+                        }
+                        replyingToMessage = null
+                    }
+                    pendingMedia = null
+                    curtainState = CurtainState.COMPOSER
                 }
             )
         }
@@ -905,11 +1044,13 @@ fun ConversationScreen(
                 )
                 .testTag("conversation_foreground")
         ) {
-        AetherAtmosphericBackground(
+        AetherTimeAtmosphere(
             modifier = Modifier.fillMaxSize(),
             heroFraction = 1f,
-            frostState = frostState
-        ) {}
+            expression = AtmosphereExpression.CONVERSATION,
+            frostState = frostState,
+            timeAtmosphere = rememberCurrentTimeAtmosphere()
+        )
 
         LazyColumn(
             state = listState,
@@ -1059,6 +1200,7 @@ fun ConversationScreen(
             onSearchOlder = onSearchOlder,
             onSearchNewer = onSearchNewer,
             onOpenProfile = onNavigateToProfile,
+            onTogglePin = onTogglePin,
             pinned = pinnedMessage,
             pinnedCount = pinnedMessages.size,
             pinnedIndex = pinnedCursor,
@@ -1225,6 +1367,9 @@ fun ConversationScreen(
                     curtainState = CurtainState.COMPOSER
                     onForwardStateConsumed()
                 }
+            } else if (curtainState == CurtainState.MEDIA_PREVIEW) {
+                pendingMedia = null
+                curtainState = CurtainState.COMPOSER
             } else {
                 curtainState = CurtainState.COMPOSER
             }
@@ -1288,6 +1433,7 @@ fun ConversationScreen(
                         replacingMediaMessage = target
                         val mime = when (target.type) {
                             MessageType.IMAGE -> "image/*"
+                            MessageType.VIDEO -> "video/*"
                             MessageType.ANIMATION -> "image/gif"
                             MessageType.AUDIO -> "audio/*"
                             else -> "*/*"
@@ -1354,6 +1500,41 @@ fun ConversationScreen(
             },
             onRequestDownload = onRequestMediaDownload
         )
+    }
+}
+
+/**
+ * Sends a reviewed share through the paths Aether already sends media on.
+ *
+ * No new upload, no second Telegram implementation: several photos become one
+ * album exactly as they would from the gallery, and everything else goes item by
+ * item through the same photo, video and document sends the pickers use. The
+ * caption rides the first item, which is where Telegram carries an album's.
+ */
+internal fun sendSharedAttachments(
+    share: PendingShare,
+    replyingTo: Message?,
+    onSendPhoto: (String, String, Message?, Boolean) -> Unit,
+    onSendVideo: (String, String, Int, Message?, Boolean) -> Unit,
+    onSendDocument: (String, String, Message?) -> Unit,
+    onSendPhotoAlbum: (List<String>, String, Message?) -> Unit
+) {
+    val items = share.attachments
+    if (items.isEmpty()) return
+    val allPhotos = items.size > 1 && items.all { it.kind == SharedAttachmentKind.IMAGE }
+    if (allPhotos) {
+        onSendPhotoAlbum(items.map { it.path }, share.caption, replyingTo)
+        return
+    }
+    items.forEachIndexed { index, item ->
+        // Telegram captions a group from its first member; a lone item keeps its
+        // caption either way.
+        val caption = if (index == 0) share.caption else ""
+        when (item.kind) {
+            SharedAttachmentKind.IMAGE -> onSendPhoto(item.path, caption, replyingTo.takeIf { index == 0 }, false)
+            SharedAttachmentKind.VIDEO -> onSendVideo(item.path, caption, 0, replyingTo.takeIf { index == 0 }, false)
+            SharedAttachmentKind.FILE -> onSendDocument(item.path, caption, replyingTo.takeIf { index == 0 })
+        }
     }
 }
 
@@ -1665,6 +1846,56 @@ fun ConversationSearchButton(
 }
 
 /**
+ * Pins or unpins this whole conversation in the chat list, from inside the
+ * conversation itself. Same button geometry as [ConversationSearchButton] --
+ * the same 48dp target, 40dp glass circle -- so it reads as one more ordinary
+ * conversation control, not a louder or separately-styled affordance. Only its
+ * accent wash changes to show the chat is currently pinned, the same
+ * selected-state treatment Aether already uses elsewhere.
+ */
+@Composable
+fun ConversationPinButton(
+    isPinned: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalAetherColors.current
+    val accent = AetherAccent.current
+    Box(
+        modifier = modifier
+            .size(48.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(bounded = false, radius = 24.dp),
+                onClick = onClick
+            )
+            .semantics { this.contentDescription = if (isPinned) "Unpin conversation" else "Pin conversation" }
+            .testTag("conversation_pin_button"),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (isPinned) accent.copy(alpha = 0.24f) else Color(0x22FFFFFF))
+                .border(
+                    width = 0.5.dp,
+                    color = if (isPinned) accent.copy(alpha = 0.4f) else Color(0x18FFFFFF),
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.PushPin,
+                contentDescription = null,
+                tint = if (isPinned) accent else colors.atmosphereTextPrimary.copy(alpha = 0.88f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+/**
  * Frosted Floating Identity & Search Header.
  *
  * Uses Aether's canonical frosted glass primitive. The header smoothly morphs between
@@ -1681,6 +1912,7 @@ fun ConversationIdentityHeader(
     onSearchOlder: () -> Unit = {},
     onSearchNewer: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
     pinned: Message? = null,
     pinnedCount: Int = 0,
     pinnedIndex: Int = 0,
@@ -1780,6 +2012,15 @@ fun ConversationIdentityHeader(
                                 )
                             }
                         }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        // The same chat-list pin Home's selection dock offers,
+                        // reachable without leaving the conversation.
+                        ConversationPinButton(
+                            isPinned = chat.isPinned,
+                            onClick = onTogglePin
+                        )
 
                         Spacer(modifier = Modifier.width(4.dp))
 

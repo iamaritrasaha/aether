@@ -1,6 +1,9 @@
 package com.foresightlabs.aether.domain.model
 
 import androidx.compose.runtime.Immutable
+import com.foresightlabs.aether.domain.messaging.ConversationClass
+import com.foresightlabs.aether.domain.messaging.ConversationFacts
+import com.foresightlabs.aether.domain.messaging.classifyConversation
 import androidx.compose.ui.graphics.Color
 import com.foresightlabs.aether.domain.calls.MediaConnectionState
 
@@ -33,6 +36,8 @@ sealed interface ConversationTarget {
 enum class MessageType {
     TEXT,
     IMAGE,
+    /** A regular Telegram video message -- distinct from [VIDEO_NOTE]'s circular bubble. */
+    VIDEO,
     ALBUM,
     VOICE,
     AUDIO,
@@ -176,7 +181,18 @@ data class MediaItem(
     val downloadFailed: Boolean = false,
     val isUploading: Boolean = false,
     val uploadProgress: Float? = null,
-    val previewBase64: String? = null
+    val previewBase64: String? = null,
+    /**
+     * True when [url] is a thumbnail standing in for playable video, not the
+     * displayed image itself. The thumbnail's own file state ([fileId],
+     * [hasLocalFile], [isDownloading], [downloadFailed]) is unaffected --
+     * [videoFileId]/[videoLocalPath] describe the separate playable file.
+     */
+    val isVideo: Boolean = false,
+    /** TDLib file id of the actual video content, distinct from the thumbnail's [fileId]. */
+    val videoFileId: Int = 0,
+    /** Local path of the video content, when already downloaded; blank otherwise. */
+    val videoLocalPath: String = ""
 )
 
 @Immutable
@@ -306,21 +322,55 @@ data class Chat(
     val isForum: Boolean = false
 ) {
     /**
+     * What this conversation is, per the one canonical rule set in
+     * [classifyConversation]. Everything below is a reading of this, so the chat
+     * list, search and the notification path cannot disagree about a chat.
+     */
+    val conversationClass: ConversationClass
+        get() {
+            val isOneToOne = type == ChatType.DIRECT || type == ChatType.SECRET
+            return classifyConversation(
+                ConversationFacts(
+                    isOneToOne = isOneToOne,
+                    isForum = isForum,
+                    isSavedMessages = type == ChatType.SAVED_MESSAGES,
+                    // Only meaningful for a one-to-one chat; a group's own id is
+                    // not a user id and must never be matched against one.
+                    counterpartUserId = if (isOneToOne) blockableUserId ?: id.toLongOrNull() else null,
+                    isBot = directUser?.isBot == true,
+                    isDeleted = directUser?.isDeleted == true,
+                    // This model is only ever built from a chat TDLib already
+                    // resolved, so the counterpart is known by construction. The
+                    // UNKNOWN outcome belongs to the notification path, which
+                    // classifies from live lookups that can genuinely fail.
+                    isCounterpartKnown = true
+                )
+            )
+        }
+
+    /**
      * Whether this chat is a 1:1 personal conversation between real human users.
      *
-     * For the personal-messaging-first milestone, Home displays only personal chats.
-     * Groups, supergroups, channels, forums, bots, Saved Messages / self chat,
-     * deleted accounts, and Telegram system service notification chats are excluded
-     * from the primary Home feed.
+     * Home's primary feed is built from these plus [isTelegramService]. Groups,
+     * supergroups, channels, forums, bots, Saved Messages / self chat and deleted
+     * accounts are not personal chats.
+     *
+     * Telegram's own service account is not a personal chat either -- it is not a
+     * person -- but it is emphatically not filtered out; see [isTelegramService].
      */
     val isPersonalChat: Boolean
-        get() = (type == ChatType.DIRECT || type == ChatType.SECRET) &&
-            type != ChatType.SAVED_MESSAGES &&
-            !isForum &&
-            directUser?.isBot != true &&
-            directUser?.isDeleted != true &&
-            id != "777000" &&
-            blockableUserId != 777000L
+        get() = conversationClass == ConversationClass.PERSONAL_HUMAN
+
+    /**
+     * Whether this is Telegram's own service/notification account (login codes,
+     * security notices). Never hidden by personal-chat filtering.
+     */
+    val isTelegramService: Boolean
+        get() = conversationClass == ConversationClass.TELEGRAM_SERVICE
+
+    /** Whether Aether surfaces this chat in its primary messaging surfaces at all. */
+    val isDeliverableConversation: Boolean
+        get() = conversationClass.isDeliverable
 }
 
 @Immutable

@@ -167,63 +167,11 @@ fun ForwardCurtainContent(
                 }
             }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .clip(AetherEmber.Shapes.M)
-                    .background(Color(0xFF181A21))
-                    .border(0.5.dp, Color.White.copy(alpha = 0.055f), AetherEmber.Shapes.M)
-                    .padding(horizontal = 13.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = null,
-                    tint = colors.textTertiary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    if (query.isEmpty()) {
-                        Text(
-                            text = "Search people",
-                            color = colors.textTertiary,
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 14.sp,
-                            modifier = Modifier.padding(horizontal = 10.dp)
-                        )
-                    }
-                    BasicTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        singleLine = true,
-                        textStyle = TextStyle(
-                            color = colors.textPrimary,
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 14.sp
-                        ),
-                        cursorBrush = SolidColor(colors.accent),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 10.dp)
-                            .semantics { contentDescription = "Search people" }
-                            .testTag("forward_recipient_search")
-                    )
-                }
-                if (query.isNotEmpty()) {
-                    AetherIconButton(
-                        icon = Icons.Default.Close,
-                        contentDescription = "Clear recipient search",
-                        onClick = { query = "" },
-                        size = 48.dp,
-                        iconSize = 17.dp,
-                        tint = colors.textTertiary
-                    )
-                }
-            }
+            RecipientSearchField(
+                query = query,
+                onQueryChange = { query = it },
+                testTag = "forward_recipient_search"
+            )
 
             LazyColumn(
                 modifier = Modifier
@@ -244,7 +192,7 @@ fun ForwardCurtainContent(
                     }
                 }
                 items(visibleTargets, key = { it.id }, contentType = { "forward_target" }) { target ->
-                    ForwardRecipientRow(
+                    RecipientRow(
                         chat = target,
                         isSelected = target.id == selectedTargetId,
                         onClick = {
@@ -303,88 +251,34 @@ fun ForwardCurtainContent(
                 )
             }
 
-            val canSubmit = selectedTarget != null && !isSending
-            val actionLabel = selectedTarget?.let { "Forward to ${it.title}" } ?: "Choose a recipient"
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(AetherEmber.Shapes.Pill)
-                        .background(if (canSubmit) Color(0xD91C1A24) else Color(0x8C111318))
-                        .border(
-                            0.5.dp,
-                            if (canSubmit) colors.accent.copy(alpha = 0.36f) else Color.White.copy(alpha = 0.045f),
-                            AetherEmber.Shapes.Pill
+            RecipientSubmitRow(
+                target = selectedTarget,
+                label = selectedTarget?.let { "Forward to ${it.title}" } ?: "Choose a recipient",
+                enabled = selectedTarget != null && !isSending,
+                busy = isSending,
+                testTag = "forward_submit",
+                onSubmit = { target ->
+                    if (BuildConfig.DEBUG) {
+                        Log.d(
+                            FORWARD_LOG_TAG,
+                            "FORWARD_SUBMIT messageCount=${messages.size} targetHash=${Integer.toHexString(target.id.hashCode())} sendCopy=$sendCopy removeCaption=$removeCaption"
                         )
-                        .clickable(enabled = canSubmit) {
-                            selectedTarget?.let { target ->
-                                if (BuildConfig.DEBUG) {
-                                    Log.d(
-                                        FORWARD_LOG_TAG,
-                                        "FORWARD_SUBMIT messageCount=${messages.size} targetHash=${Integer.toHexString(target.id.hashCode())} sendCopy=$sendCopy removeCaption=$removeCaption"
-                                    )
-                                }
-                                onForward(target, sendCopy, removeCaption)
-                            }
-                        }
-                        .heightIn(min = 52.dp)
-                        .padding(horizontal = 16.dp, vertical = 13.dp)
-                        .semantics { contentDescription = actionLabel }
-                        .testTag("forward_submit"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        selectedTarget?.let { target ->
-                            AetherAvatar(
-                                initials = target.avatarInitials,
-                                gradient = target.avatarGradient,
-                                size = 24.dp,
-                                chatType = target.type,
-                                photoPath = target.photoPath,
-                                showGlowingRim = true
-                            )
-                            Spacer(Modifier.width(9.dp))
-                        }
-                        Text(
-                            text = actionLabel,
-                            color = if (canSubmit) colors.textPrimary else colors.textTertiary,
-                            fontFamily = ManropeFontFamily,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 14.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (isSending) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = colors.accent,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                contentDescription = null,
-                                tint = if (canSubmit) colors.accent else colors.textTertiary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
                     }
+                    onForward(target, sendCopy, removeCaption)
                 }
-            }
+            )
     }
 }
 
+/**
+ * One recipient, as a row on the Curtain.
+ *
+ * Shared by forwarding and by an incoming Android share, so choosing who
+ * something goes to looks and behaves identically wherever it is chosen from --
+ * there is one recipient list in Aether, not two.
+ */
 @Composable
-private fun ForwardRecipientRow(
+internal fun RecipientRow(
     chat: Chat,
     isSelected: Boolean,
     onClick: () -> Unit,
@@ -518,6 +412,164 @@ private fun ForwardOptionRow(
                     tint = colors.textPrimary,
                     modifier = Modifier.size(13.dp)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The recipient search control.
+ *
+ * A single rounded field -- a control, not a surface -- on the Curtain that is
+ * already there. Shared by forwarding and by Android share targeting.
+ */
+@Composable
+internal fun RecipientSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalAetherColors.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .clip(AetherEmber.Shapes.M)
+            .background(Color(0xFF181A21))
+            .border(0.5.dp, Color.White.copy(alpha = 0.055f), AetherEmber.Shapes.M)
+            .padding(horizontal = 13.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = null,
+            tint = colors.textTertiary,
+            modifier = Modifier.size(18.dp)
+        )
+        Box(
+            modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            if (query.isEmpty()) {
+                Text(
+                    text = "Search people",
+                    color = colors.textTertiary,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(horizontal = 10.dp)
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = colors.textPrimary,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 14.sp
+                ),
+                cursorBrush = SolidColor(colors.accent),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 10.dp)
+                    .semantics { contentDescription = "Search people" }
+                    .testTag(testTag)
+            )
+        }
+        if (query.isNotEmpty()) {
+            AetherIconButton(
+                icon = Icons.Default.Close,
+                contentDescription = "Clear recipient search",
+                onClick = { onQueryChange("") },
+                size = 48.dp,
+                iconSize = 17.dp,
+                tint = colors.textTertiary
+            )
+        }
+    }
+}
+
+/**
+ * The confirmation the chosen recipient is named in.
+ *
+ * The one moment of commitment in either flow, and the same control in both: a
+ * pill on the Curtain carrying the recipient's avatar and what is about to
+ * happen. Nothing here sends by itself -- it reports the tap.
+ */
+@Composable
+internal fun RecipientSubmitRow(
+    target: Chat?,
+    label: String,
+    enabled: Boolean,
+    busy: Boolean,
+    testTag: String,
+    onSubmit: (Chat) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalAetherColors.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(AetherEmber.Shapes.Pill)
+                .background(if (enabled) Color(0xD91C1A24) else Color(0x8C111318))
+                .border(
+                    0.5.dp,
+                    if (enabled) colors.accent.copy(alpha = 0.36f) else Color.White.copy(alpha = 0.045f),
+                    AetherEmber.Shapes.Pill
+                )
+                .clickable(enabled = enabled) { target?.let(onSubmit) }
+                .heightIn(min = 52.dp)
+                .padding(horizontal = 16.dp, vertical = 13.dp)
+                .semantics { contentDescription = label }
+                .testTag(testTag),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                target?.let {
+                    AetherAvatar(
+                        initials = it.avatarInitials,
+                        gradient = it.avatarGradient,
+                        size = 24.dp,
+                        chatType = it.type,
+                        photoPath = it.photoPath,
+                        showGlowingRim = true
+                    )
+                    Spacer(Modifier.width(9.dp))
+                }
+                Text(
+                    text = label,
+                    color = if (enabled) colors.textPrimary else colors.textTertiary,
+                    fontFamily = ManropeFontFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (busy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = colors.accent,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = if (enabled) colors.accent else colors.textTertiary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
     }

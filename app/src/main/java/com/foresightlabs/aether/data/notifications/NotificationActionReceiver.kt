@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.RemoteInput
 import com.foresightlabs.aether.AetherApplication
+import com.foresightlabs.aether.domain.messaging.TelegramIdentity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,7 +27,13 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 val replyToMessageId = intent.getLongExtra(AetherNotificationManager.EXTRA_REPLY_TO_MESSAGE_ID, 0L)
                 val groupId = intent.getIntExtra(AetherNotificationManager.EXTRA_NOTIFICATION_GROUP_ID, 0)
 
-                if (!replyText.isNullOrBlank() && chatId != 0L) {
+                // Defence in depth: the reply action is never attached to a
+                // Telegram service notification in the first place, so an intent
+                // arriving for that chat did not come from a notification this
+                // build posted. Dropped rather than sent.
+                if (!replyText.isNullOrBlank() && chatId != 0L &&
+                    chatId != TelegramIdentity.SERVICE_NOTIFICATIONS_USER_ID
+                ) {
                     val pendingResult = goAsync()
                     receiverScope.launch {
                         try {

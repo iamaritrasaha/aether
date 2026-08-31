@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -71,6 +72,14 @@ fun HomeSelectionDock(
     val muteAction = if (hasUnmuted) ChatAction.MUTE else ChatAction.UNMUTE
     val muteIcon = if (hasUnmuted) Icons.Default.NotificationsOff else Icons.Default.Notifications
     val muteLabel = if (hasUnmuted) "Mute" else "Unmute"
+
+    // TdApi.ToggleChatIsPinned pins or unpins exactly one chat; there is no bulk
+    // variant (TdApi.SetPinnedChats replaces the whole pinned set, which is a
+    // different, riskier operation than toggling a selection). So Pin only ever
+    // appears for a single selected chat, matching what the action actually does.
+    val singleSelectedChat = selectedChats.singleOrNull()
+    val pinAction = singleSelectedChat?.let { if (it.isPinned) ChatAction.UNPIN else ChatAction.PIN }
+    val pinLabel = if (singleSelectedChat?.isPinned == true) "Unpin" else "Pin"
 
     val dockFill = Color(0xFF141418)
     val ink = Color(0xFFF2F2F5)
@@ -140,6 +149,22 @@ fun HomeSelectionDock(
                 },
                 testTag = "home_selection_action_read"
             )
+
+            // Pin / Unpin Action -- only meaningful for a single chat; see
+            // pinAction above for why a multi-selection never shows this.
+            if (singleSelectedChat != null && pinAction != null) {
+                Spacer(modifier = Modifier.width(4.dp))
+                SelectionDockActionButton(
+                    icon = Icons.Default.PushPin,
+                    label = pinLabel,
+                    tint = control,
+                    onClick = {
+                        onChatAction(singleSelectedChat, pinAction)
+                        onClearSelection()
+                    },
+                    testTag = "home_selection_action_pin"
+                )
+            }
 
             Spacer(modifier = Modifier.width(4.dp))
 

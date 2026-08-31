@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,7 +28,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -80,7 +84,6 @@ import com.foresightlabs.aether.ui.settings.SettingsViewModel
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.LocalAppearanceRepository
 import com.foresightlabs.aether.ui.theme.LocalAtmosphere
-import com.foresightlabs.aether.ui.theme.WeatherReading
 import com.foresightlabs.aether.ui.theme.buildAtmosphere
 import com.foresightlabs.aether.data.preferences.ChatBubbleStyle
 
@@ -124,6 +127,12 @@ fun AetherApp(
     androidx.compose.runtime.LaunchedEffect(authState) {
         if (authState is AuthUiState.Ready) authViewModel.markOnboardingCompleted()
     }
+
+    // Telegram's own service notifications (TdApi.UpdateServiceNotification) are
+    // delivered out of band, not as chat messages, and TDLib documents that the
+    // client must show their content. Shown here, above every route, because they
+    // are account-level and belong to no conversation.
+    TelegramServiceNoticePrompt()
 
     if (!onboardingCompleted && authState !is AuthUiState.Ready) {
         OnboardingScreen(onComplete = authViewModel::markOnboardingCompleted)
@@ -190,66 +199,60 @@ fun AetherApp(
         }
     }
 
+    // A share from another application, waiting for a recipient. It takes the
+    // whole screen the way onboarding and authentication do, rather than opening
+    // a second surface over the app; choosing someone hands it to that
+    // conversation, where it is sent from the Composer like anything else.
+    val pendingShare by com.foresightlabs.aether.data.sharing.SharedContentInbox.pending.collectAsStateWithLifecycle()
+    val shareDelivery by com.foresightlabs.aether.data.sharing.SharedContentInbox.delivery.collectAsStateWithLifecycle()
+    pendingShare?.let { share ->
+        com.foresightlabs.aether.ui.sharing.ShareTargetScreen(
+            content = share,
+            // The same rule the rest of Aether applies to who can be written to:
+            // personal conversations the account may send text in. Groups,
+            // channels, bots, forums and Telegram's own service account are not
+            // offered, because a share to them is not deliverable here.
+            targets = com.foresightlabs.aether.domain.sharing.ShareRecipients.eligible(chats),
+            onDismiss = { com.foresightlabs.aether.data.sharing.SharedContentInbox.clear() },
+            onChooseRecipient = { chat ->
+                chat.id.toLongOrNull()?.let { chatId ->
+                    com.foresightlabs.aether.data.sharing.SharedContentInbox.addressTo(chatId)
+                }
+            }
+        )
+        return
+    }
+
+    // Once a share has a recipient, that conversation opens through the same
+    // navigation every other conversation is opened by.
+    androidx.compose.runtime.LaunchedEffect(shareDelivery?.chatId) {
+        val addressed = shareDelivery?.chatId ?: return@LaunchedEffect
+        navController.navigate(Destinations.conversation(addressed.toString()))
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isTablet = maxWidth >= 720.dp
 
-        if (isTablet) {
-            var selectedChatId by remember { mutableStateOf(folderChats.firstOrNull()?.id) }
-            val activeChat = folderChats.firstOrNull { it.id == selectedChatId } ?: folderChats.firstOrNull()
-            Row(modifier = Modifier.fillMaxSize()) {
-                Box(modifier = Modifier.width(360.dp).fillMaxHeight()) {
-                    HomeScreen(
-                        chats = folderChats,
-                        currentUser = currentUser,
-                        connection = connection,
-                        isLoading = loadingChats,
-                        folders = folders,
-                        selectedFolder = selectedFolder,
-                        onSelectFolder = chatsViewModel::selectFolder,
-                        onCreateFolder = chatsViewModel::createChatFolder,
-                        onEditFolder = chatsViewModel::editChatFolder,
-                        onDeleteFolder = chatsViewModel::deleteChatFolder,
-                        onReorderFolders = chatsViewModel::reorderChatFolders,
-                        onChatClick = { chat ->
-                            // A forum opens as its topic list; only a plain chat
-                            // opens straight into a conversation.
-                            if (chat.isForum) {
-                                navController.navigate(Destinations.forumTopics(chat.id))
-                            } else {
-                                selectedChatId = chat.id
-                            }
-                        },
-                        onNavigateToCalls = { navController.navigate(Destinations.CALLS) },
-                        onNavigateToSettings = { navController.navigate(Destinations.SETTINGS) },
-                        onNewMessageClick = { navController.navigate(Destinations.SEARCH) },
-                        onChatAction = chatsViewModel::perform,
-                        onNavigateToPulse = { navController.navigate(Destinations.PULSE) }
-                    )
-                }
-                VerticalDivider(color = colors.border, thickness = 0.5.dp)
-                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    if (activeChat != null) {
-                        ConversationRoute(
-                            application = application,
-                            target = com.foresightlabs.aether.domain.model.ConversationTarget.Chat(activeChat.id.toLongOrNull() ?: return@Box),
-                            onBack = { },
-                            onNavigateToProfile = { navController.navigate(Destinations.profile(activeChat.id)) },
-                            onNavigateToChatAppearance = { navController.navigate(Destinations.chatAppearance(it)) }
-                        )
-                    }
-                }
-            }
-        } else {
-            // The persistent rear layer. It lives above the navigation graph and
-            // outlives every route change, so the black surface Home shows the
-            // conversations on and the one a conversation shows its composer on
-            // are not two surfaces that hand over — they are this one, uncovered
-            // to different heights.
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(colors.background)
-            ) {
+        // The persistent rear layer. It lives above the navigation graph and
+        // outlives every route change, so the black surface Home shows the
+        // conversations on and the one a conversation shows its composer on
+        // are not two surfaces that hand over — they are this one, uncovered
+        // to different heights.
+        //
+        // Mounted unconditionally -- for both form factors -- because it owns
+        // the app's ONE NavHost/NavController pairing. Every peripheral screen
+        // (Settings, Calls, a profile, ...), phone or tablet, navigates on the
+        // same navController, and that controller has no graph at all until a
+        // NavHost using it is actually composed. Gating this behind isTablet
+        // used to mean the graph simply never existed on a tablet-width
+        // window, so the very first navigate() call from that layout -- e.g.
+        // tapping Settings -- crashed with "Navigation graph has not been set
+        // for NavController."
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(colors.background)
+        ) {
             CompositionLocalProvider(LocalSceneOwnsDock provides true) {
             SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
             val sharedScope = this
@@ -266,6 +269,76 @@ fun AetherApp(
             // the shared progress below, and a second, independent fade on top of
             // that would fight it and reintroduce the dip this was built to fix.
             val hold = tween<Float>(morph, easing = LinearEasing)
+
+            // Tablet's two-pane layout is a persistent sibling of the nav graph
+            // below, not a destination inside it: it is never pushed, popped or
+            // disposed by navigation, so the selected conversation and its
+            // ChatScopedViewModelStoreOwner survive a trip to Settings/Calls/a
+            // profile and back exactly as they did before. It only reaches into
+            // the graph to open those peripheral screens, on the same
+            // navController the NavHost below binds.
+            if (isTablet) {
+                var selectedChatId by remember { mutableStateOf(folderChats.firstOrNull()?.id) }
+                // Two panes rather than a back stack, so an addressed share
+                // selects the conversation here instead of navigating to it.
+                androidx.compose.runtime.LaunchedEffect(shareDelivery?.chatId) {
+                    shareDelivery?.chatId?.let { selectedChatId = it.toString() }
+                }
+                val activeChat = folderChats.firstOrNull { it.id == selectedChatId } ?: folderChats.firstOrNull()
+                Row(modifier = Modifier.fillMaxSize()) {
+                    Box(modifier = Modifier.width(360.dp).fillMaxHeight()) {
+                        HomeScreen(
+                            chats = folderChats,
+                            currentUser = currentUser,
+                            connection = connection,
+                            isLoading = loadingChats,
+                            folders = folders,
+                            selectedFolder = selectedFolder,
+                            onSelectFolder = chatsViewModel::selectFolder,
+                            onCreateFolder = chatsViewModel::createChatFolder,
+                            onEditFolder = chatsViewModel::editChatFolder,
+                            onDeleteFolder = chatsViewModel::deleteChatFolder,
+                            onReorderFolders = chatsViewModel::reorderChatFolders,
+                            onChatClick = { chat ->
+                                // A forum opens as its topic list; only a plain chat
+                                // opens straight into a conversation.
+                                if (chat.isForum) {
+                                    navController.navigate(Destinations.forumTopics(chat.id))
+                                } else {
+                                    selectedChatId = chat.id
+                                }
+                            },
+                            onNavigateToCalls = { navController.navigate(Destinations.CALLS) },
+                            onNavigateToSettings = { navController.navigate(Destinations.SETTINGS) },
+                            onNewMessageClick = { navController.navigate(Destinations.SEARCH) },
+                            onChatAction = chatsViewModel::perform,
+                            onNavigateToPulse = { navController.navigate(Destinations.PULSE) }
+                        )
+                    }
+                    VerticalDivider(color = colors.border, thickness = 0.5.dp)
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        if (activeChat != null) {
+                            // This Box sits outside NavHost, so there is no NavBackStackEntry
+                            // to scope ConversationRoute's viewModel() call to -- without this,
+                            // it resolves against the Activity's own store, and every chat ever
+                            // opened on tablet stays alive (and its collectors keep running) for
+                            // the rest of the process. Scoping a store to the selected chat id
+                            // and clearing it on change gives tablet the same per-chat lifecycle
+                            // phone gets for free from its back-stack entry.
+                            ChatScopedViewModelStoreOwner(key = activeChat.id) {
+                                ConversationRoute(
+                                    application = application,
+                                    target = com.foresightlabs.aether.domain.model.ConversationTarget.Chat(activeChat.id.toLongOrNull() ?: return@ChatScopedViewModelStoreOwner),
+                                    onBack = { },
+                                    onNavigateToProfile = { navController.navigate(Destinations.profile(activeChat.id)) },
+                                    onNavigateToChatAppearance = { navController.navigate(Destinations.chatAppearance(it)) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             NavHost(
                 navController = navController,
                 startDestination = Destinations.CHATS,
@@ -278,6 +351,12 @@ fun AetherApp(
                     popEnterTransition = { fadeIn(animationSpec = hold, initialAlpha = 1f) },
                     popExitTransition = { fadeOut(animationSpec = hold, targetAlpha = 1f) }
                 ) {
+                    // Tablet already shows Home in the persistent left pane
+                    // above -- this destination exists only so the shared
+                    // navController has a start destination to rest on and
+                    // return to. Rendering nothing here lets that pane show
+                    // through whenever the back stack is at rest on CHATS.
+                    if (!isTablet) {
                     // 0 at rest on Home, moving toward 1 as a conversation covers
                     // it — read from the same underlying transition Navigation
                     // Compose drives for predictive back, so a live gesture moves
@@ -312,6 +391,7 @@ fun AetherApp(
                         onChatAction = chatsViewModel::perform,
                         onNavigateToPulse = { navController.navigate(Destinations.PULSE) }
                     )
+                    }
                     }
                 }
 
@@ -690,7 +770,28 @@ fun AetherApp(
             }
             }
             }
+    }
+}
+
+/**
+ * Gives [content] its own [ViewModelStore], scoped to [key], instead of whatever
+ * [LocalViewModelStoreOwner] it would otherwise inherit. A new [key] clears the
+ * previous store -- and with it every ViewModel created inside, via the normal
+ * onCleared() path -- so a caller outside NavHost's own back-stack scoping still
+ * gets a ViewModel lifecycle tied to which [key] is current, not to the process.
+ */
+@Composable
+internal fun ChatScopedViewModelStoreOwner(key: Any, content: @Composable () -> Unit) {
+    val owner = remember(key) {
+        object : ViewModelStoreOwner {
+            override val viewModelStore = ViewModelStore()
         }
+    }
+    DisposableEffect(key) {
+        onDispose { owner.viewModelStore.clear() }
+    }
+    CompositionLocalProvider(LocalViewModelStoreOwner provides owner) {
+        content()
     }
 }
 
@@ -727,6 +828,7 @@ private fun ConversationRoute(
     val recentStickers by viewModel.recentStickers.collectAsStateWithLifecycle()
     val favoriteStickers by viewModel.favoriteStickers.collectAsStateWithLifecycle()
     val savedAnimations by viewModel.savedAnimations.collectAsStateWithLifecycle()
+    val linkPreview by viewModel.linkPreview.collectAsStateWithLifecycle()
     val repository = LocalAppearanceRepository.current
     val chatId = header?.id?.toLongOrNull()
 
@@ -749,7 +851,7 @@ private fun ConversationRoute(
 
     val resolvedAppearance by (chatId?.let(repository::getResolvedChatAppearanceFlow)
         ?: kotlinx.coroutines.flow.flowOf(null)).collectAsStateWithLifecycle(initialValue = null)
-    val resolvedAtmosphere = resolvedAppearance?.let { buildAtmosphere(it.palette, WeatherReading.Idle) }
+    val resolvedAtmosphere = resolvedAppearance?.let { buildAtmosphere(it.palette) }
     val atmosphere = resolvedAtmosphere ?: LocalAtmosphere.current
     val baseColors = LocalAetherColors.current
     val conversationColors = resolvedAppearance?.let { appearance ->
@@ -779,14 +881,18 @@ private fun ConversationRoute(
             chat = header, messages = messages, canSend = canSend, onBack = onBack,
             onNavigateToProfile = onNavigateToProfile,
             onNavigateToChatAppearance = { header?.id?.toLongOrNull()?.let(onNavigateToChatAppearance) },
+            onTogglePin = viewModel::toggleChatPinned,
             onSendMessage = { text, reply, formatting, quote ->
                 viewModel.send(text, reply?.id, formatting, quote)
             },
-            onSendPhoto = { path, caption, reply -> viewModel.sendPhoto(path, caption, reply?.id) },
+            onSendPhoto = { path, caption, reply, viewOnce -> viewModel.sendPhoto(path, caption, reply?.id, viewOnce) },
+            onSendVideo = { path, caption, duration, reply, viewOnce -> viewModel.sendVideo(path, caption, duration, reply?.id, viewOnce) },
             onSendDocument = { path, caption, reply -> viewModel.sendDocument(path, caption, reply?.id) },
+            onSendPhotoAlbum = { paths, caption, reply -> viewModel.sendPhotoAlbum(paths, caption, reply?.id) },
             onSendVoiceNote = { path, duration, wave, reply -> viewModel.sendVoiceNote(path, duration, wave, reply?.id) },
             onEditMessage = viewModel::editMessage, onAddReaction = viewModel::addReaction,
             onPinMessage = viewModel::pinMessage, onComposerChanged = viewModel::onComposerChanged,
+            linkPreview = linkPreview, onDismissLinkPreview = viewModel::dismissLinkPreview,
             onLoadOlder = viewModel::loadOlder, onDeleteMessage = viewModel::delete,
             onForwardMessages = { selectedMessages, toChatId, sendCopy, removeCaption ->
                 viewModel.forwardMessages(selectedMessages, toChatId, sendCopy, removeCaption)
@@ -886,5 +992,37 @@ private fun smokeGraphite(hue: Color, weight: Float): Color {
         green = mix(hue.green),
         blue = mix(hue.blue),
         alpha = 1f
+    )
+}
+
+/**
+ * Shows the most recent Telegram service notification, if any.
+ *
+ * A plain platform dialog rather than a Curtain surface: this is not part of a
+ * conversation, it interrupts whatever route is showing, and TDLib's contract for
+ * these is explicitly a popup.
+ *
+ * The auth-key-drop variant is labelled but deliberately offers no "log out and
+ * destroy local data" button -- see [ServiceNotice.requiresAuthKeyDropPrompt].
+ */
+@Composable
+private fun TelegramServiceNoticePrompt() {
+    val application = LocalContext.current.applicationContext as? AetherApplication ?: return
+    val telegram = application.telegram
+    val notice by telegram.serviceNotice.collectAsStateWithLifecycle()
+    val current = notice ?: return
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { telegram.acknowledgeServiceNotice() },
+        title = {
+            androidx.compose.material3.Text(
+                if (current.requiresAuthKeyDropPrompt) "Telegram security notice" else "Telegram"
+            )
+        },
+        text = { androidx.compose.material3.Text(current.text) },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { telegram.acknowledgeServiceNotice() }) {
+                androidx.compose.material3.Text("OK")
+            }
+        }
     )
 }

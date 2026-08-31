@@ -126,6 +126,18 @@ fun MediaViewer(
         }
     }
 
+    // The video's own content file, separate from its thumbnail above -- never
+    // requested until the viewer that actually plays it is open, so scrolling
+    // past video messages never triggers a full download.
+    LaunchedEffect(activeItem.id, activeItem.isVideo, activeItem.videoFileId, activeItem.videoLocalPath) {
+        if (activeItem.isVideo && activeItem.videoLocalPath.isBlank() && activeItem.videoFileId != 0) {
+            if (com.foresightlabs.aether.BuildConfig.DEBUG) {
+                android.util.Log.d("AetherTd", "MEDIA_VIEWER_VIDEO_DOWNLOAD_REQUEST fileId=${activeItem.videoFileId}")
+            }
+            onRequestDownload(activeItem.videoFileId, false)
+        }
+    }
+
     AnimatedVisibility(
         visible = isVisible,
         enter = fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.94f, animationSpec = tween(150)),
@@ -253,7 +265,32 @@ fun MediaViewer(
                     translationY = panOffset.y + dragOffsetY.value
                 )
 
-            if (hasValidLocalSource) {
+            if (activeItem.isVideo) {
+                // Video never receives the pinch-zoom/pan transform above -- it
+                // is photo-specific and stays inert for video, exactly the
+                // "no photo-only gestures forced onto it" requirement, without
+                // touching the shared tap-to-toggle-chrome / swipe-to-dismiss
+                // gesture detectors every content type uses.
+                val videoFile = remember(activeItem.videoLocalPath) {
+                    activeItem.videoLocalPath.takeIf { it.isNotBlank() }
+                        ?.let { File(it) }
+                        ?.takeIf { it.exists() && it.length() > 0L }
+                }
+                if (videoFile != null) {
+                    com.foresightlabs.aether.ui.conversation.VideoNotePlayer(
+                        filePath = videoFile.absolutePath,
+                        modifier = Modifier.fillMaxSize(),
+                        autoPlay = true,
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    )
+                } else {
+                    MediaViewerShell(
+                        previewBitmap = previewBitmap,
+                        failed = false,
+                        onRetry = { onRequestDownload(activeItem.videoFileId, true) }
+                    )
+                }
+            } else if (hasValidLocalSource) {
                 SubcomposeAsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(parsedSource)
@@ -492,9 +529,11 @@ private fun MediaViewerShell(
 
 private fun shareMediaItem(context: Context, mediaItem: MediaItem) {
     try {
-        val path = mediaItem.url.removePrefix("file://")
+        val isVideo = mediaItem.isVideo
+        // For video, [MediaItem.url] is only ever the thumbnail -- the file
+        // worth sharing is the actual video content.
+        val path = (if (isVideo) mediaItem.videoLocalPath else mediaItem.url).removePrefix("file://")
         val file = File(path)
-        val isVideo = mediaItem.url.endsWith(".mp4", ignoreCase = true) || mediaItem.url.endsWith(".mkv", ignoreCase = true)
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = if (isVideo) "video/*" else "image/*"
             if (file.exists()) {
@@ -502,7 +541,7 @@ private fun shareMediaItem(context: Context, mediaItem: MediaItem) {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } else {
-                putExtra(Intent.EXTRA_TEXT, mediaItem.url)
+                putExtra(Intent.EXTRA_TEXT, path)
             }
         }
         context.startActivity(Intent.createChooser(intent, "Share media"))
@@ -513,7 +552,9 @@ private fun shareMediaItem(context: Context, mediaItem: MediaItem) {
 
 private fun saveMediaToDownloads(context: Context, mediaItem: MediaItem) {
     try {
-        val path = mediaItem.url.removePrefix("file://")
+        val isVideo = mediaItem.isVideo
+        // As in shareMediaItem: for video, url is only the thumbnail.
+        val path = (if (isVideo) mediaItem.videoLocalPath else mediaItem.url).removePrefix("file://")
         val sourceFile = File(path)
         if (!sourceFile.exists()) {
             Toast.makeText(context, "Media file not available locally", Toast.LENGTH_SHORT).show()
@@ -521,7 +562,6 @@ private fun saveMediaToDownloads(context: Context, mediaItem: MediaItem) {
         }
 
         val fileName = sourceFile.name
-        val isVideo = mediaItem.url.endsWith(".mp4", ignoreCase = true) || mediaItem.url.endsWith(".mkv", ignoreCase = true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val contentValues = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)

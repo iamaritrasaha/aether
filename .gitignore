@@ -23,6 +23,10 @@ local.properties
 debug.keystore
 telegram-secrets.properties
 signing.properties
+# Firebase Android configuration: required for the build when present, but it is
+# per-project credentials and must never enter the repository.
+google-services.json
+app/google-services.json
 *.jks
 *.keystore
 *.aab
