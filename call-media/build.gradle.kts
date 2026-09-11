@@ -36,11 +36,12 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
 
-    // Real Telegram-compatible call transport. See
-    // docs/architecture/calling-native-stack.md for exactly what this is,
-    // which native code it ships, and why it replaced this module's own
-    // (never-functional) native/cpp bridge.
-    implementation("io.github.pytgcalls:ntgcalls:3.0.0-rc02")
+    implementation("androidx.annotation:annotation:1.10.0")
+
+    // Pinned fixed Telegram call transport (resolves WebRTC jni_zero symbol retention
+    // in libntgcalls.so; see docs/architecture/calling-native-stack.md and
+    // call-media/third-party/ntgcalls/README.md).
+    implementation(files("libs/ntgcalls-3.0.0-rc02-aetherfix-arm64.aar"))
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

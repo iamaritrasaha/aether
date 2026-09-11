@@ -1,5 +1,9 @@
 package com.foresightlabs.aether.calls.media
 
+import io.github.pytgcalls.media.DeviceInfo
+import io.github.pytgcalls.media.MediaDescription
+import io.github.pytgcalls.media.MediaDevices
+import io.github.pytgcalls.media.StreamMode
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -159,5 +163,159 @@ class CallMediaModuleTest {
         val argb = image!!.pixels[0]
         assertEquals(0xFF, (argb shr 24) and 0xFF)
         assertTrue((argb and 0xFF) > 240)
+    }
+
+    // =========================================================================
+    // applyStreamSources Truthfulness Tests (rc02 API contract)
+    // =========================================================================
+
+    private val sampleDevices = MediaDevices(
+        listOf(DeviceInfo("Built-in Mic", "mic_0")),
+        listOf(DeviceInfo("Speaker", "spk_0")),
+        listOf(DeviceInfo("Front Camera", "cam_front")),
+        emptyList()
+    )
+
+    @Test
+    fun applyStreamSources_voiceCall_succeedsWhenNativeCallSucceeds() {
+        val invocations = mutableListOf<MediaDescription>()
+        val result = NativeTelegramCallMediaEngine.applyStreamSourcesForTesting(
+            callId = 42L,
+            cameraEnabled = false,
+            deviceProvider = { sampleDevices },
+            streamSourceSetter = { callId, mode, desc ->
+                assertEquals(42L, callId)
+                assertEquals(StreamMode.CAPTURE, mode)
+                invocations.add(desc)
+            }
+        )
+
+        assertTrue("Voice call must succeed when setStreamSources succeeds", result)
+        assertEquals(1, invocations.size)
+        assertEquals("mic_0", invocations[0].microphone?.input)
+        assertEquals(null, invocations[0].speaker)
+        assertEquals(null, invocations[0].camera)
+        assertEquals(null, invocations[0].screen)
+    }
+
+    @Test
+    fun applyStreamSources_voiceCall_returnsFalseWhenNativeCallThrows() {
+        val result = NativeTelegramCallMediaEngine.applyStreamSourcesForTesting(
+            callId = 42L,
+            cameraEnabled = false,
+            deviceProvider = { sampleDevices },
+            streamSourceSetter = { _, _, _ ->
+                throw RuntimeException("Simulated native setStreamSources failure")
+            }
+        )
+
+        assertFalse("Voice call must return false when setStreamSources throws", result)
+    }
+
+    @Test
+    fun applyStreamSources_failsWhenNoMicrophoneDeviceAvailable() {
+        var setterCalled = false
+        val noMicDevices = MediaDevices(emptyList(), emptyList(), emptyList(), emptyList())
+        val result = NativeTelegramCallMediaEngine.applyStreamSourcesForTesting(
+            callId = 42L,
+            cameraEnabled = false,
+            deviceProvider = { noMicDevices },
+            streamSourceSetter = { _, _, _ -> setterCalled = true }
+        )
+
+        assertFalse("Must fail when no microphone is enumerated", result)
+        assertFalse("Native stream sources must never be called without a microphone", setterCalled)
+    }
+
+    @Test
+    fun applyStreamSources_videoCall_succeedsWithBothWhenNativeCallSucceeds() {
+        val invocations = mutableListOf<MediaDescription>()
+        val result = NativeTelegramCallMediaEngine.applyStreamSourcesForTesting(
+            callId = 42L,
+            cameraEnabled = true,
+            deviceProvider = { sampleDevices },
+            streamSourceSetter = { _, _, desc -> invocations.add(desc) },
+            cameraSelector = { devices, _ -> devices.camera.firstOrNull() }
+        )
+
+        assertTrue("Video call must succeed when dual-stream setup succeeds", result)
+        assertEquals(1, invocations.size)
+        assertEquals("mic_0", invocations[0].microphone?.input)
+        assertEquals(null, invocations[0].speaker)
+        assertEquals("cam_front", invocations[0].camera?.input)
+        assertEquals(null, invocations[0].screen)
+    }
+
+    @Test
+    fun applyStreamSources_videoCall_degradesToAudioWhenCameraAttemptThrowsAndAudioSucceeds() {
+        val invocations = mutableListOf<MediaDescription>()
+        var attemptCount = 0
+        val result = NativeTelegramCallMediaEngine.applyStreamSourcesForTesting(
+            callId = 42L,
+            cameraEnabled = true,
+            deviceProvider = { sampleDevices },
+            streamSourceSetter = { _, _, desc ->
+                invocations.add(desc)
+                attemptCount++
+                if (attemptCount == 1) {
+                    throw RuntimeException("Simulated camera stream rejection by WebRTC")
+                }
+            },
+            cameraSelector = { devices, _ -> devices.camera.firstOrNull() }
+        )
+
+        assertTrue("Video call must succeed by falling back to audio when camera setup fails", result)
+        assertEquals(2, invocations.size)
+        // First attempt had both mic and camera
+        assertEquals("mic_0", invocations[0].microphone?.input)
+        assertEquals("cam_front", invocations[0].camera?.input)
+        // Second attempt degraded to audio only
+        assertEquals("mic_0", invocations[1].microphone?.input)
+        assertEquals(null, invocations[1].speaker)
+        assertEquals(null, invocations[1].camera)
+        assertEquals(null, invocations[1].screen)
+    }
+
+    @Test
+    fun applyStreamSources_videoCall_returnsFalseWhenBothCameraAndAudioRetryThrow() {
+        val invocations = mutableListOf<MediaDescription>()
+        val result = NativeTelegramCallMediaEngine.applyStreamSourcesForTesting(
+            callId = 42L,
+            cameraEnabled = true,
+            deviceProvider = { sampleDevices },
+            streamSourceSetter = { _, _, desc ->
+                invocations.add(desc)
+                throw RuntimeException("Both attempts fail")
+            },
+            cameraSelector = { devices, _ -> devices.camera.firstOrNull() }
+        )
+
+        assertFalse("Video call must return false when both dual and fallback attempts throw", result)
+        assertEquals(2, invocations.size)
+    }
+
+    @Test
+    fun applyStreamSources_videoCall_fallsBackToAudioOnlyWhenNoCameraHardwareAvailable() {
+        val invocations = mutableListOf<MediaDescription>()
+        val devicesWithoutCamera = MediaDevices(
+            listOf(DeviceInfo("Built-in Mic", "mic_0")),
+            emptyList(),
+            emptyList(),
+            emptyList()
+        )
+        val result = NativeTelegramCallMediaEngine.applyStreamSourcesForTesting(
+            callId = 42L,
+            cameraEnabled = true,
+            deviceProvider = { devicesWithoutCamera },
+            streamSourceSetter = { _, _, desc -> invocations.add(desc) },
+            cameraSelector = { devices, _ -> devices.camera.firstOrNull() }
+        )
+
+        assertTrue("Video call without camera device must fall back to audio and succeed", result)
+        assertEquals(1, invocations.size)
+        assertEquals("mic_0", invocations[0].microphone?.input)
+        assertEquals(null, invocations[0].speaker)
+        assertEquals(null, invocations[0].camera)
+        assertEquals(null, invocations[0].screen)
     }
 }

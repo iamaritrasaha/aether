@@ -24,25 +24,27 @@ media engine either loads a real native call library or it reports
 Aether now depends on **ntgcalls**, a native (C++) implementation of
 Telegram's calling protocol, published by the pytgcalls organisation.
 
-- **Dependency**: `io.github.pytgcalls:ntgcalls:3.0.0-rc02` (Maven Central,
-  AAR, `arm64-v8a` classifier used — the AAR ships `x86`, `x86_64`,
-  `armeabi-v7a` and `arm64-v8a`, and Aether's own ABI filter already restricts
-  packaging to `arm64-v8a`).
+- **Dependency**: Patched release `call-media/libs/ntgcalls-3.0.0-rc02-aetherfix-arm64.aar`
+  (retaining all 191 WebRTC `jni_zero` entry points).
+  - AAR SHA-256: `9c1fcedf664e389cdb07c3475eb37fecd27c5f07c102f916517e2c000cf13394`
+  - `libntgcalls.so` SHA-256: `3529fdd5964bc52b08c90bcd4474be14a28b97a2c6dbb21e464210e13d7d3e83`
+  - Upstream base: `io.github.pytgcalls:ntgcalls:3.0.0-rc02` at commit `a1616e280947452d86ac28d140fd1250d31e6959`.
+  - Upstream patch, license and checksums are located in `call-media/third-party/ntgcalls/`.
 - **Source**: https://github.com/pytgcalls/ntgcalls
-- **Exact revision that produced the published binary**: git commit
+- **Exact revision that produced the base binary**: git commit
   `a1616e2` (embedded in the artifact's own `BuildConfig.GIT_COMMIT`, verified
   by disassembling the published `classes.jar`).
 - **License**: LGPL-3.0. The library is consumed as a dynamically linked AAR
-  dependency (not statically linked into Aether's own native code, and not
-  modified), which is the standard LGPL-compatible consumption pattern. The
-  upstream `LICENSE` file is preserved in the dependency's own artifact; no
+  dependency (not statically linked into Aether's own native code). The
+  upstream `LICENSE` file is preserved in `call-media/third-party/ntgcalls/LICENSE`; no
   notice has been stripped.
-- **Internal native stack** (pinned by ntgcalls' own `version.properties`,
-  not by Aether): WebRTC `m152.7977.0.2`, fetched by ntgcalls' CMake as a
+- **Internal native stack**: WebRTC `m152.7977.0.2`, fetched by ntgcalls' CMake as a
   prebuilt static library from `github.com/pytgcalls/webrtc-build` releases
   (a reproducible, source-attributed build of Chromium's WebRTC — not an
   unattributed binary), Boost 1.92.0, NDK r28b, Oboe (vendored under
   `deps/oboe` for low-latency Android audio I/O).
+- **ELF & Page Alignment**: All ELF segments in `libntgcalls.so` are built with
+  `PT_LOAD` segment alignment `0x4000` (16 KB), satisfying Android 15's 16 KB page-size requirement.
 
 ### Why not build tgcalls + WebRTC from source in this repository
 
@@ -118,16 +120,20 @@ Signalling data is forwarded, not dropped, in both directions:
 `NTgCalls.onSignalingData` → `TdApi.SendCallSignalingData`, and
 `TdApi.UpdateNewCallSignalingData` → `NTgCalls.sendSignalingData`.
 
-## Known unverified area: raw video frame delivery
+## Stream sources initialization and failure safety
 
-ntgcalls does not expose a `Surface`/renderer-attachment call. Video (both the
-outgoing camera preview and the incoming remote picture) is delivered as raw
-decoded frames through `onFrames(callId, mode, device, frames)`, each frame
-carrying `ssrc`, a `data` byte buffer and `FrameData{rotation, width, height,
-timestamp}` — no explicit pixel format field. Every call site in ntgcalls'
-own C++ that touches pixel data converts through `webrtc::I420Buffer`, so
-Aether's renderer assumes planar I420 and converts it to an `ImageBitmap` for
-Compose. This assumption could not be confirmed against real device output in
-this pass — there was no arm64 hardware or emulator available with camera/mic
-access — and is flagged as a risk in the final report rather than presented
-as verified.
+ntgcalls expects media capture sources (microphone and optionally camera) to be configured via `setStreamSources` before initiating P2P transport negotiation (`connectP2p`). Initiating P2P first creates a race condition where transport callbacks can arrive while the session has no audio source.
+
+In `NativeTelegramCallMediaEngine`:
+- Capture sources are resolved prior to calling `connectP2p`.
+- If microphone resolution or capture registration fails, `startCall` halts immediately and emits `MediaConnectionState.FAILED` without invoking `connectP2p`.
+- For video calls, if camera registration fails, the engine safely degrades to audio-only and retries `setStreamSources` with the microphone alone before proceeding to P2P negotiation.
+- Frame callbacks and rendering are decoupled: malformed or unrenderable frames degrade gracefully to audio without terminating the underlying call.
+
+## Verification & quality gates
+
+The calling stack is verified across multiple levels:
+- **Static JNI proof**: 191/191 `Java_J_N_*` symbols matched between `webrtc.jar` and `libntgcalls.so` dynamic symbol table.
+- **ELF 16 KB page alignment**: Verified via `readelf -l` (all `PT_LOAD` segments aligned to `0x4000`).
+- **Zero-Telegram JNI regression probe**: `ZeroTelegramJniRegressionProbeTest` executed on physical `arm64-v8a` hardware (Android 15), verifying native library load, protocol query, and WebRTC `SoftwareVideoEncoderFactory` instantiation (`J.N.MM6G5xGU`).
+- **Contract tests**: Complete unit test suite in `CallMediaModuleTest` validating stream source failure boundaries, video degradation, double-start protection, and late-callback isolation.

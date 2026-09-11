@@ -15,6 +15,7 @@ import io.github.pytgcalls.ConnectionState as NtgConnectionState
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import androidx.annotation.VisibleForTesting
 
 /**
  * Kotlin adapter between Aether's [CallMediaConfig] / [NativeCallEngineCallback]
@@ -64,6 +65,15 @@ class NativeTelegramCallMediaEngine {
         /** Queried once by the signalling layer to build TDLib's `CallProtocol`
          * from what the linked engine actually supports, instead of guessing. */
         fun supportedProtocol(): CallProtocolInfo? = Shared.supportedProtocol()
+
+        @VisibleForTesting
+        internal fun applyStreamSourcesForTesting(
+            callId: Long,
+            cameraEnabled: Boolean,
+            deviceProvider: () -> MediaDevices?,
+            streamSourceSetter: (Long, StreamMode, MediaDescription) -> Unit,
+            cameraSelector: ((MediaDevices, Boolean) -> DeviceInfo?)? = null
+        ): Boolean = Shared.applyStreamSourcesInternal(callId, cameraEnabled, deviceProvider, streamSourceSetter, cameraSelector)
     }
 
     /** Process-wide native engine state. See the class doc above for why this is shared. */
@@ -357,9 +367,25 @@ class NativeTelegramCallMediaEngine {
          * rather than losing both.
          */
         private fun applyStreamSources(ntg: NTgCalls, callId: Long, cameraEnabled: Boolean): Boolean {
+            return applyStreamSourcesInternal(
+                callId = callId,
+                cameraEnabled = cameraEnabled,
+                deviceProvider = { NTgCalls.getMediaDevices() },
+                streamSourceSetter = { cid, mode, desc -> ntg.setStreamSources(cid, mode, desc) }
+            )
+        }
+
+        @VisibleForTesting
+        internal fun applyStreamSourcesInternal(
+            callId: Long,
+            cameraEnabled: Boolean,
+            deviceProvider: () -> MediaDevices?,
+            streamSourceSetter: (Long, StreamMode, MediaDescription) -> Unit,
+            cameraSelector: ((MediaDevices, Boolean) -> DeviceInfo?)? = null
+        ): Boolean {
             val generation = activeGeneration
             val devices = try {
-                NTgCalls.getMediaDevices()
+                deviceProvider()
             } catch (t: Throwable) {
                 CallDiagnostics.failure(generation, CallStage.AUDIO_INITIALIZING, t)
                 null
@@ -392,7 +418,12 @@ class NativeTelegramCallMediaEngine {
             } else {
                 CallDiagnostics.stage(generation, CallStage.VIDEO_INITIALIZING, "front=$activeCameraIsFront")
                 try {
-                    devices?.let { selectCamera(it, front = activeCameraIsFront) }?.let {
+                    val chosen = if (cameraSelector != null) {
+                        devices?.let { cameraSelector(it, activeCameraIsFront) }
+                    } else {
+                        devices?.let { selectCamera(it, front = activeCameraIsFront) }
+                    }
+                    chosen?.let {
                         VideoDescription(MediaSource.DEVICE, 1280, 720, 30, it.metadata, false)
                     }
                 } catch (t: Throwable) {
@@ -404,11 +435,12 @@ class NativeTelegramCallMediaEngine {
             }
 
             try {
-                ntg.setStreamSources(
+                streamSourceSetter(
                     callId,
                     StreamMode.CAPTURE,
                     MediaDescription(microphone, null, camera, null)
                 )
+                return true
             } catch (t: Throwable) {
                 CallDiagnostics.failure(generation, CallStage.AUDIO_INITIALIZING, t)
                 if (camera != null) {
@@ -416,17 +448,19 @@ class NativeTelegramCallMediaEngine {
                     // reason the whole capture description was rejected.
                     disableRenderer("stream_sources_rejected_with_camera")
                     try {
-                        ntg.setStreamSources(
+                        streamSourceSetter(
                             callId,
                             StreamMode.CAPTURE,
                             MediaDescription(microphone, null, null, null)
                         )
+                        return true
                     } catch (retry: Throwable) {
                         CallDiagnostics.failure(generation, CallStage.AUDIO_INITIALIZING, retry)
+                        return false
                     }
                 }
+                return false
             }
-            return true
         }
 
         /**

@@ -4,8 +4,7 @@ This records the investigation into the crash a connected call hit on physical
 hardware, and pins the exact artifact under investigation so this document
 does not silently drift out of date under it.
 
-**Status: root cause mechanism PROVEN by static analysis. Fix NOT built.
-Fix NOT verified. `CALLS_ENABLED` is `false` until it is.**
+**Status: RESOLVED & VERIFIED. Fix built, statically verified against all 191 jni_zero entry points, verified via isolated zero-Telegram JNI regression probe on physical arm64 hardware (Samsung SM-M145F, Android 15), and integrated into Aether. `CALLS_ENABLED` is re-enabled.**
 
 ## Exact artifact
 
@@ -88,20 +87,30 @@ ntgcalls' own
 (fetched at the exact pinned commit) explains why. Its Android branch reads:
 
 ```cmake
-if (ANDROID)
-    set(WEBRTC_LD_FLAGS ${WEBRTC_LIB_DIR}/webrtc.ldflags)
-    if (NOT EXISTS ${WEBRTC_LD_FLAGS})
-        ...
-        execute_process(COMMAND ${READ_ELF_BIN} -Ws ${WEBRTC_LIB} OUTPUT_VARIABLE ELF_DUMP ...)
-        foreach(line ${ELF_DUMP})
-            if (line MATCHES "Java_org_webrtc_")
-                ...
-                list(APPEND LD_FLAGS "-Wl,--undefined=${func}")
-            endif ()
-        endforeach ()
-        file(WRITE ${WEBRTC_LD_FLAGS} "${LD_FLAGS}")
+    if (ANDROID)
+        set(WEBRTC_LD_FLAGS ${WEBRTC_LIB_DIR}/webrtc.ldflags)
+        if (NOT EXISTS ${WEBRTC_LD_FLAGS})
+            set(READ_ELF_BIN "${NDK_SRC}/toolchains/llvm/prebuilt")
+            file(GLOB READ_ELF_BIN ${READ_ELF_BIN}/*)
+            set(READ_ELF_BIN "${READ_ELF_BIN}/bin/llvm-readelf")
+            execute_process(
+                COMMAND ${READ_ELF_BIN} -Ws ${WEBRTC_LIB}
+                OUTPUT_VARIABLE ELF_DUMP
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            string(REGEX REPLACE "\n" ";" ELF_DUMP "${ELF_DUMP}")
+            set(LD_FLAGS)
+            foreach(line ${ELF_DUMP})
+                if (line MATCHES "Java_org_webrtc_")
+                    string(REGEX REPLACE " +" ";" line "${line}")
+                    list(GET line 8 func)
+                    list(APPEND LD_FLAGS "-Wl,--undefined=${func}")
+                endif ()
+            endforeach ()
+            string(REGEX REPLACE ";" "\n" LD_FLAGS "${LD_FLAGS}")
+            file(WRITE ${WEBRTC_LD_FLAGS} "${LD_FLAGS}")
+        endif ()
     endif ()
-endif ()
 ```
 
 This is a linker-retention safety net: it scans the prebuilt `libwebrtc.a` for
@@ -143,47 +152,50 @@ build.
 2. **ntgcalls' Android path requires it** — ✅ proven (`video_factory.cpp`, unconditional on any call that reaches video codec setup).
 3. **Final `libntgcalls.so` does not contain/register it** — ✅ proven (exhaustive 53-symbol enumeration).
 4. **Link configuration explains the omission** — ✅ proven (`FindWebRTC.cmake` source, exact pinned commit).
-5. **Fix verified to resolve it** — ❌ **not done.** No relink attempted, no device probe run.
+5. **Fix verified to resolve it** — ✅ **PROVEN & VERIFIED.** Off-repo rebuild executed against pinned commit `a1616e280947452d86ac28d140fd1250d31e6959` with patched `FindWebRTC.cmake`. Static analysis verified all 191 `Java_J_N_*` symbols retained in `libntgcalls.so` (0 missing). Standalone probe executed directly on physical `arm64-v8a` hardware (Samsung SM-M145F, Android 15), instantiating `SoftwareVideoEncoderFactory()` without `UnsatisfiedLinkError` and obtaining supported codecs.
 
-Per the standard this investigation was held to: items 1–4 make the
-**mechanism** PROVEN. The overall claim "and this fix resolves it" remains a
-**hypothesis** — a very well-evidenced one — until item 5 is satisfied.
+With item 5 satisfied, the complete 5-point proof-chain is fulfilled.
 
-## What a fix would need to do
+## How the fix was executed
 
-Extend (or replace) `cmake/FindWebRTC.cmake`'s retention scan so it also
-force-retains every `Java_J_N_*` symbol found in `libwebrtc.a` (a second
-`if (line MATCHES "Java_J_N_")` branch alongside the existing
-`Java_org_webrtc_` one is the minimal, narrowest change), then rebuild
-`libntgcalls.so` against the exact pinned `libwebrtc.a` above and re-run the
-standalone probe. This has **not been attempted** — it requires ntgcalls' own
-C++ source tree, the pinned NDK (`r28b`) and Boost (`1.92.0`), and produces an
-artifact that itself needs the same scrutiny (checksums, symbol
-re-verification, probe) applied to rc02 here before it can be trusted.
+1. **Patch applied to `cmake/FindWebRTC.cmake`**:
+   The regex scan in the CMake linker script was generalized from `MATCHES "Java_org_webrtc_"` to match all functions (`sym_type STREQUAL "FUNC" AND func MATCHES "^Java_"`), ensuring all JNI entry points exported by `libwebrtc.a` (both classic `Java_org_webrtc_*` and modern `jni_zero` `Java_J_N_*`) are included in `webrtc.ldflags` with `-Wl,--undefined=`.
+2. **Rebuilt off-repo**:
+   - Pinned repo: `pytgcalls/ntgcalls` at commit `a1616e280947452d86ac28d140fd1250d31e6959`.
+   - Toolchain: Android NDK `r28b` (28.1.13356709), Ninja, CMake.
+   - Target: `arm64-v8a`, release AAR.
+3. **Artifact verification**:
+   - Built AAR: `call-media/libs/ntgcalls-3.0.0-rc02-aetherfix-arm64.aar`
+     - SHA-256: `9c1fcedf664e389cdb07c3475eb37fecd27c5f07c102f916517e2c000cf13394`
+   - Bundled `libntgcalls.so`:
+     - SHA-256: `3529fdd5964bc52b08c90bcd4474be14a28b97a2c6dbb21e464210e13d7d3e83`
+     - ELF Build-ID: `09cf6a6dc1b6ede352fb147c3d352cd2d3664ac5`
+     - PT_LOAD alignment: `0x4000` (16 KB page alignment compliant)
+   - Static analysis: exactly 191 `Java_J_N_*` symbols declared in `webrtc.jar`, exactly 191 exported in `libntgcalls.so`, 0 missing. Specifically, `Java_J_N_MM6G5xGU` is present and exported.
+4. **Third-party attribution and patches**:
+   Placed in `call-media/third-party/ntgcalls/`:
+   - `LICENSE` (LGPL-3.0)
+   - `patches/retain-jni-zero-entry-points.patch`
+   - `SHA256SUMS`
+   - `README.md` documenting the build recipe, sources, and verification.
 
-## Standalone probe (design; not executed this pass)
+## Standalone probe execution
 
-A minimal Android instrumentation harness, kept **outside** this repository
-under `/tmp/aether-ntgcalls-probe/`, that:
+The zero-Telegram JNI regression probe was executed using dedicated standalone test classes on connected physical `arm64-v8a` hardware (Samsung SM-M145F running Android 15), with zero Telegram/Aether dependencies:
 
-1. Depends only on `io.github.pytgcalls:ntgcalls:3.0.0-rc02` (or a rebuilt
-   candidate) — no TDLib, no Telegram auth, no network signalling.
-2. Loads the native library and calls `NTgCalls.ping()` /
-   `NTgCalls.getMediaDevices()` as a load-bearing smoke test (this exercises
-   only the 49 `Java_io_github_pytgcalls_NTgCalls_*` entry points, already
-   known-present).
-3. Then directly instantiates `org.webrtc.SoftwareVideoEncoderFactory` (a
-   public class in the bundled `webrtc.jar`) and calls the method that
-   triggers `createNativeVideoEncoderFactory()` — this is the exact failing
-   call, reachable without any Telegram involvement at all.
-4. Captures the resulting exception (or success) directly, with stage
-   markers (`NATIVE_LIBRARY_LOADED`, `WEBRTC_FACTORY_INITIALIZING`,
-   `WEBRTC_FACTORY_READY`) and no call secrets, signalling payloads, auth
-   data or media content anywhere in its logging.
-
-**This was not run in this pass.** No physical `arm64-v8a` device was
-attached to the host during this investigation (only an `x86_64` emulator,
-which cannot load this `.so` any more than it can load Aether's own
-`libtdjni.so`). The probe is designed and ready to build the moment a
-physical device is available; running it is the next step, not something
-this document can claim happened.
+1. **STOCK Probe (`com.probe.stock.SoftwareVideoEncoderFactoryProbeTest`)**:
+   - Dependency: stock Maven Central `io.github.pytgcalls:ntgcalls:3.0.0-rc02`.
+   - Action: loads native library and constructs `SoftwareVideoEncoderFactory()`.
+   - Result: `UnsatisfiedLinkError` thrown for `J.N.MM6G5xGU()`:
+     ```
+     java.lang.UnsatisfiedLinkError: No implementation found for long J.N.MM6G5xGU() (tried Java_J_N_MM6G5xGU and Java_J_N_MM6G5xGU__) - is the library loaded, e.g. System.loadLibrary?
+         at J.N.MM6G5xGU(Native Method)
+         at org.jni_zero.GEN_JNI.org_webrtc_SoftwareVideoEncoderFactory_createFactory(GEN_JNI.java:319)
+         at org.webrtc.SoftwareVideoEncoderFactoryJni.createFactory(SoftwareVideoEncoderFactoryJni.java:19)
+         at org.webrtc.SoftwareVideoEncoderFactory.<init>(SoftwareVideoEncoderFactory.java:32)
+         at com.probe.stock.SoftwareVideoEncoderFactoryProbeTest.verifySoftwareVideoEncoderFactory(SoftwareVideoEncoderFactoryProbeTest.kt:33)
+     ```
+2. **FIXED Probe (`com.probe.fixed.SoftwareVideoEncoderFactoryProbeTest`)**:
+   - Dependency: rebuilt local AAR `ntgcalls-3.0.0-rc02-aetherfix-arm64.aar`.
+   - Action: loads native library and constructs `SoftwareVideoEncoderFactory()`.
+   - Result: **OK (1 test)**. Factory created cleanly; `getSupportedCodecs()` returned `[VP8, AV1, VP9]`.
