@@ -80,4 +80,14 @@ interface TelegramCallMediaEngine {
     /** TDLib's `UpdateNewCallSignalingData`, for this engine to consume. */
     fun submitIncomingSignalingData(callId: Long, data: ByteArray)
     fun stop()
+
+    /**
+     * Called by the call orchestration layer's connection watchdog when
+     * media has not reached [MediaConnectionState.CONNECTED] within the
+     * allowed negotiation window. Tears the session down like [stop], but
+     * ends in [MediaConnectionState.FAILED] so the call is presented as a
+     * real failure instead of leaving the UI reading an indefinite
+     * Connecting state.
+     */
+    fun failConnectTimeout()
 }

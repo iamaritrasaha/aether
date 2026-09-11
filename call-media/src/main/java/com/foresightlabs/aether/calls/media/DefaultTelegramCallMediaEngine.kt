@@ -188,6 +188,25 @@ class DefaultTelegramCallMediaEngine(
         _state.value = MediaConnectionState.STOPPED
     }
 
+    /**
+     * Called by the call orchestration layer's connection watchdog when
+     * native media has not reached [MediaConnectionState.CONNECTED] within
+     * the allowed negotiation window (see `DefaultCallsRepository`).
+     *
+     * Tears down the native session exactly like [stop], but the engine is
+     * left in [MediaConnectionState.FAILED], not [MediaConnectionState.STOPPED]:
+     * `CallStatePresenter` treats FAILED as an unconditional failure
+     * regardless of signalling state, which is what turns a stuck Connecting
+     * screen into a real, user-visible failure instead of leaving the UI
+     * inferring CONNECTING from a state it doesn't otherwise recognise.
+     */
+    fun failConnectTimeout() {
+        nativeEngine.stopCall()
+        abandonAudioFocus()
+        resetAudioHardware()
+        _state.value = MediaConnectionState.FAILED
+    }
+
     private fun requestAudioFocus() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

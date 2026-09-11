@@ -73,6 +73,27 @@ class DefaultCallsRepository(
     private var lastMediaState: MediaConnectionState? = null
 
     /**
+     * Bounds how long a call may sit in CONNECTING before it is treated as
+     * failed.
+     *
+     * ICE connectivity checks against ntgcalls' P2P/reflector servers
+     * normally resolve within a few seconds on a functioning network; this
+     * window is sized to also cover a reflector (TURN-equivalent) fallback
+     * on a slow or restrictive network without making a genuinely broken
+     * call look like it is still trying to connect for the better part of a
+     * minute. It intentionally does not attempt to match a specific ntgcalls
+     * internal ICE timeout constant -- none is part of its public contract --
+     * and instead bounds what Aether itself is willing to show the user.
+     */
+    private val connectTimeoutMillis: Long = 20_000L
+
+    /** The one connection watchdog in flight, if any -- see [startConnectWatchdog]. */
+    private var watchdogJob: Job? = null
+
+    private val outgoingSignalSeq = AtomicLong(0)
+    private val incomingSignalSeq = AtomicLong(0)
+
+    /**
      * Monotonic id for the one media session this repository owns.
      *
      * Bumped every time a media session is started or torn down, so a late
@@ -122,18 +143,77 @@ class DefaultCallsRepository(
         scope.launch {
             mediaEngine.outgoingSignalingData.collect { data ->
                 val callId = activeCallState.value?.callId ?: return@collect
+                val seq = outgoingSignalSeq.incrementAndGet()
                 runCatching { telegram.sendCallSignalingData(callId, data) }
-                    .onFailure { CallDiagnostics.failure(callGeneration.get(), CallStage.P2P_CONNECTING, it) }
+                    .onSuccess {
+                        CallDiagnostics.stage(callGeneration.get(), CallStage.P2P_CONNECTING, "signal=out seq=$seq bytes=${data.size} tdlib=ok")
+                    }
+                    .onFailure {
+                        CallDiagnostics.stage(callGeneration.get(), CallStage.P2P_CONNECTING, "signal=out seq=$seq bytes=${data.size} tdlib=fail")
+                        CallDiagnostics.failure(callGeneration.get(), CallStage.P2P_CONNECTING, it)
+                    }
             }
         }
         scope.launch {
             telegram.callSignalingDataFlow.collect { update ->
                 val payload = update.data ?: return@collect
+                val seq = incomingSignalSeq.incrementAndGet()
+                // checkpoint=E: reached the repository's own collector at all.
+                // The activeCallState comparison proves whether this update
+                // even belongs to the call this repository currently thinks
+                // is live, independent of whatever callId filtering the
+                // native layer applies further downstream.
+                val currentCallId = activeCallState.value?.callId
+                val callIdMatches = currentCallId != null && update.callId == currentCallId
+                CallDiagnostics.stage(
+                    callGeneration.get(),
+                    CallStage.P2P_CONNECTING,
+                    "cp=E repository_collector signal=in seq=$seq bytes=${payload.size} callIdMatch=$callIdMatches"
+                )
                 guarded(CallStage.P2P_CONNECTING) {
+                    // checkpoint=F: about to call into the media engine. Any
+                    // exception here is already surfaced by `guarded` as a
+                    // FAILED diagnostic at this same generation/stage.
+                    CallDiagnostics.stage(callGeneration.get(), CallStage.P2P_CONNECTING, "cp=F submitting_to_media_engine seq=$seq")
                     mediaEngine.submitIncomingSignalingData(update.callId.toLong(), payload)
                 }
             }
         }
+    }
+
+    /**
+     * Bounds a media session's time in CONNECTING. Generation-aware so a
+     * timer left over from a call that already ended or was replaced can
+     * never act on the call that succeeded it -- see [callGeneration].
+     */
+    private fun startConnectWatchdog(generation: Long) {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch {
+            delay(connectTimeoutMillis)
+            if (callGeneration.get() != generation) return@launch
+            if (mediaEngine.state.value == MediaConnectionState.CONNECTED) return@launch
+
+            CallDiagnostics.failure(
+                generation,
+                CallStage.P2P_CONNECTING,
+                java.util.concurrent.TimeoutException(
+                    "Media did not reach CONNECTED within ${connectTimeoutMillis}ms"
+                )
+            )
+            val callId = activeCallState.value?.callId
+            stopTimer()
+            mediaEngine.failConnectTimeout()
+            CallService.stopService(application)
+            CallDiagnostics.stage(generation, CallStage.SERVICE_STOPPED, "reason=connect_timeout")
+            if (callId != null) {
+                discardCall(callId)
+            }
+        }
+    }
+
+    private fun stopConnectWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = null
     }
 
     private inline fun guarded(stage: CallStage, body: () -> Unit) {
@@ -160,6 +240,43 @@ class DefaultCallsRepository(
     private fun negotiatedProtocol(): TdApi.CallProtocol =
         TgCallsAdapter.buildCallProtocol(NativeTelegramCallMediaEngine.supportedProtocol())
 
+    /**
+     * Records the actual negotiated call protocol and server topology,
+     * sanitised: layer/version/flag counts only, never an IP, port,
+     * username, password or peerTag byte -- section 4/10 of the incoming-
+     * signalling forensics investigation asked for this to be proven, not
+     * inferred from [NativeTelegramCallMediaEngine.supportedProtocol] alone.
+     */
+    private fun logNegotiatedProtocol(generation: Long, ready: TdApi.CallStateReady) {
+        val requested = NativeTelegramCallMediaEngine.supportedProtocol()
+        CallDiagnostics.stage(
+            generation,
+            CallStage.TDLIB_READY,
+            "requestedProtocol minLayer=${requested?.minLayer} maxLayer=${requested?.maxLayer} " +
+                "udpP2p=${requested?.udpP2p} udpReflector=${requested?.udpReflector} versions=${requested?.libraryVersions}"
+        )
+        val readyProtocol = ready.protocol
+        CallDiagnostics.stage(
+            generation,
+            CallStage.TDLIB_READY,
+            "readyProtocol minLayer=${readyProtocol?.minLayer} maxLayer=${readyProtocol?.maxLayer} " +
+                "udpP2p=${readyProtocol?.udpP2p} udpReflector=${readyProtocol?.udpReflector} versions=${readyProtocol?.libraryVersions?.toList()}"
+        )
+        val servers = ready.servers.orEmpty()
+        val reflectorCount = servers.count { it.type is TdApi.CallServerTypeTelegramReflector }
+        val webrtcCount = servers.count { it.type is TdApi.CallServerTypeWebrtc }
+        val tcpReflectorCount = servers.count { (it.type as? TdApi.CallServerTypeTelegramReflector)?.isTcp == true }
+        val stunCount = servers.count { (it.type as? TdApi.CallServerTypeWebrtc)?.supportsStun == true }
+        val turnCount = servers.count { (it.type as? TdApi.CallServerTypeWebrtc)?.supportsTurn == true }
+        CallDiagnostics.stage(
+            generation,
+            CallStage.TDLIB_READY,
+            "allowP2p=${ready.allowP2p} servers=${servers.size} reflector=$reflectorCount webrtc=$webrtcCount " +
+                "tcpReflector=$tcpReflectorCount stun=$stunCount turn=$turnCount " +
+                "configLen=${ready.config?.length ?: -1} customParamsLen=${ready.customParameters?.length ?: -1}"
+        )
+    }
+
     private fun handleRawCallUpdate(rawCall: TdApi.Call?) {
         if (rawCall == null) return
         val readyState = rawCall.state as? TdApi.CallStateReady ?: return
@@ -173,7 +290,10 @@ class DefaultCallsRepository(
 
         startedMediaCallId = rawCall.id
         val generation = callGeneration.incrementAndGet()
+        outgoingSignalSeq.set(0)
+        incomingSignalSeq.set(0)
         CallDiagnostics.stage(generation, CallStage.TDLIB_READY, "video=${rawCall.isVideo} outgoing=${rawCall.isOutgoing}")
+        logNegotiatedProtocol(generation, readyState)
 
         // Camera capture is a separate capability from the call itself: a video
         // call whose camera permission was refused still connects, as audio.
@@ -192,6 +312,7 @@ class DefaultCallsRepository(
             generation = generation
         )
 
+        startConnectWatchdog(generation)
         scope.launch {
             guarded(CallStage.MEDIA_SESSION_CREATED) {
                 mediaEngine.start(rawCall, readyState, videoCaptureEnabled)
@@ -204,6 +325,7 @@ class DefaultCallsRepository(
         if (currentState == CallStateEnum.DISCARDED || currentState == CallStateEnum.ERROR) {
             CallDiagnostics.stage(callGeneration.get(), CallStage.TEARDOWN, "tdlib=${currentState.name}")
             stopTimer()
+            stopConnectWatchdog()
             startedMediaCallId = null
             callGeneration.incrementAndGet()
             mediaEngine.stop()
@@ -231,6 +353,9 @@ class DefaultCallsRepository(
 
             when (mediaState) {
                 MediaConnectionState.CONNECTED -> {
+                    // Real media is up: the watchdog's only job -- catching a
+                    // session that never gets here -- is done.
+                    stopConnectWatchdog()
                     CallService.startService(
                         application,
                         callerName,
@@ -243,20 +368,33 @@ class DefaultCallsRepository(
                     startTimer()
                 }
                 MediaConnectionState.FAILED -> {
+                    // A media-layer failure (ICE/connectivity failure, native
+                    // TIMEOUT, or this repository's own connect watchdog) must
+                    // end the call at the signalling layer too. Stopping only
+                    // the local media here and never discarding the TDLib call
+                    // left signalling sitting at READY indefinitely -- and
+                    // with no CallPresentationState case for a stopped/failed
+                    // media engine while signalling is still READY, the call
+                    // screen kept showing Connecting forever even though the
+                    // media engine had already given up.
+                    stopConnectWatchdog()
                     stopTimer()
                     CallService.stopService(application)
                     mediaEngine.stop()
+                    scope.launch { discardCall(currentCall.callId) }
                 }
                 MediaConnectionState.UNAVAILABLE -> {
                     // Signalling succeeded but nothing can carry audio. Ending the
                     // call is the honest outcome: leaving it up would show a
                     // connected-looking call that is silent for both people.
+                    stopConnectWatchdog()
                     stopTimer()
                     CallService.stopService(application)
                     telegram.reportCallMediaUnavailable(NO_MEDIA_TRANSPORT)
                     scope.launch { discardCall(currentCall.callId) }
                 }
                 MediaConnectionState.STOPPED -> {
+                    stopConnectWatchdog()
                     stopTimer()
                     CallService.stopService(application)
                 }
@@ -323,6 +461,7 @@ class DefaultCallsRepository(
             return Result.success(Unit)
         }
         stopTimer()
+        stopConnectWatchdog()
         mediaEngine.stop()
         CallService.stopService(application)
         return telegram.discardCall(callId)

@@ -213,6 +213,35 @@ class CallMediaModuleTest {
     }
 
     @Test
+    fun applyStreamSources_voiceCall_failsCleanlyWhenDeviceProviderReturnsNull() {
+        // Physically reproduced on hardware: ntgcalls' native
+        // BaseDeviceModule constructor requires AudioDescription.input to be
+        // a JSON object with an `is_microphone` key
+        // (ntgcalls/src/media/devices/base_device_module.cpp does
+        // `json::parse(desc->input)`); an empty string is not valid JSON and
+        // setStreamSources throws MediaDeviceError("Invalid device
+        // metadata"). Synthesizing a fake microphone with empty metadata
+        // when the device provider fails is therefore never safe -- this
+        // must fail cleanly instead, exactly like no microphone being
+        // enumerated at all.
+        var providerCalled = false
+        var setterCalled = false
+        val result = NativeTelegramCallMediaEngine.applyStreamSourcesForTesting(
+            callId = 42L,
+            cameraEnabled = false,
+            deviceProvider = {
+                providerCalled = true
+                null
+            },
+            streamSourceSetter = { _, _, _ -> setterCalled = true }
+        )
+
+        assertFalse("Voice call must fail, not synthesize invalid microphone metadata, when the device provider returns null", result)
+        assertTrue("Device provider lambda should be executed", providerCalled)
+        assertFalse("Native stream sources must never be called without a real microphone", setterCalled)
+    }
+
+    @Test
     fun applyStreamSources_failsWhenNoMicrophoneDeviceAvailable() {
         var setterCalled = false
         val noMicDevices = MediaDevices(emptyList(), emptyList(), emptyList(), emptyList())

@@ -16,6 +16,7 @@ import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import androidx.annotation.VisibleForTesting
+import org.webrtc.PeerConnectionFactory
 
 /**
  * Kotlin adapter between Aether's [CallMediaConfig] / [NativeCallEngineCallback]
@@ -129,6 +130,9 @@ class NativeTelegramCallMediaEngine {
         /** Set by the Android adapter before a video session is started. */
         @Volatile private var cameraManager: CameraManager? = null
 
+        /** Guards [initializeWebRtcApplicationContext] to run at most once. */
+        @Volatile private var webrtcContextInitialized = false
+
         /** Consecutive unreadable frames after which the renderer gives up for this session. */
         private const val MALFORMED_FRAME_LIMIT = 30
 
@@ -186,8 +190,61 @@ class NativeTelegramCallMediaEngine {
         }
 
         fun setContext(context: Context) {
-            cameraManager = context.applicationContext
-                .getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            val appContext = context.applicationContext
+            cameraManager = appContext.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            initializeWebRtcApplicationContext(appContext)
+        }
+
+        /**
+         * Gives WebRTC's Android layer an application [Context], once.
+         *
+         * Physically proven necessary, not precautionary: without this call,
+         * `org.webrtc.ApplicationContextProvider.getApplicationContext()`
+         * returns null, and any path that reaches WebRTC's Android device
+         * enumeration crashes the process --
+         * `Camera2Enumerator.isSupported(null)` throws a `NullPointerException`
+         * from inside `JavaVideoCapturerModule.getDevices()`
+         * (`NTgCalls.getMediaDevices()`'s Java half), which JNI escalates to a
+         * fatal `JNI DETECTED ERROR IN APPLICATION` abort -- captured on a
+         * physical Samsung SM-M145F (Android 15) the moment a video call's
+         * `applyStreamSources` called `NTgCalls.getMediaDevices()`.
+         *
+         * ntgcalls' own `JNI_OnLoad` (see
+         * `call-media/third-party/ntgcalls/` and
+         * `docs/architecture/calling-native-stack.md`) only calls
+         * `webrtc::InitAndroid`/`webrtc::JVM::Initialize` -- the native-side
+         * JNI plumbing. It never calls the Java-side
+         * `PeerConnectionFactory.initialize(...)`, which is what actually
+         * stores the application Context `ApplicationContextProvider` reads.
+         * That call is Aether's responsibility as the embedding app, exactly
+         * as every WebRTC Android integration requires; nothing upstream does
+         * it implicitly.
+         *
+         * `setNativeLibraryLoader { true }` is required, not cosmetic:
+         * WebRTC's default loader calls
+         * `System.loadLibrary("jingle_peerconnection_so")`, a separate native
+         * library this build does not ship -- WebRTC is statically linked
+         * into `libntgcalls.so` instead, already loaded by
+         * [ensureNativeLoaded]'s `NTgCalls.ping()`. Letting the default
+         * loader run would fail looking for a library that was never built.
+         */
+        private fun initializeWebRtcApplicationContext(appContext: Context) {
+            if (webrtcContextInitialized) return
+            // The JNI symbols PeerConnectionFactory.initialize needs live in
+            // libntgcalls.so; it must already be loaded before this runs.
+            if (!ensureNativeLoaded()) return
+            webrtcContextInitialized = true
+            try {
+                PeerConnectionFactory.initialize(
+                    PeerConnectionFactory.InitializationOptions.builder(appContext)
+                        .setNativeLibraryLoader { true }
+                        .createInitializationOptions()
+                )
+            } catch (t: Throwable) {
+                // Not call-scoped (no generation exists yet at app/context
+                // setup time) -- generation 0 is this call's diagnostic home.
+                CallDiagnostics.failure(0L, CallStage.MEDIA_SESSION_CREATED, t)
+            }
         }
 
         private fun registerListeners(ntg: NTgCalls) {
@@ -206,9 +263,13 @@ class NativeTelegramCallMediaEngine {
                         NtgConnectionState.CLOSED -> MediaConnectionState.STOPPED
                         else -> MediaConnectionState.FAILED
                     }
-                    if (mapped == MediaConnectionState.CONNECTED) {
-                        CallDiagnostics.stage(activeGeneration, CallStage.MEDIA_CONNECTED, "kind=${info.kind?.name ?: "unknown"}")
-                    }
+                    // Every native transition, not just CONNECTED -- proves
+                    // whether ntgcalls itself ever moves off CONNECTING
+                    // (FAILED/TIMEOUT/CLOSED) before a call ends, versus the
+                    // call ending purely because TDLib signalling was
+                    // discarded (a hangup) while native was still silently
+                    // CONNECTING the whole time.
+                    CallDiagnostics.stage(activeGeneration, CallStage.P2P_CONNECTING, "native state=${info.state?.name ?: "null"} kind=${info.kind?.name ?: "unknown"} mapped=${mapped.name}")
                     callback?.onConnectionStateChanged(mapped.ordinal)
                 }
                 ntg.onSignalingData { callId, data ->
@@ -430,6 +491,14 @@ class NativeTelegramCallMediaEngine {
             return applyStreamSourcesInternal(
                 callId = callId,
                 cameraEnabled = cameraEnabled,
+                // Called for every call, voice included: ntgcalls' native
+                // BaseDeviceModule constructor requires the microphone's real
+                // `input` to be a JSON object containing `is_microphone`
+                // (ntgcalls/src/media/devices/base_device_module.cpp -- it
+                // does `json::parse(desc->input)` and throws
+                // MediaDeviceError("Invalid device metadata") otherwise).
+                // Only safe to call now that initializeWebRtcApplicationContext
+                // has given WebRTC's Android layer a real application Context.
                 deviceProvider = { NTgCalls.getMediaDevices() },
                 streamSourceSetter = { cid, mode, desc -> ntg.setStreamSources(cid, mode, desc) }
             )
@@ -564,10 +633,24 @@ class NativeTelegramCallMediaEngine {
         }
 
         fun submitSignalingData(callId: Long, data: ByteArray) {
-            val ntg = engineInstance ?: return
-            if (callId != activeCallId) return
+            // checkpoint=G: the native adapter boundary. Every possible exit
+            // is logged explicitly -- a silent `return` here (engine not yet
+            // created, or a callId that does not match the active session)
+            // was previously indistinguishable from "ntgcalls accepted and
+            // processed the packet" in the diagnostics, which is exactly the
+            // ambiguity this investigation needs closed.
+            val ntg = engineInstance
+            if (ntg == null) {
+                CallDiagnostics.stage(activeGeneration, CallStage.P2P_CONNECTING, "cp=G dropped_no_engine callId=$callId")
+                return
+            }
+            if (callId != activeCallId) {
+                CallDiagnostics.stage(activeGeneration, CallStage.P2P_CONNECTING, "cp=G dropped_callid_mismatch callId=$callId activeCallId=$activeCallId")
+                return
+            }
             try {
                 ntg.sendSignalingData(callId, data)
+                CallDiagnostics.stage(activeGeneration, CallStage.P2P_CONNECTING, "cp=G submitted_to_native callId=$callId bytes=${data.size}")
             } catch (t: Throwable) {
                 CallDiagnostics.failure(activeGeneration, CallStage.P2P_CONNECTING, t)
             }

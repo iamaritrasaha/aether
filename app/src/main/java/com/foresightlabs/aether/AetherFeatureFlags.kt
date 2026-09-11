@@ -30,4 +30,14 @@ object AetherFeatureFlags {
      * Telegram-native cloud contacts remain fully functional.
      */
     const val DEVICE_CONTACTS_SYNC_ENABLED = false
+
+    /**
+     * Passcode/biometric App Lock gate, its Settings entry, and its setup/
+     * reauth screens.
+     * Held for this milestone: the feature is not ready for normal product
+     * behavior. The implementation and any passcode a user already set stay
+     * intact on disk -- this flag only controls whether the app reads them
+     * on a normal launch.
+     */
+    const val APP_LOCK_ENABLED = false
 }

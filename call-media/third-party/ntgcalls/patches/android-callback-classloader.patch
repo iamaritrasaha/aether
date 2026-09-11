@@ -1,0 +1,50 @@
+diff --git a/targets/android/app/src/main/jni/utils.hpp.tpl b/targets/android/app/src/main/jni/utils.hpp.tpl
+index c6317490..c32b4c46 100644
+--- a/targets/android/app/src/main/jni/utils.hpp.tpl
++++ b/targets/android/app/src/main/jni/utils.hpp.tpl
+@@ -46,6 +46,7 @@
+ #include <ntgcalls/ntgcalls.hpp>
+ #include <ntgcalls/exceptions.hpp>
+ #include <sdk/android/native_api/jni/scoped_java_ref.h>
++#include <sdk/android/native_api/jni/class_loader.h>
+ #include <wrtc/utils/java_context.hpp>
+ 
+ #pragma clang diagnostic ignored "-Wunused-function"
+@@ -60,8 +61,36 @@ struct JavaCallback {
+     jmethodID methodId;
+ };
+ 
++// Every generated struct/enum conversion in this file (parseJ<Name> below)
++// resolves its Java class through this one helper, so this is also the one
++// place a fix needs to land to cover all of them, current and future.
++//
++// Plain JNIEnv::FindClass is unsafe here: these conversions run from
++// callback threads WebRTC/ntgcalls creates natively (e.g. the PeerConnection
++// signalling/network threads that carry onConnectionChange -- see
++// wrtc/src/interfaces/native_connection.cpp's network_thread()/
++// signaling_thread() PostTask calls), not threads Java ever started. Per
++// Android's own JNI FAQ (https://developer.android.com/training/articles/perf-jni#faq_FindClass,
++// also documented directly on webrtc::GetClass's declaration in
++// sdk/android/native_api/jni/class_loader.h): FindClass consults the
++// ClassLoader associated with the nearest Java frame on the calling thread's
++// stack. A thread merely AttachCurrentThread-ed from native code (which is
++// exactly what wrtc::utils::GetJNIEnv() -> webrtc::AttachCurrentThreadIfNeeded()
++// does -- the thread IS JVM-attached) has no such frame, so FindClass falls
++// back to the system/bootstrap ClassLoader, which cannot see any
++// app-packaged class -- io.github.pytgcalls.* included. That is a
++// ClassLoader-context defect, not a missing-attachment or missing-class one.
++//
++// webrtc::GetClass(env, name) is WebRTC's own fix for exactly this: it
++// resolves against a ClassLoader reference webrtc::InitClassLoader cached
++// from JNI_OnLoad's thread (a real Java thread, via System.loadLibrary),
++// safe to call from any later thread. ntgcalls' own JNI_OnLoad
++// (targets/android/app/src/main/jni/jni_onload.cpp) already calls
++// webrtc::InitAndroid(jvm), which calls InitClassLoader(...) internally
++// (see sdk/android/native_api/base/init.cc) -- so the correct ClassLoader is
++// already cached and ready; this helper simply wasn't using it.
+ inline webrtc::ScopedJavaLocalRef<jclass> findClass(JNIEnv* env, const char* name) {
+-    return webrtc::ScopedJavaLocalRef<jclass>::Adopt(env, env->FindClass(name));
++    return webrtc::GetClass(env, name);
+ }
+ 
+ inline void throwJavaException(JNIEnv* env, const std::string& name, const std::string& message) {

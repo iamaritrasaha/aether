@@ -63,7 +63,15 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
           // process recreation -- reaches AetherApp() through this same call,
           // so there is exactly one place the lock gate can be bypassed from:
           // nowhere. See AppLockGate for why locked content is never composed.
-          AppLockGate {
+          //
+          // App Lock itself is held for this milestone (AetherFeatureFlags.
+          // APP_LOCK_ENABLED) -- see that flag's doc for why nothing here
+          // deletes the gate or its stored data, just stops composing it.
+          if (AetherFeatureFlags.APP_LOCK_ENABLED) {
+            AppLockGate {
+              AetherApp()
+            }
+          } else {
             AetherApp()
           }
         }

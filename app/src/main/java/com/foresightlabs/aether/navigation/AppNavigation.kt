@@ -723,70 +723,77 @@ fun AetherApp(
                     )
                 }
 
-                composable(
-                    route = Destinations.APP_LOCK_SETTINGS,
-                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
-                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
-                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
-                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
-                ) {
-                    com.foresightlabs.aether.ui.security.AppLockSettingsScreen(
-                        onBack = { navController.popBackStack() },
-                        onRequestSetup = { navController.navigate(Destinations.APP_LOCK_SETUP) },
-                        onRequestChangePasscode = { navController.navigate(Destinations.appLockReauth("change")) },
-                        onRequestDisable = { navController.navigate(Destinations.appLockReauth("disable")) }
-                    )
-                }
+                // App Lock is held for this milestone (AetherFeatureFlags.
+                // APP_LOCK_ENABLED): these three destinations are not
+                // registered in the graph at all while it is off, so they are
+                // unreachable by route name (deep link included), not merely
+                // hidden from the Settings entry point.
+                if (com.foresightlabs.aether.AetherFeatureFlags.APP_LOCK_ENABLED) {
+                    composable(
+                        route = Destinations.APP_LOCK_SETTINGS,
+                        enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                        exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                        popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                        popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
+                    ) {
+                        com.foresightlabs.aether.ui.security.AppLockSettingsScreen(
+                            onBack = { navController.popBackStack() },
+                            onRequestSetup = { navController.navigate(Destinations.APP_LOCK_SETUP) },
+                            onRequestChangePasscode = { navController.navigate(Destinations.appLockReauth("change")) },
+                            onRequestDisable = { navController.navigate(Destinations.appLockReauth("disable")) }
+                        )
+                    }
 
-                composable(
-                    route = Destinations.APP_LOCK_SETUP,
-                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
-                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
-                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
-                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
-                ) {
-                    com.foresightlabs.aether.ui.security.AppLockSetupScreen(
-                        onCancel = { navController.popBackStack() },
-                        onCompleted = {
-                            navController.navigate(Destinations.APP_LOCK_SETTINGS) {
-                                popUpTo(Destinations.APP_LOCK_SETTINGS) { inclusive = true }
-                            }
-                        }
-                    )
-                }
-
-                composable(
-                    route = Destinations.APP_LOCK_REAUTH,
-                    arguments = listOf(navArgument("purpose") { type = NavType.StringType }),
-                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
-                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
-                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
-                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
-                ) { backStackEntry ->
-                    val purpose = backStackEntry.arguments?.getString("purpose").orEmpty()
-                    val reauthScope = rememberCoroutineScope()
-                    com.foresightlabs.aether.ui.security.AppLockReauthScreen(
-                        reason = if (purpose == "disable") "Confirm passcode to turn off App Lock" else "Confirm your current passcode",
-                        onCancel = { navController.popBackStack() },
-                        onVerified = {
-                            if (purpose == "disable") {
-                                // popBackStack() must wait for disable() to actually
-                                // finish writing: it disposes this composable (and
-                                // reauthScope with it), so calling it before the
-                                // suspend completes could cancel the DataStore write
-                                // mid-flight -- the passcode verifies, the screen
-                                // pops back, but App Lock silently stays on.
-                                reauthScope.launch {
-                                    (application as AetherApplication).appLockRepository.disable()
-                                    navController.popBackStack()
-                                }
-                            } else {
-                                navController.navigate(Destinations.APP_LOCK_SETUP) {
-                                    popUpTo(Destinations.APP_LOCK_SETTINGS)
+                    composable(
+                        route = Destinations.APP_LOCK_SETUP,
+                        enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                        exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                        popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                        popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
+                    ) {
+                        com.foresightlabs.aether.ui.security.AppLockSetupScreen(
+                            onCancel = { navController.popBackStack() },
+                            onCompleted = {
+                                navController.navigate(Destinations.APP_LOCK_SETTINGS) {
+                                    popUpTo(Destinations.APP_LOCK_SETTINGS) { inclusive = true }
                                 }
                             }
-                        }
-                    )
+                        )
+                    }
+
+                    composable(
+                        route = Destinations.APP_LOCK_REAUTH,
+                        arguments = listOf(navArgument("purpose") { type = NavType.StringType }),
+                        enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                        exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                        popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                        popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
+                    ) { backStackEntry ->
+                        val purpose = backStackEntry.arguments?.getString("purpose").orEmpty()
+                        val reauthScope = rememberCoroutineScope()
+                        com.foresightlabs.aether.ui.security.AppLockReauthScreen(
+                            reason = if (purpose == "disable") "Confirm passcode to turn off App Lock" else "Confirm your current passcode",
+                            onCancel = { navController.popBackStack() },
+                            onVerified = {
+                                if (purpose == "disable") {
+                                    // popBackStack() must wait for disable() to actually
+                                    // finish writing: it disposes this composable (and
+                                    // reauthScope with it), so calling it before the
+                                    // suspend completes could cancel the DataStore write
+                                    // mid-flight -- the passcode verifies, the screen
+                                    // pops back, but App Lock silently stays on.
+                                    reauthScope.launch {
+                                        (application as AetherApplication).appLockRepository.disable()
+                                        navController.popBackStack()
+                                    }
+                                } else {
+                                    navController.navigate(Destinations.APP_LOCK_SETUP) {
+                                        popUpTo(Destinations.APP_LOCK_SETTINGS)
+                                    }
+                                }
+                            }
+                        )
+                    }
                 }
 
                 composable(

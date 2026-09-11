@@ -179,34 +179,40 @@ fun SettingsScreen(
                     }
                 }
 
-                // Privacy & Security Group
-                item {
-                    Spacer(modifier = Modifier.height(18.dp))
-                    Text(
-                        text = "PRIVACY & SECURITY",
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = AetherEmber.Colors.AtmosphereTextSecondary,
-                        letterSpacing = 1.2.sp,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 6.dp)
-                    )
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .clip(AetherEmber.Shapes.L)
-                            .background(colors.surfaceElevated)
-                            .border(1.dp, colors.border, AetherEmber.Shapes.L)
-                    ) {
-                        SettingsRowItem(
-                            icon = Icons.Default.Lock,
-                            title = "App Lock",
-                            subtitle = "Passcode and biometric unlock for Aether",
-                            onClick = onNavigateToAppLock,
-                            testTag = "settings_app_lock_item"
+                // Privacy & Security Group. App Lock is currently the section's
+                // only entry (AetherFeatureFlags.APP_LOCK_ENABLED) -- hiding it
+                // for this milestone leaves nothing else to show, so the whole
+                // group (header included) is held rather than leaving an empty
+                // card.
+                if (com.foresightlabs.aether.AetherFeatureFlags.APP_LOCK_ENABLED) {
+                    item {
+                        Spacer(modifier = Modifier.height(18.dp))
+                        Text(
+                            text = "PRIVACY & SECURITY",
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = AetherEmber.Colors.AtmosphereTextSecondary,
+                            letterSpacing = 1.2.sp,
+                            modifier = Modifier.padding(start = 24.dp, bottom = 6.dp)
                         )
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .clip(AetherEmber.Shapes.L)
+                                .background(colors.surfaceElevated)
+                                .border(1.dp, colors.border, AetherEmber.Shapes.L)
+                        ) {
+                            SettingsRowItem(
+                                icon = Icons.Default.Lock,
+                                title = "App Lock",
+                                subtitle = "Passcode and biometric unlock for Aether",
+                                onClick = onNavigateToAppLock,
+                                testTag = "settings_app_lock_item"
+                            )
+                        }
                     }
                 }
 

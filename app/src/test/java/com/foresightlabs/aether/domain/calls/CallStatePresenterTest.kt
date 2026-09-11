@@ -95,6 +95,20 @@ class CallStatePresenterTest {
     }
 
     @Test
+    fun readyWithStoppedMediaIsEndedNotConnecting() {
+        // A media engine that has stopped itself (e.g. after a connect
+        // watchdog timeout or a FAILED-triggered teardown) must never be
+        // read back as "still connecting" just because TDLib's own discard
+        // of the call has not landed yet -- that gap is exactly what left a
+        // call screen showing "Connecting..." forever after media had
+        // already given up.
+        assertEquals(
+            CallPresentationState.ENDED,
+            CallStatePresenter.present(CallStateEnum.READY, MediaConnectionState.STOPPED, isOutgoing = true)
+        )
+    }
+
+    @Test
     fun durationRunsOnlyWhileActive() {
         for (state in CallPresentationState.entries) {
             assertEquals(state == CallPresentationState.ACTIVE, CallStatePresenter.durationShouldRun(state))

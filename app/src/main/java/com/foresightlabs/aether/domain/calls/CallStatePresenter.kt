@@ -45,6 +45,13 @@ object CallStatePresenter {
                 // signalling reaching READY alone.
                 MediaConnectionState.CONNECTED -> CallPresentationState.ACTIVE
                 MediaConnectionState.RECONNECTING -> CallPresentationState.RECONNECTING
+                // The media engine has already stopped itself -- there is
+                // nothing left to connect, regardless of whether TDLib's own
+                // discard of the call has landed yet. Falling into CONNECTING
+                // here (the old behaviour) is exactly what turned a media
+                // engine that had already given up into a call screen stuck
+                // on "Connecting..." forever.
+                MediaConnectionState.STOPPED -> CallPresentationState.ENDED
                 else -> CallPresentationState.CONNECTING
             }
         }

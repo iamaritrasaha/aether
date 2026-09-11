@@ -118,4 +118,8 @@ class TgCallsMediaEngine(
     override fun stop() {
         delegate.stop()
     }
+
+    override fun failConnectTimeout() {
+        delegate.failConnectTimeout()
+    }
 }

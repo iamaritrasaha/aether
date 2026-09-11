@@ -130,6 +130,175 @@ In `NativeTelegramCallMediaEngine`:
 - For video calls, if camera registration fails, the engine safely degrades to audio-only and retries `setStreamSources` with the microphone alone before proceeding to P2P negotiation.
 - Frame callbacks and rendering are decoupled: malformed or unrenderable frames degrade gracefully to audio without terminating the underlying call.
 
+## The indefinite "Connecting…" defect and its fix
+
+A call could reach `CallStage.TDLIB_READY`, start its native media session, and
+then sit on the call screen showing "Connecting…" forever — no crash, no
+progress. Root-caused as two compounding defects in the *app-level*
+orchestration layer (`DefaultCallsRepository` / `CallStatePresenter`), not in
+ntgcalls, WebRTC, or the JNI boundary, all of which were independently audited
+and found correct for this symptom (native artifact checksums and JNI symbol
+retention intact; `AudioDescription.input` proven unread by the Android Oboe
+capture path so it cannot gate connection; `configJson` vs `customParameters`
+mapping matches both TDLib's own field documentation and ntgcalls'
+`connectP2p` signature; protocol/server field mapping matches the documented
+table above).
+
+1. **`handleMediaStateChange`'s `FAILED` branch never told TDLib to discard
+   the call.** When the native media engine reported `FAILED` (an ICE
+   failure, a native `TIMEOUT`, or any other connect failure), Aether stopped
+   the local media engine but left TDLib's own call signalling sitting at
+   `CallStateReady` indefinitely — nothing ever called
+   `TelegramClient.discardCall`. Compare the sibling `UNAVAILABLE` branch,
+   which always did. Fixed by discarding the call from the `FAILED` branch
+   too.
+2. **`CallStatePresenter` had no case for a stopped media engine while
+   signalling was still `READY`.** Its `READY` branch mapped every media
+   state other than `CONNECTED`/`RECONNECTING` to `CONNECTING` — including
+   `STOPPED`, the state a call lands in immediately after (1) stops it. That
+   turned "media engine already gave up" back into "still connecting" for
+   the UI, for as long as the TDLib discard from (1) took to land (or forever,
+   before (1) was fixed). Fixed by mapping `STOPPED` to `ENDED` explicitly.
+
+Together, these meant *any* media-layer connect failure was invisible to the
+user — indistinguishable from a call that was still legitimately trying to
+connect. Neither defect required a physical two-device call to prove: both
+are pure state-machine gaps, verified via `CallStatePresenterTest` and code
+inspection of `DefaultCallsRepository`.
+
+### Connection watchdog
+
+Even with both of the above fixed, a scenario where the native engine never
+calls `onConnectionChange` at all (rather than calling it with `FAILED`) was
+still unbounded. `DefaultCallsRepository` now runs a generation-scoped
+watchdog for 20 seconds from the moment a media session starts: if
+`MediaConnectionState.CONNECTED` has not been reached by then, the watchdog
+calls the new `TelegramCallMediaEngine.failConnectTimeout()` (tears the
+native session down and ends in `FAILED`, not `STOPPED`, so the presenter
+fix above applies immediately) and discards the call at TDLib. The watchdog
+is cancelled the moment `CONNECTED` is reached, on any terminal media state,
+and on TDLib-side call teardown, and is keyed to the same `callGeneration`
+counter every other stale-callback guard in this file uses, so a timer left
+over from an earlier call can never act on the one that replaced it.
+
+### Signalling diagnostics
+
+The outgoing (`mediaEngine.outgoingSignalingData` → `TelegramClient.
+sendCallSignalingData`) and incoming (`TelegramClient.callSignalingDataFlow`
+→ `mediaEngine.submitIncomingSignalingData`) signalling collectors in
+`DefaultCallsRepository` now log a sanitised, sequence-numbered
+`CallDiagnostics` line per packet (`signal=out|in seq=N bytes=N
+tdlib=ok|fail`), so a future stall can be pinpointed to "no packets ever
+left" vs "packets left but none arrived" vs "packets arrived but native never
+connected" from a `logcat -s AetherCall` capture alone, without needing to
+log payload content.
+
+## The real media-connection-failure root cause (physically proven)
+
+Physical-device testing (Samsung SM-M145F, Android 15, two consenting-peer
+voice call attempts) found the actual reason media never reached CONNECTED,
+separate from the presentation-layer defect above.
+
+### 1. `AudioDescription.input` must be valid JSON — fixed
+
+`NativeTelegramCallMediaEngine`'s voice-call path was skipping
+`NTgCalls.getMediaDevices()` entirely and substituting
+`AudioDescription(MediaSource.DEVICE, 48000, 1, "", false)` — an **empty**
+`input` string — to avoid a suspected crash (see #2 below). This is wrong:
+ntgcalls' native `BaseDeviceModule` constructor
+(`ntgcalls/src/media/devices/base_device_module.cpp`, fetched and read at the
+pinned `a1616e2` commit) does:
+
+```cpp
+device_metadata_ = json::parse(desc->input);
+is_microphone = device_metadata_["is_microphone"];
+```
+
+An empty string is not valid JSON, so this throws
+`MediaDeviceError("Invalid device metadata")` — reproduced verbatim on
+physical hardware (`gen=1 stage=FAILED at=AUDIO_INITIALIZING
+type=io.github.pytgcalls.exceptions.MediaDeviceErrorException msg=Invalid
+device metadata`), every single voice call, immediately after
+`P2P_CONNECTING`. Before this session's presentation-layer fix, this
+immediate failure is exactly what a user would see as an indefinite
+"Connecting…" screen (media stopped itself, signalling was never told, and
+`STOPPED` read back as `CONNECTING`) — the two defects compounded into the
+originally reported symptom.
+
+**Fixed** by giving WebRTC's Android layer a real application `Context` (see
+#2) and calling `NTgCalls.getMediaDevices()` unconditionally again, using the
+real enumerated microphone's `metadata` JSON instead of a synthesized empty
+string. Verified on-device: the retest log shows `AUDIO_INITIALIZING
+devices=1` (successful enumeration) and, for the first time this session,
+real outgoing signalling packets reaching TDLib (`P2P_CONNECTING signal=out
+seq=1 bytes=283 tdlib=ok`, `seq=2 bytes=4013 tdlib=ok`).
+
+### 2. Missing `PeerConnectionFactory.initialize()` — fixed
+
+`NTgCalls.getMediaDevices()`'s Java half
+(`JavaVideoCapturerModule.getDevices()`) calls
+`Camera2Enumerator.isSupported(ApplicationContextProvider.getApplicationContext())`.
+Aether never called `org.webrtc.PeerConnectionFactory.initialize(...)` —
+the standard, required WebRTC-Android step that gives
+`ApplicationContextProvider` its Context — so that call returned `null`,
+and `Context.getSystemService` on a null Context is a fatal
+`NullPointerException` that JNI escalates to a full ART process abort
+(`JNI DETECTED ERROR IN APPLICATION`). Reproduced on physical hardware on a
+video call (accidental first test call), full stack trace rooted at
+`Camera2Enumerator.isSupported` → `JavaVideoCapturerModule.getDevices()` →
+`NTgCalls.getMediaDevices()` → `NativeTelegramCallMediaEngine.
+applyStreamSources`.
+
+ntgcalls' own `JNI_OnLoad` (`targets/android/app/src/main/jni/jni_onload.cpp`)
+only calls `webrtc::InitAndroid`/`webrtc::JVM::Initialize` — native-side JNI
+plumbing. It never calls the Java-side `PeerConnectionFactory.initialize`;
+that remains the embedding app's responsibility, as in every WebRTC Android
+integration.
+
+**Fixed** in `NativeTelegramCallMediaEngine.setContext()`: calls
+`PeerConnectionFactory.initialize(...)` once, with `setNativeLibraryLoader {
+true }` (WebRTC's default loader looks for a separate
+`jingle_peerconnection_so` library that this build does not ship — WebRTC is
+statically linked into `libntgcalls.so`, already loaded via
+`NTgCalls.ping()`).
+
+### 3. NEW boundary found after the above two fixes: native connection-callback JNI classloader crash — NOT YET FIXED
+
+With both of the above fixed, a physical retest voice call progressed
+further than ever previously observed: real signalling flowed (`seq=1`,
+`seq=2` reaching TDLib successfully), then the process crashed again, fatally:
+
+```
+JNI DETECTED ERROR IN APPLICATION: JNI GetMethodID called with pending
+exception java.lang.ClassNotFoundException: Didn't find class
+"io.github.pytgcalls.ConnectionInfo" on path: DexPathList[[directory "."],
+nativeLibraryDirectories=[...]]
+```
+
+The empty `DexPathList[[directory "."]]` (no dex elements at all, versus the
+app's real multi-dex `DexPathList`) is the signature of a JNI `FindClass`
+call made from a **native-created thread with no Java-attached classloader
+context** — a classic Android JNI pitfall. `wrtc/src/interfaces/
+native_connection.cpp` (fetched at the pinned commit) posts connection-state
+work to WebRTC's own internal `network_thread()`/`signaling_thread()` —
+`rtc::Thread` instances created by WebRTC's native threading, never passed
+through Java — which is consistent with this failure mode: such a thread's
+JNI environment cannot resolve app-space classes like
+`io.github.pytgcalls.ConnectionInfo` via a plain `FindClass` unless the
+native code explicitly cached a `ClassLoader` reference obtained from a
+correctly-attached thread and used `ClassLoader.loadClass()` instead.
+
+This is likely an ntgcalls-side (or WebRTC-Android-bridge-side) JNI
+integration gap, not a defect in Aether's Kotlin call orchestration — the
+crash occurs entirely inside the native→Java connection-state callback
+bridge, on a thread Aether's code never creates or touches. It was **not**
+fixed this session: the evidence does not yet point at a safe, verified
+single-variable change, and the task's own instructions are explicit about
+not guessing multi-variable native-level fixes. A plausible, untested
+mitigation worth trying next: proactively touch (`Class.forName(...)`) each
+`io.github.pytgcalls.*` callback-model class from Kotlin early, in case
+ntgcalls caches a global class reference after any successful first lookup.
+
 ## Verification & quality gates
 
 The calling stack is verified across multiple levels:

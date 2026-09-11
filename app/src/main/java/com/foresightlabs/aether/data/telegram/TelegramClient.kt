@@ -4,6 +4,8 @@ import android.app.Application
 import android.os.Build
 import androidx.core.content.edit
 import com.foresightlabs.aether.BuildConfig
+import com.foresightlabs.aether.calls.media.CallDiagnostics
+import com.foresightlabs.aether.calls.media.CallStage
 import com.foresightlabs.aether.domain.calls.MediaConnectionState
 import com.foresightlabs.aether.domain.messages.MessageCapabilities
 import com.foresightlabs.aether.domain.messages.MessageMotionEvent
@@ -131,6 +133,23 @@ open class TelegramClient(private val application: Application) {
     private val _callSignalingDataFlow = MutableSharedFlow<TdApi.UpdateNewCallSignalingData>(extraBufferCapacity = 16)
     val callSignalingDataFlow: Flow<TdApi.UpdateNewCallSignalingData> = _callSignalingDataFlow.asSharedFlow()
 
+    /**
+     * Forensic counters for the incoming call-signalling path, sanitised
+     * (call id, byte length and sequence only -- never payload bytes).
+     * Each is incremented at a distinct boundary so a stall can be
+     * pinpointed to the exact hop that lost it, rather than inferred from
+     * "zero packets reached the repository" alone:
+     *
+     *   A [rawSignalingInCounter]  -- TDLib's own update callback (before dispatchUpdate)
+     *   B [dispatchedSignalingInCounter] -- dispatchUpdate scheduled handleUpdate's coroutine
+     *   C [enteredSignalingInCounter] -- handleUpdate actually reached the UpdateNewCallSignalingData branch
+     *   D [publishedSignalingInCounter] -- _callSignalingDataFlow.tryEmit(update) returned true
+     */
+    private val rawSignalingInCounter = java.util.concurrent.atomic.AtomicLong(0)
+    private val dispatchedSignalingInCounter = java.util.concurrent.atomic.AtomicLong(0)
+    private val enteredSignalingInCounter = java.util.concurrent.atomic.AtomicLong(0)
+    private val publishedSignalingInCounter = java.util.concurrent.atomic.AtomicLong(0)
+
     var notificationManager: com.foresightlabs.aether.data.notifications.AetherNotificationManager? = null
 
     @Volatile private var myUserId: Long = 0L
@@ -181,7 +200,13 @@ open class TelegramClient(private val application: Application) {
             } catch (_: Client.ExecutionException) {
             }
             client = Client.create(
-                { update -> dispatchUpdate(update) },
+                { update ->
+                    if (update is TdApi.UpdateNewCallSignalingData) {
+                        val seq = rawSignalingInCounter.incrementAndGet()
+                        CallDiagnostics.stage(0L, CallStage.P2P_CONNECTING, "cp=A raw_tdlib_callback callId=${update.callId} seq=$seq bytes=${update.data?.size ?: -1}")
+                    }
+                    dispatchUpdate(update)
+                },
                 { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib update handler error", error) },
                 { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib handler error", error) }
             )
@@ -258,6 +283,10 @@ open class TelegramClient(private val application: Application) {
     )
 
     private fun dispatchUpdate(update: TdApi.Object) {
+        if (update is TdApi.UpdateNewCallSignalingData) {
+            val seq = dispatchedSignalingInCounter.incrementAndGet()
+            CallDiagnostics.stage(0L, CallStage.P2P_CONNECTING, "cp=B dispatched callId=${update.callId} seq=$seq")
+        }
         if (update is TdApi.UpdateNotificationGroup ||
             update is TdApi.UpdateNotification ||
             update is TdApi.UpdateActiveNotifications
@@ -1566,7 +1595,21 @@ open class TelegramClient(private val application: Application) {
             is TdApi.CallStateExchangingKeys -> com.foresightlabs.aether.domain.model.CallStateEnum.EXCHANGING_KEYS to null
             is TdApi.CallStateReady -> com.foresightlabs.aether.domain.model.CallStateEnum.READY to null
             is TdApi.CallStateHangingUp -> com.foresightlabs.aether.domain.model.CallStateEnum.HANGING_UP to null
-            is TdApi.CallStateDiscarded -> com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED to null
+            is TdApi.CallStateDiscarded -> {
+                // The reason TDLib itself gives for the call ending --
+                // Declined/Missed/HungUp/Disconnected/Empty -- is the one
+                // piece of evidence that tells us whether Aether, the local
+                // user, or the remote peer's own client/session ended the
+                // call, versus a network-level disconnect neither side
+                // triggered. Sanitised: this is a TDLib enum type name, never
+                // payload or personal data.
+                CallDiagnostics.stage(
+                    0L,
+                    CallStage.TEARDOWN,
+                    "tdlibDiscardReason= ${state.reason?.let { it::class.simpleName }} needRating=${state.needRating} needDebugInfo=${state.needDebugInformation}"
+                )
+                com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED to null
+            }
             is TdApi.CallStateError -> com.foresightlabs.aether.domain.model.CallStateEnum.ERROR to TdErrors.userMessage(state.error)
             else -> com.foresightlabs.aether.domain.model.CallStateEnum.PENDING to null
         }
@@ -2406,7 +2449,26 @@ open class TelegramClient(private val application: Application) {
             is TdApi.UpdateNotification -> notificationManager?.onUpdateNotification(update)
             is TdApi.UpdateActiveNotifications -> notificationManager?.onUpdateActiveNotifications(update)
             is TdApi.UpdateCall -> handleCallUpdate(update.call)
-            is TdApi.UpdateNewCallSignalingData -> _callSignalingDataFlow.tryEmit(update)
+            is TdApi.UpdateNewCallSignalingData -> {
+                val enteredSeq = enteredSignalingInCounter.incrementAndGet()
+                CallDiagnostics.stage(0L, CallStage.P2P_CONNECTING, "cp=C entered_handleUpdate callId=${update.callId} seq=$enteredSeq")
+                val published = _callSignalingDataFlow.tryEmit(update)
+                if (published) {
+                    val publishedSeq = publishedSignalingInCounter.incrementAndGet()
+                    CallDiagnostics.stage(0L, CallStage.P2P_CONNECTING, "cp=D published_ok callId=${update.callId} seq=$publishedSeq")
+                } else {
+                    // tryEmit only returns false when the shared flow's total
+                    // buffer (replay + extraBufferCapacity) is full -- with no
+                    // active collector this still succeeds into the buffer,
+                    // so a false here means real, provable backpressure loss,
+                    // not "no one was listening yet".
+                    CallDiagnostics.failure(
+                        0L,
+                        CallStage.P2P_CONNECTING,
+                        IllegalStateException("cp=D published_FAILED callId=${update.callId} tryEmit returned false -- signalling buffer full/packet dropped")
+                    )
+                }
+            }
             is TdApi.UpdateAuthorizationState -> onAuth(update.authorizationState)
             is TdApi.UpdateConnectionState -> {
                 val previous = _connection.value
