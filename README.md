@@ -1,142 +1,157 @@
+<p align="center">
+  <img src="play-console-assets/icon/aether-play-icon-512.png" width="112" alt="Aether app icon" />
+</p>
+
 <h1 align="center">Aether</h1>
 
 <p align="center">
-  <strong>A quieter way to Telegram.</strong>
+  <strong>A calmer Telegram experience, built around people.</strong>
 </p>
 
 <p align="center">
-  A personal messenger for Android, built by <strong>Foresight Labs</strong> on Telegram's official TDLib.
+  Flagship product of <strong>Foresight Labs</strong> · Android · Powered by Telegram's official TDLib
 </p>
 
 <p align="center">
-  <sub>Flagship product · Closed testing · Android</sub>
+  <img alt="Android" src="https://img.shields.io/badge/Android-Closed%20Testing-3DDC84?style=for-the-badge&logo=android&logoColor=white" />
+  <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-Compose-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white" />
+  <img alt="TDLib" src="https://img.shields.io/badge/Telegram-TDLib-2AABEE?style=for-the-badge&logo=telegram&logoColor=white" />
+  <img alt="ABI" src="https://img.shields.io/badge/ABI-arm64--v8a-111318?style=for-the-badge" />
+</p>
+
+<p align="center">
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#project-status">Status</a> ·
+  <a href="#build-from-source">Build</a> ·
+  <a href="#architecture">Architecture</a>
 </p>
 
 <br>
 
 <p align="center">
-  <img src="docs/screenshots/aether-home.png" width="47%" alt="Aether Home">
-  &nbsp;
-  <img src="docs/screenshots/aether-conversation.png" width="47%" alt="Aether Conversation">
+  <img src="play-console-assets/feature-graphic/aether-feature-graphic-1024x500.png" width="100%" alt="Aether feature graphic" />
 </p>
 
-<br>
+> [!NOTE]
+> Aether is currently in **closed testing** and active development. The repository reflects a product that is still being refined, measured and validated on real Android devices.
 
-## Conversation, without the noise
+## About
 
-Aether is an independent Telegram client built around one idea: **personal conversation should be the product**.
+Aether is an independent Android client for Telegram focused on **personal conversation rather than feature density**.
 
-Telegram provides the account, network, synchronization, and protocol through TDLib. Aether builds its own experience above it — its own interaction model, motion, hierarchy, atmosphere, and visual language.
+Telegram provides the account, network, synchronization and protocol through TDLib. Aether builds its own interaction model, visual language, motion, privacy surfaces and navigation above it.
 
-It is deliberately not a reproduction of every Telegram surface.
+It is not intended to reproduce every Telegram surface. Groups, channels and forum topics remain reachable, but Aether is designed first around people and direct conversations.
 
-Aether is designed around people first.
+## Screenshots
 
-<br>
+<p align="center">
+  <img src="docs/screenshots/aether-home.png" width="48%" alt="Aether Home" />
+  <img src="docs/screenshots/aether-conversation.png" width="48%" alt="Aether Conversation" />
+</p>
 
-## The Aether experience
+<p align="center">
+  <img src="docs/screenshots/aether-attachments.png" width="48%" alt="Aether attachments" />
+  <img src="docs/screenshots/aether-forwarding.png" width="48%" alt="Aether forwarding" />
+</p>
 
-<table>
-<tr>
-<td width="50%" valign="top">
+## Features
 
-### One continuous space
+| Area | What Aether currently provides |
+| --- | --- |
+| **Messaging** | Direct chats, replies, quotes, edits, forwarding, selection and message actions |
+| **Media** | Photos, video, documents, voice notes, video notes, stickers, emoji and GIFs |
+| **Search** | Global search and in-conversation search |
+| **Sharing** | Contacts, static location and venue sharing |
+| **Stories** | Telegram stories presented through **Pulse** |
+| **Privacy** | Local App Lock with passcode and supported Android biometrics |
+| **Interface** | Dark atmospheric UI, living glass, equation-driven geometry and contextual motion |
+| **Conversation UX** | Persistent rear **Curtain** for composer, attachments, forwarding and contextual actions |
+| **Atmosphere** | Time-aware styling, optional approximate-location weather adaptation and dormant offline state |
 
-Conversation is treated as a scene rather than a stack of unrelated screens.
+### The Curtain
 
-Attachments, forwarding, selection, reply/edit states, and other contextual actions emerge from one persistent rear surface: the **Curtain**.
-
-</td>
-<td width="50%" valign="top">
-
-### Living atmosphere
-
-Graphite, lavender light, living glass, and equation-driven geometry form a quiet environment around conversation.
-
-When connectivity disappears, that environment becomes dormant: the geometry remains, but its light and neural motion fade away.
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### Glass that belongs to the scene
-
-Aether's glass has no artificial tint of its own.
+Aether treats Conversation as one continuous scene. Composer, attachments, forwarding, selection and other bottom interactions are states of a single persistent rear surface rather than unrelated sheets stacked over the UI.
 
 > **The glass has no color. The environment behind the glass gives it color.**
 
-</td>
-<td width="50%" valign="top">
+That rule drives Aether's frosted surfaces: the material reacts to the scene behind it instead of carrying a decorative tint of its own.
 
-### Privacy where it matters
+## Project status
 
-Permissions are requested contextually. Aether also provides a local App Lock with passcode and supported Android biometrics without replacing Telegram authentication.
+| Capability | Status |
+| --- | --- |
+| Personal messaging | ✅ Active |
+| Media / documents | ✅ Active |
+| Search | ✅ Active |
+| Stories / Pulse | ✅ Active |
+| App Lock / biometrics | ✅ Active |
+| Tablet adaptation | 🛠 In refinement |
+| Performance / media latency | 🛠 In active optimization |
+| Voice calling | ⏸ Held until real media transport is complete |
+| Continuous live location | ⏸ Held |
+| Device contact-book sync | ⏸ Held |
 
-</td>
-</tr>
-</table>
-
-<br>
-
-<p align="center">
-  <img src="docs/screenshots/aether-attachments.png" width="47%" alt="Attachments in the Curtain">
-  &nbsp;
-  <img src="docs/screenshots/aether-forwarding.png" width="47%" alt="Forwarding in the Curtain">
-</p>
-
-<br>
-
-## Built for personal messaging
-
-Aether currently focuses on direct communication: replies, quotes, editing, forwarding, selection, search, photos and video, documents, voice and video notes, stickers, emoji, GIFs, contacts, static location and venue sharing, and Telegram stories through **Pulse**.
-
-Groups, channels, and forum topics remain reachable because they are part of the Telegram account underneath Aether, but they are not the center of the product.
-
-Some capabilities remain intentionally held while they are completed and validated, including real voice/video calling media transport, continuous live location, and device contact-book syncing.
-
-Aether does not present unfinished functionality as finished functionality.
-
-<br>
+Aether does not expose unfinished functionality as though it were complete.
 
 ## Design language
 
 Aether is dark by design.
 
-`#090A0D` base · `#111318` graphite · `#181A21` raised graphite · `#747291` lavender · `#A5A3B7` mist
+| Role | Color |
+| --- | --- |
+| Base | `#090A0D` |
+| Graphite | `#111318` |
+| Raised graphite | `#181A21` |
+| Lavender | `#747291` |
+| Mist | `#A5A3B7` |
 
-The interface favors spatial continuity over conventional page transitions, rounded mathematical forms over decorative noise, and restrained motion over constant animation.
+The interface favors spatial continuity, rounded mathematical forms, restrained motion and a quiet graphite/lavender atmosphere.
 
-<br>
+## Architecture
 
-## Underneath
+Aether is built with:
 
-Aether is built with **Kotlin**, **Jetpack Compose**, and Telegram's official **TDLib Java/JNI bindings**.
+- **Kotlin**
+- **Jetpack Compose**
+- Telegram's official **TDLib Java/JNI bindings**
+- Aether's own UI, state, navigation and interaction architecture
 
-TDLib owns Telegram connectivity, local database state, synchronization, files, and protocol communication. Aether owns the application experience above it.
+TDLib owns Telegram connectivity, synchronization, local database state, files and protocol communication. Aether owns the application experience above it.
+
+Useful project references:
+
+- [TDLIB.md](TDLIB.md) — pinned TDLib artifact details
+- [Push notification architecture](docs/architecture/push-notifications.md)
+- [Device validation notes](DEVICE_VALIDATION.md)
 
 Release builds currently target **arm64-v8a** only.
 
-See [TDLIB.md](TDLIB.md) for the pinned TDLib artifacts and [push-notifications.md](docs/architecture/push-notifications.md) for notification architecture.
+## Build from source
 
 <details>
-<summary><strong>Build Aether</strong></summary>
+<summary><strong>Show build requirements</strong></summary>
 
 <br>
 
-Requirements:
+### Requirements
 
 - Android Studio
 - JDK 11 or newer
 - Android SDK 36
 - Telegram API credentials from [my.telegram.org](https://my.telegram.org)
-- the vendored TDLib artifacts described in [TDLIB.md](TDLIB.md)
+- Vendored TDLib Java/JNI artifacts described in [TDLIB.md](TDLIB.md)
 
-Place local Telegram API values in the untracked `local.properties` file. Never commit credentials or signing material.
+Place local Telegram API values in the untracked `local.properties` file.
+
+Never commit Telegram credentials, Firebase configuration containing project-specific values, or signing material.
 
 For FCM-backed background notifications, provide the untracked `app/google-services.json` and configure the corresponding Firebase credentials for the Telegram application.
 
-```shell
+### Common checks
+
+```bash
 ./gradlew testDebugUnitTest
 ./gradlew assembleDebug
 ./gradlew lintDebug
@@ -146,20 +161,26 @@ Release signing is configured outside the repository.
 
 </details>
 
-<br>
+## Privacy and Telegram
+
+Aether connects to Telegram through TDLib and does not alter Telegram's encryption model.
+
+Foresight Labs does not operate Telegram infrastructure and does not run servers for Aether's Telegram traffic. Telegram account data, messages and media remain part of Telegram's system.
+
+Permissions are requested contextually where practical. Weather adaptation uses approximate location only and falls back gracefully when location or network access is unavailable.
 
 ## Independence
 
-Aether is an independent, unofficial Telegram client. It is not affiliated with, sponsored by, or endorsed by Telegram.
+Aether is an **independent, unofficial Telegram client**.
 
-Telegram provides the platform Aether connects to. Foresight Labs does not operate Telegram infrastructure and does not alter Telegram's encryption model.
+It is not affiliated with, sponsored by, or endorsed by Telegram. Telegram provides the platform and protocol Aether connects to; Foresight Labs does not own or represent Telegram technology.
 
-<br>
+## Product
 
-## Identity
-
-**Aether** · Foresight Labs · Created by Aritra Saha  
-`com.foresightlabs.aether` · Android · Closed testing
+**Aether**  
+Flagship product of **Foresight Labs**  
+Created by **Aritra Saha**  
+Application ID: `com.foresightlabs.aether`
 
 <p align="center">
   <br>
