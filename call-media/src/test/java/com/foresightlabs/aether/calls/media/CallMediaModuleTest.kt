@@ -318,4 +318,170 @@ class CallMediaModuleTest {
         assertEquals(null, invocations[0].camera)
         assertEquals(null, invocations[0].screen)
     }
+
+    // =========================================================================
+    // startCall Lifecycle Cleanup on Startup Failure Tests
+    // =========================================================================
+
+    private fun createSampleConfig(callId: Long = 1001L): CallMediaConfig = CallMediaConfig(
+        callId = callId,
+        isOutgoing = true,
+        videoCaptureEnabled = false,
+        encryptionKey = ByteArray(32),
+        allowP2p = false,
+        servers = emptyList(),
+        configJson = "{}",
+        customParameters = "{}",
+        protocol = CallProtocolInfo()
+    )
+
+    private class TestCallback : NativeCallEngineCallback {
+        var lastState: Int? = null
+        var lastError: String? = null
+        override fun onConnectionStateChanged(stateOrdinal: Int) { lastState = stateOrdinal }
+        override fun onSignalBarsChanged(bars: Int) {}
+        override fun onAudioLevelsChanged(localLevel: Float, remoteLevel: Float) {}
+        override fun onError(error: String) { lastError = error }
+        override fun onOutgoingSignalingData(data: ByteArray) {}
+        override fun onVideoFrame(frame: DecodedVideoFrame) {}
+    }
+
+    @Test
+    fun startCall_whenCreateP2pCallFails_doesNotInvokeNativeStop() {
+        val engine = NativeTelegramCallMediaEngine()
+        val callback = TestCallback()
+        engine.init(callback)
+        NativeTelegramCallMediaEngine.resetStateForTesting()
+
+        var stopInvokedCount = 0
+        val config = createSampleConfig(callId = 1001L)
+
+        NativeTelegramCallMediaEngine.startCallForTesting(
+            config = config,
+            createSession = { throw RuntimeException("createP2pCall simulated failure") },
+            stopSession = { stopInvokedCount++ }
+        )
+
+        assertEquals("Native stop must NOT be called when session creation itself failed", 0, stopInvokedCount)
+        assertEquals("activeCallId must be cleared", null, NativeTelegramCallMediaEngine.getActiveCallIdForTesting())
+        assertEquals(MediaConnectionState.FAILED.ordinal, callback.lastState)
+        assertEquals("createP2pCall simulated failure", callback.lastError)
+    }
+
+    @Test
+    fun startCall_whenSkipExchangeThrows_invokesNativeStopExactlyOnce() {
+        val engine = NativeTelegramCallMediaEngine()
+        val callback = TestCallback()
+        engine.init(callback)
+        NativeTelegramCallMediaEngine.resetStateForTesting()
+
+        val stoppedCallIds = mutableListOf<Long>()
+        val config = createSampleConfig(callId = 2002L)
+
+        NativeTelegramCallMediaEngine.startCallForTesting(
+            config = config,
+            createSession = { /* success */ },
+            skipExchange = { _, _, _ -> throw RuntimeException("skipExchange simulated failure") },
+            stopSession = { stoppedCallIds.add(it) }
+        )
+
+        assertEquals("Native stop must be invoked exactly once on startup failure after session created", 1, stoppedCallIds.size)
+        assertEquals(2002L, stoppedCallIds[0])
+        assertEquals("activeCallId must be cleared", null, NativeTelegramCallMediaEngine.getActiveCallIdForTesting())
+        assertEquals(MediaConnectionState.FAILED.ordinal, callback.lastState)
+        assertEquals("skipExchange simulated failure", callback.lastError)
+    }
+
+    @Test
+    fun startCall_whenApplyStreamSourcesReturnsFalse_invokesNativeStopExactlyOnce() {
+        val engine = NativeTelegramCallMediaEngine()
+        val callback = TestCallback()
+        engine.init(callback)
+        NativeTelegramCallMediaEngine.resetStateForTesting()
+
+        val stoppedCallIds = mutableListOf<Long>()
+        val config = createSampleConfig(callId = 3003L)
+
+        NativeTelegramCallMediaEngine.startCallForTesting(
+            config = config,
+            createSession = { /* success */ },
+            skipExchange = { _, _, _ -> /* success */ },
+            applySources = { _, _ -> false }, // sources cannot be acquired
+            stopSession = { stoppedCallIds.add(it) }
+        )
+
+        assertEquals("Native stop must be invoked exactly once when stream sources fail", 1, stoppedCallIds.size)
+        assertEquals(3003L, stoppedCallIds[0])
+        assertEquals("activeCallId must be cleared", null, NativeTelegramCallMediaEngine.getActiveCallIdForTesting())
+        assertEquals(MediaConnectionState.FAILED.ordinal, callback.lastState)
+    }
+
+    @Test
+    fun startCall_whenConnectP2pThrows_invokesNativeStopExactlyOnce() {
+        val engine = NativeTelegramCallMediaEngine()
+        val callback = TestCallback()
+        engine.init(callback)
+        NativeTelegramCallMediaEngine.resetStateForTesting()
+
+        val stoppedCallIds = mutableListOf<Long>()
+        val config = createSampleConfig(callId = 4004L)
+
+        NativeTelegramCallMediaEngine.startCallForTesting(
+            config = config,
+            createSession = { /* success */ },
+            skipExchange = { _, _, _ -> /* success */ },
+            applySources = { _, _ -> true },
+            connectP2p = { _, _, _, _, _ -> throw RuntimeException("connectP2p simulated failure") },
+            stopSession = { stoppedCallIds.add(it) }
+        )
+
+        assertEquals("Native stop must be invoked exactly once when connectP2p fails", 1, stoppedCallIds.size)
+        assertEquals(4004L, stoppedCallIds[0])
+        assertEquals("activeCallId must be cleared", null, NativeTelegramCallMediaEngine.getActiveCallIdForTesting())
+        assertEquals(MediaConnectionState.FAILED.ordinal, callback.lastState)
+        assertEquals("connectP2p simulated failure", callback.lastError)
+    }
+
+    @Test
+    fun startCall_whenStopThrowsDuringCleanup_doesNotCrashAndStillCleansState() {
+        val engine = NativeTelegramCallMediaEngine()
+        val callback = TestCallback()
+        engine.init(callback)
+        NativeTelegramCallMediaEngine.resetStateForTesting()
+
+        val config = createSampleConfig(callId = 5005L)
+
+        NativeTelegramCallMediaEngine.startCallForTesting(
+            config = config,
+            createSession = { /* success */ },
+            skipExchange = { _, _, _ -> throw RuntimeException("Trigger failure") },
+            stopSession = { throw RuntimeException("Simulated stop failure in native engine") }
+        )
+
+        assertEquals("activeCallId must be cleared even if native stop throws", null, NativeTelegramCallMediaEngine.getActiveCallIdForTesting())
+        assertEquals(MediaConnectionState.FAILED.ordinal, callback.lastState)
+    }
+
+    @Test
+    fun startCall_whenStartupSucceeds_doesNotInvokeNativeStop() {
+        val engine = NativeTelegramCallMediaEngine()
+        val callback = TestCallback()
+        engine.init(callback)
+        NativeTelegramCallMediaEngine.resetStateForTesting()
+
+        var stopInvokedCount = 0
+        val config = createSampleConfig(callId = 6006L)
+
+        NativeTelegramCallMediaEngine.startCallForTesting(
+            config = config,
+            createSession = { /* success */ },
+            skipExchange = { _, _, _ -> /* success */ },
+            applySources = { _, _ -> true },
+            connectP2p = { _, _, _, _, _ -> /* success */ },
+            stopSession = { stopInvokedCount++ }
+        )
+
+        assertEquals("Native stop must NOT be called on successful startup", 0, stopInvokedCount)
+        assertEquals("activeCallId must remain set to the callId", 6006L, NativeTelegramCallMediaEngine.getActiveCallIdForTesting())
+    }
 }

@@ -8,13 +8,17 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Zero-Telegram JNI regression probe.
+ * Aether in-app JNI smoke test.
  *
  * Verifies that the native library (libntgcalls.so) loaded via NTgCalls
  * properly retains WebRTC's jni_zero exported entry points (such as
- * `Java_J_N_MM6G5xGU` for SoftwareVideoEncoderFactory).
+ * `Java_J_N_MM6G5xGU` for SoftwareVideoEncoderFactory) inside Aether's
+ * runtime process.
  *
- * Runs completely isolated from Telegram network, servers, and credentials.
+ * Note: Historical zero-Telegram isolated A/B evidence (stock UnsatisfiedLinkError
+ * vs. fixed success) was executed via standalone off-repo probe modules
+ * (`com.probe.stock` and `com.probe.fixed`). This in-app smoke test runs within
+ * the Aether test process to confirm that symbols remain loadable in Aether.
  */
 @RunWith(AndroidJUnit4::class)
 class ZeroTelegramJniRegressionProbeTest {

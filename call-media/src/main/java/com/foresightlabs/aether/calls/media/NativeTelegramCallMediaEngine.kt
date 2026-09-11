@@ -74,6 +74,26 @@ class NativeTelegramCallMediaEngine {
             streamSourceSetter: (Long, StreamMode, MediaDescription) -> Unit,
             cameraSelector: ((MediaDevices, Boolean) -> DeviceInfo?)? = null
         ): Boolean = Shared.applyStreamSourcesInternal(callId, cameraEnabled, deviceProvider, streamSourceSetter, cameraSelector)
+
+        @VisibleForTesting
+        internal fun startCallForTesting(
+            config: CallMediaConfig,
+            createSession: (Long) -> Unit = {},
+            skipExchange: (Long, ByteArray, Boolean) -> Unit = { _, _, _ -> },
+            applySources: (Long, Boolean) -> Boolean = { _, _ -> true },
+            connectP2p: (Long, List<RTCServer>, List<String>, Boolean, String?) -> Unit = { _, _, _, _, _ -> },
+            stopSession: (Long) -> Unit = {}
+        ) = Shared.startCallInternal(config, createSession, skipExchange, applySources, connectP2p, stopSession)
+
+        @VisibleForTesting
+        internal fun getActiveCallIdForTesting(): Long? = Shared.activeCallId
+
+        @VisibleForTesting
+        internal fun resetStateForTesting() {
+            Shared.activeCallId = null
+            Shared.rendererEnabled = false
+            Shared.rendererAttached = false
+        }
     }
 
     /** Process-wide native engine state. See the class doc above for why this is shared. */
@@ -87,7 +107,7 @@ class NativeTelegramCallMediaEngine {
         @Volatile private var generationCounter: Long = 0L
 
         @Volatile var callback: NativeCallEngineCallback? = null
-        @Volatile private var activeCallId: Long? = null
+        @Volatile var activeCallId: Long? = null
         @Volatile private var activeGeneration: Long = 0L
         @Volatile private var activeIsVideo: Boolean = false
         @Volatile private var activeCameraIsFront: Boolean = true
@@ -101,8 +121,8 @@ class NativeTelegramCallMediaEngine {
          * session rather than trusted. A session that cannot prove it degrades to
          * audio instead of rendering garbage or reading out of bounds.
          */
-        @Volatile private var rendererEnabled: Boolean = false
-        @Volatile private var rendererAttached: Boolean = false
+        @Volatile var rendererEnabled: Boolean = false
+        @Volatile var rendererAttached: Boolean = false
         @Volatile private var malformedFrameStreak: Int = 0
         @Volatile private var lastFrameAtMillis: Long = 0L
 
@@ -294,14 +314,34 @@ class NativeTelegramCallMediaEngine {
         }
 
         fun startCall(config: CallMediaConfig) {
-            val generation = ++generationCounter
             val ntg = engine()
             if (ntg == null) {
                 callback?.onConnectionStateChanged(MediaConnectionState.UNAVAILABLE.ordinal)
                 callback?.onError("Official Telegram call transport is not available on this device/build")
                 return
             }
+            startCallInternal(
+                config = config,
+                createSession = { ntg.createP2pCall(it) },
+                skipExchange = { id, key, out -> ntg.skipExchange(id, key, out) },
+                applySources = { id, cam -> applyStreamSources(ntg, id, cam) },
+                connectP2p = { id, servers, versions, allowP2p, customParams ->
+                    ntg.connectP2p(id, servers, versions, allowP2p, customParams)
+                },
+                stopSession = { ntg.stop(it) }
+            )
+        }
 
+        @VisibleForTesting
+        internal fun startCallInternal(
+            config: CallMediaConfig,
+            createSession: (Long) -> Unit,
+            skipExchange: (Long, ByteArray, Boolean) -> Unit,
+            applySources: (Long, Boolean) -> Boolean,
+            connectP2p: (Long, List<RTCServer>, List<String>, Boolean, String?) -> Unit,
+            stopSession: (Long) -> Unit
+        ) {
+            val generation = ++generationCounter
             activeCallId = config.callId
             activeGeneration = generation
             activeIsVideo = config.videoCaptureEnabled
@@ -312,9 +352,11 @@ class NativeTelegramCallMediaEngine {
             lastFrameAtMillis = 0L
             callback?.onConnectionStateChanged(MediaConnectionState.INITIALIZING.ordinal)
 
+            var nativeSessionCreated = false
             try {
-                ntg.createP2pCall(config.callId)
-                ntg.skipExchange(config.callId, config.encryptionKey, config.isOutgoing)
+                createSession(config.callId)
+                nativeSessionCreated = true
+                skipExchange(config.callId, config.encryptionKey, config.isOutgoing)
                 CallDiagnostics.stage(generation, CallStage.MEDIA_SESSION_CREATED, "outgoing=${config.isOutgoing}")
 
                 val rtcServers = config.servers.map { server ->
@@ -332,18 +374,19 @@ class NativeTelegramCallMediaEngine {
                     )
                 }
                 CallDiagnostics.stage(generation, CallStage.P2P_CONNECTING, "servers=${rtcServers.size} p2p=${config.allowP2p}")
+
                 // ntgcalls expects capture sources to exist before transport
                 // negotiation starts. Starting P2P first creates a race where
                 // the CONNECTED callback can arrive while the native session
                 // still has no audio source; that was the connect-time crash
                 // boundary in the interrupted implementation.
-                if (!applyStreamSources(ntg, config.callId, cameraEnabled = config.videoCaptureEnabled)) {
-                    activeCallId = null
-                    rendererEnabled = false
+                if (!applySources(config.callId, config.videoCaptureEnabled)) {
+                    cleanupFailedStartup(config.callId, generation, nativeSessionCreated, stopSession)
                     callback?.onConnectionStateChanged(MediaConnectionState.FAILED.ordinal)
                     return
                 }
-                ntg.connectP2p(
+
+                connectP2p(
                     config.callId,
                     rtcServers,
                     config.protocol.libraryVersions,
@@ -353,11 +396,28 @@ class NativeTelegramCallMediaEngine {
 
             } catch (e: Throwable) {
                 CallDiagnostics.failure(generation, CallStage.MEDIA_SESSION_CREATED, e)
-                activeCallId = null
-                rendererEnabled = false
+                cleanupFailedStartup(config.callId, generation, nativeSessionCreated, stopSession)
                 callback?.onConnectionStateChanged(MediaConnectionState.FAILED.ordinal)
                 callback?.onError(e.message ?: "Call transport failed to start")
             }
+        }
+
+        private fun cleanupFailedStartup(
+            callId: Long,
+            generation: Long,
+            nativeSessionCreated: Boolean,
+            stopSession: (Long) -> Unit
+        ) {
+            if (nativeSessionCreated) {
+                try {
+                    stopSession(callId)
+                } catch (t: Throwable) {
+                    CallDiagnostics.failure(generation, CallStage.TEARDOWN, t)
+                }
+            }
+            activeCallId = null
+            rendererEnabled = false
+            rendererAttached = false
         }
 
         /**

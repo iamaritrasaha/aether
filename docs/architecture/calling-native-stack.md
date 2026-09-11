@@ -135,5 +135,5 @@ In `NativeTelegramCallMediaEngine`:
 The calling stack is verified across multiple levels:
 - **Static JNI proof**: 191/191 `Java_J_N_*` symbols matched between `webrtc.jar` and `libntgcalls.so` dynamic symbol table.
 - **ELF 16 KB page alignment**: Verified via `readelf -l` (all `PT_LOAD` segments aligned to `0x4000`).
-- **Zero-Telegram JNI regression probe**: `ZeroTelegramJniRegressionProbeTest` executed on physical `arm64-v8a` hardware (Android 15), verifying native library load, protocol query, and WebRTC `SoftwareVideoEncoderFactory` instantiation (`J.N.MM6G5xGU`).
-- **Contract tests**: Complete unit test suite in `CallMediaModuleTest` validating stream source failure boundaries, video degradation, double-start protection, and late-callback isolation.
+- **Isolated JNI regression probe**: Standalone off-repo probe (`com.probe.stock` vs `com.probe.fixed`) executed on physical `arm64-v8a` hardware (Android 15), reproducing `UnsatisfiedLinkError` on stock rc02 and verifying successful codec creation on fixed AAR. In-app smoke check is covered by `ZeroTelegramJniRegressionProbeTest`.
+- **Contract tests**: Complete unit test suite in `CallMediaModuleTest` validating stream source failure boundaries, video degradation, audio fallback, and native-session cleanup on startup failures.
