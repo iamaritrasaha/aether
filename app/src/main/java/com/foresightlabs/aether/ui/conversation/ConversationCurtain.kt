@@ -47,7 +47,11 @@ enum class CurtainState {
     /** Reviewing one picked photo/video -- caption-free preview plus the View once toggle -- before it sends. */
     MEDIA_PREVIEW,
     /** Reviewing what another application shared into this conversation, before it sends. */
-    SHARE_PREVIEW;
+    SHARE_PREVIEW,
+    /** Confirming a pending delete (from the selection dock or the message context menu) before it's sent to TDLib. */
+    DELETE_CONFIRM,
+    /** An outgoing, ringing, connecting, active or reconnecting call with this conversation's person. */
+    CALL;
 
     /** True for every state that exposes more Curtain than the resting composer. */
     val isExpanded: Boolean get() = this != COMPOSER

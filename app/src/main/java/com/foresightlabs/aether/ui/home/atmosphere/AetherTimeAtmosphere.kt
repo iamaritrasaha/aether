@@ -1,8 +1,10 @@
 package com.foresightlabs.aether.ui.home.atmosphere
 
+import android.os.SystemClock
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -18,15 +20,16 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
@@ -35,10 +38,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.foresightlabs.aether.data.network.AetherConnectivityState
 import com.foresightlabs.aether.ui.design.AetherFloatingHeaderDefaults
 import com.foresightlabs.aether.ui.design.AetherFrostState
 import com.foresightlabs.aether.ui.design.aetherFrostSource
 import com.foresightlabs.aether.ui.design.isReducedMotionEnabled
+import com.foresightlabs.aether.ui.theme.AtmosphereMode
+import com.foresightlabs.aether.ui.theme.LocalAppThemeState
+import com.foresightlabs.aether.ui.theme.TimeAtmospherePalette
 import kotlinx.coroutines.delay
 import java.util.TimeZone
 import kotlin.math.cos
@@ -58,20 +65,18 @@ enum class AtmosphereExpression {
     CONVERSATION
 }
 
+/** CompositionLocal holding the session seed for Hero geometry. */
+val LocalHeroSeed = staticCompositionLocalOf { HERO_GEOMETRY_SEED }
+
+/** CompositionLocal holding process-level connectivity state for Aether environment. */
+val LocalAetherConnectivityState = staticCompositionLocalOf { AetherConnectivityState.ONLINE }
+
 /**
  * The canonical time-of-day atmosphere layer, shared by Home and Conversation.
  *
- * Renders a purely time-of-day-based generative geometry atmosphere that interpolates smoothly across:
- * PRE_DAWN -> MORNING -> NOON -> AFTERNOON -> EVENING -> NIGHT -> PRE_DAWN.
- *
- * Features an Aether-specific visual language based on three depth layers of slowly moving geometric
- * trajectories and architectural line structures (distant, middle, foreground). [expression] scales
- * the geometry's density, opacity, glow and motion speed without ever touching the underlying
- * [timeAtmosphere] state or its palette -- Home and Conversation stay two views of one environment.
- *
- * Performance isolated:
- * - Time parameters sampled periodically (30s timer & lifecycle boundaries) without per-frame recomposition.
- * - Animation drift isolated to the draw phase inside Canvas with zero per-frame heap object allocations.
+ * Renders a purely time-of-day-based generative mathematical geometry atmosphere.
+ * Features an equation-driven visual architecture derived from mathematical curve compositions
+ * (circles, ellipses, rose curves, Lissajous, trochoids) with thicker layered strokes.
  */
 @Composable
 fun AetherTimeAtmosphere(
@@ -80,23 +85,34 @@ fun AetherTimeAtmosphere(
     enableAmbientMotion: Boolean = true,
     expression: AtmosphereExpression = AtmosphereExpression.HOME,
     frostState: AetherFrostState? = null,
-    timeAtmosphere: TimeAtmosphere = rememberCurrentTimeAtmosphere()
+    timeAtmosphere: TimeAtmosphere = rememberCurrentTimeAtmosphere(),
+    seed: Long = LocalHeroSeed.current,
+    connectivityState: AetherConnectivityState = LocalAetherConnectivityState.current
 ) {
     val context = LocalContext.current
     val reducedMotion = remember(context) { isReducedMotionEnabled(context) }
     val isInspection = LocalInspectionMode.current
 
-    // Same palette and period, quieter geometry -- never a second atmosphere system.
+    val isOffline = connectivityState == AetherConnectivityState.OFFLINE
+    val onlineEnergy by animateFloatAsState(
+        targetValue = if (isOffline) 0f else 1f,
+        animationSpec = tween(
+            durationMillis = if (isOffline) 450 else 650,
+            easing = FastOutSlowInEasing
+        ),
+        label = "atmosphere_online_energy"
+    )
+
     val effectiveAtmosphere = remember(timeAtmosphere, expression) {
         timeAtmosphere.scaledFor(expression)
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "time_atmosphere_geometry_drift")
-    val driftPhase by if (enableAmbientMotion && !reducedMotion && !isInspection) {
+    val driftPhase by if (enableAmbientMotion && !reducedMotion && !isInspection && onlineEnergy > 0.01f) {
         val durationMillis = (24000 / effectiveAtmosphere.ambientMotionSpeed.coerceAtLeast(0.1f)).toInt()
         infiniteTransition.animateFloat(
             initialValue = 0f,
-            targetValue = 6.28318530718f, // 2 * PI
+            targetValue = 6.28318530718f,
             animationSpec = infiniteRepeatable(
                 animation = tween(durationMillis, easing = FastOutSlowInEasing),
                 repeatMode = RepeatMode.Restart
@@ -107,10 +123,34 @@ fun AetherTimeAtmosphere(
         remember { mutableFloatStateOf(0f) }
     }
 
-    // Preallocated Path & PathMeasure objects to ensure zero per-frame heap allocations during drawing
-    val paths = remember { Array(TRAJECTORY_COUNT) { Path() } }
-    val pathMeasures = remember { Array(TRAJECTORY_COUNT) { PathMeasure() } }
-    val trimmedPaths = remember { Array(TRAJECTORY_COUNT) { Path() } }
+    // One deterministic mathematical scene, shared across a session and across
+    // Home and Conversation: identical equations, identical parameters,
+    // identical nodes. Only the camera differs.
+    val topology = remember(seed) { GeometryTopology.forSeed(seed) }
+
+    // Built once, in world coordinates, and never rebuilt -- not per frame and
+    // not per scroll. The camera is applied as a transform at draw time, so
+    // moving or animating it costs nothing and cannot reshape a path.
+    val worldPaths = remember(topology) { topology.curves.map { it.toWorldPath() } }
+
+    val restingCamera = remember(topology, expression) { GeometryCamera.framing(topology, expression) }
+    // Conversation opens by moving the camera from Home's framing to its own:
+    // entering the structure rather than re-drawing it at another size.
+    val entryProgress by animateFloatAsState(
+        targetValue = 1f,
+        animationSpec = tween(durationMillis = 520, easing = FastOutSlowInEasing),
+        label = "atmosphere_camera_entry"
+    )
+    val homeCamera = remember(topology) { GeometryCamera.framing(topology, AtmosphereExpression.HOME) }
+    val camera = remember(homeCamera, restingCamera, entryProgress) {
+        if (expression == AtmosphereExpression.HOME) {
+            restingCamera
+        } else {
+            GeometryCamera.lerp(homeCamera, restingCamera, entryProgress)
+        }
+    }
+
+    val startElapsedMillis = remember { SystemClock.elapsedRealtime() }
 
     Box(
         modifier = modifier
@@ -126,70 +166,78 @@ fun AetherTimeAtmosphere(
 
             val luminousHeight = height * heroFraction.coerceIn(0.15f, 1f)
 
-            // Very dark graphite/near-black base background gradient
+            val onlineGradientColors = listOf(
+                timeAtmosphere.colors.first(),
+                timeAtmosphere.colors.getOrElse(2) { timeAtmosphere.shadowColor },
+                timeAtmosphere.shadowColor
+            )
+            val offlineGradientColors = listOf(
+                Color(0xFF14161C),
+                Color(0xFF0E0F14),
+                Color(0xFF08090C)
+            )
+            val activeGradientColors = onlineGradientColors.zip(offlineGradientColors).map { (online, offline) ->
+                lerp(offline, online, onlineEnergy)
+            }
+
             drawRect(
                 brush = Brush.verticalGradient(
-                    colors = listOf(
-                        timeAtmosphere.colors.first(),
-                        timeAtmosphere.colors.getOrElse(2) { timeAtmosphere.shadowColor },
-                        timeAtmosphere.shadowColor
-                    ),
+                    colors = activeGradientColors,
                     startY = 0f,
                     endY = luminousHeight
                 ),
                 size = size
             )
 
-            // Restrained ambient glow bloom in upper background
             val glowCenter = Offset(
                 width * (0.30f + sin(driftPhase) * 0.03f),
                 luminousHeight * (0.20f + cos(driftPhase * 0.7f) * 0.02f)
             )
             val glowRadius = width * 0.85f
-            val glowAlpha = (effectiveAtmosphere.glowIntensity * 0.85f).coerceIn(0.05f, 0.45f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        timeAtmosphere.glowColor.copy(alpha = glowAlpha),
-                        timeAtmosphere.colors.getOrElse(1) { timeAtmosphere.primaryAccent }.copy(alpha = glowAlpha * 0.35f),
-                        Color.Transparent
+            val glowAlpha = (effectiveAtmosphere.glowIntensity * 0.85f * onlineEnergy).coerceIn(0.0f, 0.45f)
+            if (glowAlpha > 0.001f) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            timeAtmosphere.glowColor.copy(alpha = glowAlpha),
+                            timeAtmosphere.colors.getOrElse(1) { timeAtmosphere.primaryAccent }.copy(alpha = glowAlpha * 0.35f),
+                            Color.Transparent
+                        ),
+                        center = glowCenter,
+                        radius = glowRadius
                     ),
-                    center = glowCenter,
-                    radius = glowRadius
-                ),
-                radius = glowRadius,
-                center = glowCenter
-            )
+                    radius = glowRadius,
+                    center = glowCenter
+                )
+            }
 
-            // Render Generative Geometry Trajectories across Distant, Middle, and Foreground layers
-            drawGenerativeGeometry(
-                width = width,
-                height = luminousHeight,
-                driftPhase = driftPhase,
+            val signalsEnabled = enableAmbientMotion && !reducedMotion && !isInspection && onlineEnergy > 0.01f
+            val elapsedMillis = if (signalsEnabled) {
+                SystemClock.elapsedRealtime() - startElapsedMillis
+            } else {
+                0L
+            }
+
+            drawMathematicalGeometry(
+                camera = camera,
+                elapsedMillis = elapsedMillis,
+                signalsEnabled = signalsEnabled,
+                onlineEnergy = onlineEnergy,
                 atmosphere = effectiveAtmosphere,
-                paths = paths,
-                pathMeasures = pathMeasures,
-                trimmedPaths = trimmedPaths
+                topology = topology,
+                worldPaths = worldPaths
             )
 
-            // Contrast bed for floating headers/controls
             drawAtmosphereContrastBed()
         }
     }
 }
 
-// Conversation reads as the same environment, entered more deeply: quieter on
-// every axis so message readability always wins, never a second atmosphere.
 internal const val ConversationDensityScale = 0.55f
 internal const val ConversationOpacityScale = 0.55f
 internal const val ConversationIntensityScale = 0.60f
 internal const val ConversationMotionScale = 0.55f
 
-/**
- * Applies [expression]'s intensity to this canonical, time-derived state without
- * changing the period, progress or palette -- Home and Conversation always share
- * the exact same moment; only the loudness of its geometry differs.
- */
 internal fun TimeAtmosphere.scaledFor(expression: AtmosphereExpression): TimeAtmosphere {
     if (expression == AtmosphereExpression.HOME) return this
     return copy(
@@ -200,151 +248,213 @@ internal fun TimeAtmosphere.scaledFor(expression: AtmosphereExpression): TimeAtm
     )
 }
 
-private const val TRAJECTORY_COUNT = 12
-
-// Predefined deterministic trajectory definitions (normalized 0..1 coordinates)
-private val TRAJECTORY_SEEDS = arrayOf(
-    // DISTANT LAYER (0..3) - Extremely faint, slow, broad trajectories
-    TrajectorySeed(0.05f, 0.12f, 0.35f, 0.02f, 0.70f, 0.28f, 0.95f, 0.18f, LayerDepth.DISTANT),
-    TrajectorySeed(-0.10f, 0.45f, 0.25f, 0.22f, 0.65f, 0.58f, 1.10f, 0.80f, LayerDepth.DISTANT),
-    TrajectorySeed(0.15f, -0.05f, 0.40f, 0.25f, 0.60f, 0.12f, 0.88f, 0.35f, LayerDepth.DISTANT),
-    TrajectorySeed(0.02f, 0.75f, 0.38f, 0.55f, 0.72f, 0.85f, 0.98f, 0.65f, LayerDepth.DISTANT),
-
-    // MIDDLE LAYER (4..8) - Primary flowing geometric paths
-    TrajectorySeed(-0.05f, 0.18f, 0.28f, 0.08f, 0.68f, 0.42f, 0.92f, 0.62f, LayerDepth.MIDDLE),
-    TrajectorySeed(0.12f, 0.82f, 0.32f, 0.48f, 0.75f, 0.18f, 0.98f, 0.08f, LayerDepth.MIDDLE),
-    TrajectorySeed(-0.08f, 0.35f, 0.22f, 0.62f, 0.62f, 0.15f, 1.05f, 0.42f, LayerDepth.MIDDLE),
-    TrajectorySeed(0.18f, 0.02f, 0.48f, 0.38f, 0.82f, 0.72f, 0.92f, 0.92f, LayerDepth.MIDDLE),
-    TrajectorySeed(0.08f, 0.60f, 0.42f, 0.28f, 0.78f, 0.65f, 1.02f, 0.25f, LayerDepth.MIDDLE),
-
-    // FOREGROUND LAYER (9..11) - Sparse, slightly brighter segments with restrained glow
-    TrajectorySeed(0.08f, 0.22f, 0.38f, 0.14f, 0.72f, 0.48f, 0.88f, 0.58f, LayerDepth.FOREGROUND),
-    TrajectorySeed(0.22f, 0.08f, 0.52f, 0.32f, 0.80f, 0.22f, 0.95f, 0.48f, LayerDepth.FOREGROUND),
-    TrajectorySeed(0.02f, 0.52f, 0.32f, 0.72f, 0.68f, 0.35f, 1.02f, 0.78f, LayerDepth.FOREGROUND)
-)
-
-private enum class LayerDepth { DISTANT, MIDDLE, FOREGROUND }
-
-private class TrajectorySeed(
-    val x0: Float, val y0: Float,
-    val cx1: Float, val cy1: Float,
-    val cx2: Float, val cy2: Float,
-    val x3: Float, val y3: Float,
-    val depth: LayerDepth
-)
+private const val HERO_GEOMETRY_SEED = 20260908L
 
 /**
- * Draws the generative geometry system using preallocated Path objects. Zero per-frame allocations.
+ * Stroke hierarchy. The geometry must read without being stared at, and must
+ * not read as neon -- these are the weights that separate "engineered" from
+ * "faint scratch".
  */
-private fun DrawScope.drawGenerativeGeometry(
-    width: Float,
-    height: Float,
-    driftPhase: Float,
+private object GeometryStroke {
+    val Secondary = 1.5.dp
+    val Main = 2.0.dp
+    val Primary = 2.4.dp
+    val Signal = 3.0.dp
+    val Glow = 4.5.dp
+}
+
+/** A curve's sampled points as a Path in world coordinates, built once. */
+private fun MathematicalCurve.toWorldPath(): Path {
+    val path = Path()
+    samples.forEachIndexed { index, point ->
+        if (index == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
+    }
+    return path
+}
+
+/**
+ * Draws the scene through the camera.
+ *
+ * The entire projection is one `translate`/`scale(s, s)`/`translate` transform
+ * with a single scale value, so there is no axis that can disagree with another
+ * and a circle cannot become an ellipse. Stroke widths and radii are divided by
+ * that scale so they stay in device-independent pixels rather than growing with
+ * the zoom.
+ */
+private fun DrawScope.drawMathematicalGeometry(
+    camera: GeometryCamera,
+    elapsedMillis: Long,
+    signalsEnabled: Boolean,
+    onlineEnergy: Float,
     atmosphere: TimeAtmosphere,
-    paths: Array<Path>,
-    pathMeasures: Array<PathMeasure>,
-    trimmedPaths: Array<Path>
+    topology: GeometryTopology,
+    worldPaths: List<Path>
 ) {
-    val activeDensityCount = (TRAJECTORY_COUNT * atmosphere.lineDensity.coerceIn(0.15f, 1.0f)).toInt().coerceIn(2, TRAJECTORY_COUNT)
+    val scale = camera.scaleFor(size.width)
+    if (scale <= 0f || !scale.isFinite()) return
 
-    // Base color selection with subtle warm shift during afternoon/evening
     val warmTone = Color(0xFFC88C6C)
-    val baseLineColor = lerp(atmosphere.primaryAccent, warmTone, atmosphere.warmth * 0.55f)
-    val baseGlowColor = lerp(atmosphere.glowColor, warmTone, atmosphere.warmth * 0.55f)
+    val onlineLineColor = lerp(atmosphere.primaryAccent, warmTone, atmosphere.warmth * 0.55f)
+    // Offline keeps every equation, every parameter and every node exactly as
+    // they are, and only drains the colour and stops the firing.
+    val offlineLineColor = Color(0xFF565A66)
+    val baseLineColor = lerp(offlineLineColor, onlineLineColor, onlineEnergy)
 
-    for (i in 0 until activeDensityCount) {
-        val seed = TRAJECTORY_SEEDS[i]
-        val path = paths[i]
-        path.reset()
+    val onlineGlowColor = lerp(atmosphere.glowColor, warmTone, atmosphere.warmth * 0.55f)
+    val baseGlowColor = lerp(Color.Transparent, onlineGlowColor, onlineEnergy)
 
-        // Calculate slow bending and organic drift for control points
-        val bendFactor = atmosphere.curvature * 0.12f
-        val drift1X = sin(driftPhase + i * 1.3f) * (width * bendFactor)
-        val drift1Y = cos(driftPhase * 0.8f + i * 0.9f) * (height * bendFactor)
-        val drift2X = cos(driftPhase * 1.1f + i * 1.7f) * (width * bendFactor)
-        val drift2Y = sin(driftPhase * 0.9f + i * 1.1f) * (height * bendFactor)
+    val loudness = atmosphere.lineDensity.coerceIn(0.15f, 1.0f)
 
-        val px0 = seed.x0 * width
-        val py0 = seed.y0 * height
-        val pcx1 = seed.cx1 * width + drift1X
-        val pcy1 = seed.cy1 * height + drift1Y
-        val pcx2 = seed.cx2 * width + drift2X
-        val pcy2 = seed.cy2 * height + drift2Y
-        val px3 = seed.x3 * width
-        val py3 = seed.y3 * height
+    /** Vertical fade so messages stay legible, with no hard cutoff anywhere. */
+    fun attenuationAt(worldY: Float): Float {
+        val screenY = camera.projectY(worldY, size.width, size.height)
+        val fraction = (screenY / size.height).coerceIn(0f, 1f)
+        return when {
+            fraction <= 0.22f -> 1.0f
+            fraction <= 0.50f -> 1.0f - 0.42f * ((fraction - 0.22f) / 0.28f)
+            else -> 0.58f - 0.14f * ((fraction - 0.50f) / 0.50f)
+        }.coerceIn(0.30f, 1.0f)
+    }
 
-        path.moveTo(px0, py0)
-        path.cubicTo(pcx1, pcy1, pcx2, pcy2, px3, py3)
+    withTransform({
+        translate(size.width / 2f, size.height / 2f)
+        scale(scale, scale, pivot = Offset.Zero)
+        translate(-camera.centerX, -camera.centerY)
+    }) {
+        topology.curves.forEachIndexed { index, curve ->
+            val path = worldPaths.getOrNull(index) ?: return@forEachIndexed
+            val centroidY = curve.samples.fold(0f) { acc, p -> acc + p.y } / curve.samples.size
+            val attenuation = attenuationAt(centroidY)
 
-        when (seed.depth) {
-            LayerDepth.DISTANT -> {
-                val distantAlpha = (atmosphere.lineOpacity * 0.30f).coerceIn(0.03f, 0.20f)
+            val (weight, alphaFactor) = when (curve.depth) {
+                GeometryDepth.DISTANT -> GeometryStroke.Secondary to 0.42f
+                GeometryDepth.MIDDLE -> GeometryStroke.Main to 0.70f
+                GeometryDepth.FOREGROUND -> GeometryStroke.Primary to 0.88f
+            }
+
+            val coreAlpha = (atmosphere.lineOpacity * alphaFactor * loudness * attenuation)
+                .coerceIn(0.10f, 0.94f)
+            val glowAlpha = (atmosphere.glowIntensity * 0.30f * loudness * attenuation * onlineEnergy)
+                .coerceIn(0f, 0.30f)
+
+            if (glowAlpha > 0.001f) {
                 drawPath(
                     path = path,
-                    color = baseLineColor.copy(alpha = distantAlpha),
-                    style = Stroke(width = 1.0.dp.toPx(), cap = StrokeCap.Round)
+                    color = baseGlowColor.copy(alpha = glowAlpha),
+                    style = Stroke(width = GeometryStroke.Glow.toPx() / scale, cap = StrokeCap.Round)
                 )
             }
-            LayerDepth.MIDDLE -> {
-                val middleAlpha = (atmosphere.lineOpacity * 0.70f).coerceIn(0.08f, 0.40f)
-                drawPath(
-                    path = path,
-                    color = baseLineColor.copy(alpha = middleAlpha),
-                    style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round)
-                )
-            }
-            LayerDepth.FOREGROUND -> {
-                // Foreground highlights use PathMeasure trimming to draw flowing segments with restrained glow
-                val pathMeasure = pathMeasures[i]
-                pathMeasure.setPath(path, false)
-                val totalLength = pathMeasure.length
-                if (totalLength > 0f) {
-                    val segmentSpan = totalLength * atmosphere.lineLength.coerceIn(0.20f, 0.85f)
-                    val travelProgress = ((sin(driftPhase * 0.6f + i * 2.1f) + 1f) / 2f)
-                    val startDist = (totalLength - segmentSpan) * travelProgress
-                    val stopDist = startDist + segmentSpan
+            drawPath(
+                path = path,
+                color = baseLineColor.copy(alpha = coreAlpha),
+                style = Stroke(width = weight.toPx() / scale, cap = StrokeCap.Round)
+            )
+        }
 
-                    val trimmedPath = trimmedPaths[i]
-                    trimmedPath.reset()
-                    pathMeasure.getSegment(startDist, stopDist, trimmedPath, true)
+        // Nodes mark intersections, extrema and where an arc deliberately stops.
+        // They are sparse by construction (see GeometryTopology.deriveNodes).
+        for (node in topology.nodes) {
+            val attenuation = attenuationAt(node.y)
+            val nodeAlpha = (atmosphere.lineOpacity * 0.85f * attenuation).coerceIn(0.10f, 0.92f)
+            val radiusPx = if (node.isHub) 3.1.dp.toPx() else 2.0.dp.toPx()
 
-                    val fgAlpha = (atmosphere.lineOpacity * 0.95f).coerceIn(0.12f, 0.55f)
-                    val glowAlpha = (atmosphere.glowIntensity * 0.25f * fgAlpha).coerceIn(0.02f, 0.20f)
-
-                    // 1. Soft restrained glow halo
-                    drawPath(
-                        path = trimmedPath,
-                        color = baseGlowColor.copy(alpha = glowAlpha),
-                        style = Stroke(width = 6.5.dp.toPx(), cap = StrokeCap.Round)
-                    )
-
-                    // 2. Primary foreground line segment
-                    drawPath(
-                        path = trimmedPath,
-                        color = baseLineColor.copy(alpha = fgAlpha),
-                        style = Stroke(width = 2.2.dp.toPx(), cap = StrokeCap.Round)
+            if (onlineEnergy > 0.01f && node.isHub) {
+                val haloAlpha = (atmosphere.glowIntensity * 0.28f * attenuation * onlineEnergy)
+                    .coerceIn(0f, 0.28f)
+                if (haloAlpha > 0.001f) {
+                    drawCircle(
+                        color = baseGlowColor.copy(alpha = haloAlpha),
+                        radius = 7.dp.toPx() / scale,
+                        center = Offset(node.x, node.y)
                     )
                 }
+            }
+            drawCircle(
+                color = baseLineColor.copy(alpha = nodeAlpha),
+                radius = radiusPx / scale,
+                center = Offset(node.x, node.y)
+            )
+        }
+
+        // Firing travels along a curve's own parameter domain, blooming as it
+        // passes rather than flashing a whole line.
+        if (signalsEnabled) {
+            for (signal in GeometrySignalScheduler.activeSignals(topology, elapsedMillis)) {
+                val point = signal.currentPoint
+                val attenuation = attenuationAt(point.y)
+                val intensity = signal.intensity * attenuation * onlineEnergy
+                if (intensity <= 0.01f) continue
+
+                val bloomAlpha = (atmosphere.glowIntensity * 0.55f * intensity).coerceIn(0f, 0.55f)
+                if (bloomAlpha > 0.001f) {
+                    drawCircle(
+                        color = baseGlowColor.copy(alpha = bloomAlpha),
+                        radius = 13.dp.toPx() / scale,
+                        center = Offset(point.x, point.y)
+                    )
+                }
+                drawCircle(
+                    color = baseLineColor.copy(alpha = (0.92f * intensity).coerceIn(0f, 0.95f)),
+                    radius = GeometryStroke.Signal.toPx() / scale,
+                    center = Offset(point.x, point.y)
+                )
             }
         }
     }
 }
 
-/**
- * Remembers the current time atmosphere, updating on periodic ticks and lifecycle ON_RESUME.
- */
 @Composable
 fun rememberCurrentTimeAtmosphere(
-    timeZone: TimeZone = TimeZone.getDefault()
+    timeZoneProvider: () -> TimeZone = { TimeZone.getDefault() },
+    clockMillis: () -> Long = { System.currentTimeMillis() }
 ): TimeAtmosphere {
-    var atmosphere by remember(timeZone) { mutableStateOf(TimeAtmospherePolicy.resolve(timeZone = timeZone)) }
+    val themeState = LocalAppThemeState.current
+    return when (themeState.atmosphereMode) {
+        AtmosphereMode.TIME_BASED ->
+            rememberClockDrivenTimeAtmosphere(timeZoneProvider, clockMillis)
+        AtmosphereMode.STATIC,
+        AtmosphereMode.MANUAL ->
+            remember(themeState.manualAtmosphere) {
+                val palette = themeState.manualAtmosphere
+                val (hour, minute) = palette.representativeTimeOfDay()
+                TimeAtmospherePolicy.resolve(hour, minute).copy(
+                    primaryAccent = palette.primaryAccent,
+                    colors = palette.colors,
+                    glowColor = palette.glowColor,
+                    shadowColor = palette.shadowColor
+                )
+            }
+    }
+}
+
+private fun TimeAtmospherePalette.representativeTimeOfDay(): Pair<Int, Int> {
+    return when (this) {
+        TimeAtmospherePalette.DAWN -> 6 to 30
+        TimeAtmospherePalette.DAY -> 12 to 0
+        TimeAtmospherePalette.GOLDEN_HOUR -> 18 to 0
+        TimeAtmospherePalette.EVENING -> 21 to 0
+        TimeAtmospherePalette.NIGHT -> 1 to 45
+    }
+}
+
+@Composable
+private fun rememberClockDrivenTimeAtmosphere(
+    timeZoneProvider: () -> TimeZone = { TimeZone.getDefault() },
+    clockMillis: () -> Long = { System.currentTimeMillis() }
+): TimeAtmosphere {
+    var atmosphere by remember {
+        mutableStateOf(TimeAtmospherePolicy.resolve(timeMillis = clockMillis(), timeZone = timeZoneProvider()))
+    }
     val inspection = LocalInspectionMode.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    DisposableEffect(lifecycleOwner, timeZone) {
+    DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                atmosphere = TimeAtmospherePolicy.resolve(timeZone = timeZone)
+                val updated = TimeAtmospherePolicy.resolve(timeMillis = clockMillis(), timeZone = timeZoneProvider())
+                if (updated != atmosphere) {
+                    atmosphere = updated
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -353,19 +463,24 @@ fun rememberCurrentTimeAtmosphere(
         }
     }
 
-    LaunchedEffect(timeZone, inspection) {
+    LaunchedEffect(inspection) {
         if (inspection) return@LaunchedEffect
         while (true) {
-            delay(30_000L)
-            val updated = TimeAtmospherePolicy.resolve(timeZone = timeZone)
+            val updated = TimeAtmospherePolicy.resolve(timeMillis = clockMillis(), timeZone = timeZoneProvider())
             if (updated != atmosphere) {
                 atmosphere = updated
             }
+            delay(30_000L)
         }
     }
 
     return atmosphere
 }
+
+@Composable
+fun rememberCurrentTimeAtmosphere(
+    timeZone: TimeZone
+): TimeAtmosphere = rememberCurrentTimeAtmosphere(timeZoneProvider = { timeZone })
 
 private fun DrawScope.drawAtmosphereContrastBed() {
     val bedHeight = (

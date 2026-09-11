@@ -60,7 +60,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
-import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.LaunchedEffect
@@ -118,6 +118,7 @@ import com.foresightlabs.aether.ui.theme.VerifiedBadge
  * - Privacy & Security (MTProto cloud encryption info, Block/Unblock)
  * - Conversation Management (Clear history, Delete conversation with confirmation)
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun ProfileScreen(
     chat: Chat,
@@ -1453,7 +1454,7 @@ private fun SharedFileRow(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = Icons.Default.InsertDriveFile,
+                imageVector = Icons.AutoMirrored.Filled.InsertDriveFile,
                 contentDescription = "File",
                 tint = AetherAccent.current,
                 modifier = Modifier.size(20.dp)

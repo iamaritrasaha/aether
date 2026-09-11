@@ -55,7 +55,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 
-class TelegramClient(private val application: Application) {
+open class TelegramClient(private val application: Application) {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + Dispatchers.Default)
     private val mainHandler = Dispatchers.Main.immediate
@@ -84,8 +84,8 @@ class TelegramClient(private val application: Application) {
     private val activeStories = ConcurrentHashMap<Long, TdApi.ChatActiveStories>()
     private val storiesCache = ConcurrentHashMap<String, com.foresightlabs.aether.domain.model.StoryItem>()
 
-    private val _authState = MutableStateFlow<AuthUiState>(AuthUiState.Initializing)
-    val authState: StateFlow<AuthUiState> = _authState.asStateFlow()
+    protected val _authState = MutableStateFlow<AuthUiState>(AuthUiState.Initializing)
+    open val authState: StateFlow<AuthUiState> = _authState.asStateFlow()
 
     private val _connection = MutableStateFlow(ConnectionStatus.UNKNOWN)
     val connection: StateFlow<ConnectionStatus> = _connection.asStateFlow()
@@ -128,6 +128,9 @@ class TelegramClient(private val application: Application) {
 
     val latestRawCallState = MutableStateFlow<TdApi.Call?>(null)
 
+    private val _callSignalingDataFlow = MutableSharedFlow<TdApi.UpdateNewCallSignalingData>(extraBufferCapacity = 16)
+    val callSignalingDataFlow: Flow<TdApi.UpdateNewCallSignalingData> = _callSignalingDataFlow.asSharedFlow()
+
     var notificationManager: com.foresightlabs.aether.data.notifications.AetherNotificationManager? = null
 
     @Volatile private var myUserId: Long = 0L
@@ -142,45 +145,103 @@ class TelegramClient(private val application: Application) {
     @Volatile private var appliedOnline: Boolean? = null
     private var onlineWriteJob: Job? = null
 
+    private val startLock = Any()
+    private val restartPolicy = TdlibRestartPolicy()
+
     fun start() {
-        if (!BuildConfig.HAS_TELEGRAM_CREDENTIALS) {
-            _authState.value = AuthUiState.MissingCredentials
-            // Readiness is resolved, not granted: nothing will ever apply
-            // parameters, so anything waiting on them -- a push, above all --
-            // must find that out now rather than sit out its whole timeout.
-            parametersApplied.complete(Unit)
-            return
-        }
-        if (client != null) return
-        try {
-            NativeLoader.load()
-        } catch (error: UnsatisfiedLinkError) {
-            // Aether ships arm64-v8a TDLib binaries only. On any other ABI the app
-            // must say so plainly instead of crashing on launch with no explanation.
-            if (BuildConfig.DEBUG) {
-                android.util.Log.e(TAG, "TDLib native library unavailable", error)
+        synchronized(startLock) {
+            if (!BuildConfig.HAS_TELEGRAM_CREDENTIALS) {
+                _authState.value = AuthUiState.MissingCredentials
+                // Readiness is resolved, not granted: nothing will ever apply
+                // parameters, so anything waiting on them -- a push, above all --
+                // must find that out now rather than sit out its whole timeout.
+                parametersApplied.complete(Unit)
+                return
             }
-            _authState.value = AuthUiState.Unsupported(
-                "Aether can't run on this device: the Telegram engine is built for " +
-                    "64-bit ARM (arm64-v8a) and this device reports " +
-                    "${Build.SUPPORTED_ABIS.joinToString().ifBlank { "an unsupported ABI" }}."
+            if (client != null) return
+            try {
+                NativeLoader.load()
+            } catch (error: UnsatisfiedLinkError) {
+                // Aether ships arm64-v8a TDLib binaries only. On any other ABI the app
+                // must say so plainly instead of crashing on launch with no explanation.
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.e(TAG, "TDLib native library unavailable", error)
+                }
+                _authState.value = AuthUiState.Unsupported(
+                    "Aether can't run on this device: the Telegram engine is built for " +
+                        "64-bit ARM (arm64-v8a) and this device reports " +
+                        "${Build.SUPPORTED_ABIS.joinToString().ifBlank { "an unsupported ABI" }}."
+                )
+                parametersApplied.complete(Unit)
+                return
+            }
+            val verbosity = if (BuildConfig.DEBUG) 1 else 0
+            try {
+                Client.execute(TdApi.SetLogVerbosityLevel(verbosity))
+            } catch (_: Client.ExecutionException) {
+            }
+            client = Client.create(
+                { update -> dispatchUpdate(update) },
+                { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib update handler error", error) },
+                { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib handler error", error) }
             )
-            parametersApplied.complete(Unit)
-            return
         }
-        val verbosity = if (BuildConfig.DEBUG) 1 else 0
-        try {
-            Client.execute(TdApi.SetLogVerbosityLevel(verbosity))
-        } catch (_: Client.ExecutionException) {
-        }
-        client = Client.create(
-            { update -> dispatchUpdate(update) },
-            { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib update handler error", error) },
-            { error -> if (BuildConfig.DEBUG) android.util.Log.w(TAG, "TDLib handler error", error) }
-        )
     }
 
-    private val parametersApplied = CompletableDeferred<Unit>()
+    /**
+     * AuthorizationStateClosed's contract is unconditional: the client that
+     * reached it is permanently dead ("all queries will be responded to with
+     * error code 500") and continuing means creating a new one. Without this,
+     * every request after an ordinary LogOut() -- starting with the next
+     * phone submission -- would silently fail. [restartPolicy] bounds it to
+     * one restart per session so a client that closes again immediately does
+     * not spin forever.
+     */
+    /**
+     * Aether choosing to end this TDLib session outright -- as opposed to
+     * TDLib closing on its own after an ordinary LogOut(). Distinct from
+     * [restartAfterClose] so a future caller of this can rely on the
+     * resulting AuthorizationStateClosed NOT silently spinning up a
+     * replacement client: intentional shutdown must stay shut down.
+     */
+    fun shutdown() {
+        intentionalShutdown = true
+        client?.send(TdApi.Close()) { }
+    }
+
+    @Volatile
+    private var intentionalShutdown = false
+
+    private fun restartAfterClose() {
+        if (intentionalShutdown) return
+        if (!restartPolicy.onClosed()) return
+        synchronized(startLock) {
+            client = null
+            parametersApplied = CompletableDeferred()
+            // Every field here answers "what has THIS native Client instance
+            // been told" -- not account or process state, so each must reset
+            // exactly when the instance underneath it changes. Left alone,
+            // notificationOptionsConfigured's one-shot guard would silently
+            // stop the fresh client from ever receiving its notification
+            // group limits, and appliedOnline's stale value would make the
+            // next setOnline() call with the same boolean a no-op against a
+            // client that was never actually told it.
+            notificationOptionsConfigured.set(false)
+            onlineWriteJob?.cancel()
+            onlineWriteJob = null
+            appliedOnline = null
+        }
+        start()
+        // desiredOnline is real, current app-foreground truth (set by
+        // AetherApplication's activity lifecycle callbacks) that legitimately
+        // survives the client swap; only the fresh client has never been told
+        // it, which the reset above ensures this actually sends rather than
+        // being skipped as a no-op.
+        setOnline(desiredOnline ?: false)
+    }
+
+    @Volatile
+    private var parametersApplied = CompletableDeferred<Unit>()
 
     /**
      * Notification updates are handled one at a time, in arrival order, and a
@@ -236,7 +297,7 @@ class TelegramClient(private val application: Application) {
         }
     }
 
-    suspend fun submitPhoneNumber(phone: String): Result<Unit> {
+    open suspend fun submitPhoneNumber(phone: String): Result<Unit> {
         val settings = TdApi.PhoneNumberAuthenticationSettings(
             false,
             false,
@@ -249,41 +310,41 @@ class TelegramClient(private val application: Application) {
         return sendExpectOk(TdApi.SetAuthenticationPhoneNumber(phone, settings))
     }
 
-    suspend fun submitCode(code: String): Result<Unit> {
+    open suspend fun submitCode(code: String): Result<Unit> {
         return sendExpectOk(TdApi.CheckAuthenticationCode(code))
     }
 
-    suspend fun submitPassword(password: String): Result<Unit> {
+    open suspend fun submitPassword(password: String): Result<Unit> {
         return sendExpectOk(TdApi.CheckAuthenticationPassword(password))
     }
 
-    suspend fun submitPasswordRecoveryCode(code: String): Result<Unit> {
+    open suspend fun submitPasswordRecoveryCode(code: String): Result<Unit> {
         return sendExpectOk(TdApi.CheckAuthenticationPasswordRecoveryCode(code))
     }
 
-    suspend fun requestPasswordRecovery(): Result<Unit> {
+    open suspend fun requestPasswordRecovery(): Result<Unit> {
         return sendExpectOk(TdApi.RequestAuthenticationPasswordRecovery())
     }
 
-    suspend fun submitEmailAddress(email: String): Result<Unit> {
+    open suspend fun submitEmailAddress(email: String): Result<Unit> {
         return sendExpectOk(TdApi.SetAuthenticationEmailAddress(email))
     }
 
-    suspend fun submitEmailCode(code: String): Result<Unit> {
+    open suspend fun submitEmailCode(code: String): Result<Unit> {
         return sendExpectOk(
             TdApi.CheckAuthenticationEmailCode(TdApi.EmailAddressAuthenticationCode(code))
         )
     }
 
-    suspend fun resetAuthenticationEmailAddress(): Result<Unit> {
+    open suspend fun resetAuthenticationEmailAddress(): Result<Unit> {
         return sendExpectOk(TdApi.ResetAuthenticationEmailAddress())
     }
 
-    suspend fun requestQrCodeAuthentication(): Result<Unit> {
+    open suspend fun requestQrCodeAuthentication(): Result<Unit> {
         return sendExpectOk(TdApi.RequestQrCodeAuthentication(longArrayOf()))
     }
 
-    suspend fun getAuthenticationPasskeyParameters(): Result<String> {
+    open suspend fun getAuthenticationPasskeyParameters(): Result<String> {
         return when (val result = send(TdApi.GetAuthenticationPasskeyParameters())) {
             is TdApi.Text -> Result.success(result.text)
             is TdApi.Error -> Result.failure(IllegalStateException(TdErrors.userMessage(result)))
@@ -291,7 +352,7 @@ class TelegramClient(private val application: Application) {
         }
     }
 
-    suspend fun submitPasskey(
+    open suspend fun submitPasskey(
         credentialId: String,
         clientData: String,
         authenticatorData: ByteArray,
@@ -309,11 +370,11 @@ class TelegramClient(private val application: Application) {
         )
     }
 
-    suspend fun registerUser(firstName: String, lastName: String): Result<Unit> {
+    open suspend fun registerUser(firstName: String, lastName: String): Result<Unit> {
         return sendExpectOk(TdApi.RegisterUser(firstName, lastName, false))
     }
 
-    suspend fun resendCode(): Result<Unit> {
+    open suspend fun resendCode(): Result<Unit> {
         return sendExpectOk(TdApi.ResendAuthenticationCode(null))
     }
 
@@ -542,6 +603,18 @@ class TelegramClient(private val application: Application) {
     suspend fun viewMessages(chatId: Long, messageIds: LongArray, forceRead: Boolean = true) {
         if (messageIds.isEmpty()) return
         send(TdApi.ViewMessages(chatId, messageIds, null, forceRead))
+    }
+
+    /**
+     * Tells TDLib the content of this message was actually opened -- a photo,
+     * video, document, location or venue viewed, or an audio/voice note
+     * played. Distinct from [viewMessages] (a scroll-visibility read receipt):
+     * this is the one call self-destructing media's timer waits on. Without
+     * it, a view-once photo or video never begins self-destructing no matter
+     * how long it sits open on screen -- TDLib is never told it was seen.
+     */
+    suspend fun openMessageContent(chatId: Long, messageId: Long) {
+        sendExpectOk(TdApi.OpenMessageContent(chatId, messageId))
     }
 
     suspend fun getRawChat(chatId: Long): TdApi.Chat? {
@@ -1391,9 +1464,8 @@ class TelegramClient(private val application: Application) {
         return sendExpectOk(TdApi.UnpinAllChatMessages(chatId))
     }
 
-    suspend fun createVoiceCall(userId: Long): Result<Int> {
-        val protocol = TdApi.CallProtocol(true, true, 65, 92, arrayOf("1.0.0"))
-        return when (val result = send(TdApi.CreateCall(userId, protocol, false))) {
+    suspend fun createCall(userId: Long, isVideo: Boolean, protocol: TdApi.CallProtocol): Result<Int> {
+        return when (val result = send(TdApi.CreateCall(userId, protocol, isVideo))) {
             is TdApi.CallId -> {
                 val targetUser = getUser(userId)
                 _activeCallState.value = com.foresightlabs.aether.domain.model.ActiveCall(
@@ -1401,7 +1473,7 @@ class TelegramClient(private val application: Application) {
                     userId = userId,
                     user = targetUser,
                     isOutgoing = true,
-                    isVideo = false,
+                    isVideo = isVideo,
                     state = com.foresightlabs.aether.domain.model.CallStateEnum.PENDING,
                     isMuted = false,
                     isSpeakerOn = false,
@@ -1414,13 +1486,21 @@ class TelegramClient(private val application: Application) {
         }
     }
 
-    suspend fun acceptCall(callId: Int): Result<Unit> {
-        val protocol = TdApi.CallProtocol(true, true, 65, 92, arrayOf("1.0.0"))
+    suspend fun acceptCall(callId: Int, protocol: TdApi.CallProtocol): Result<Unit> {
         return sendExpectOk(TdApi.AcceptCall(callId, protocol))
     }
 
     suspend fun discardCall(callId: Int): Result<Unit> {
         return sendExpectOk(TdApi.DiscardCall(callId, false, "", 0, false, 0))
+    }
+
+    /**
+     * Forwards media-engine signalling bytes (ICE candidates, renegotiation --
+     * whatever the linked tgcalls-compatible engine needs) through TDLib's own
+     * call signalling channel. See docs/architecture/messaging-calls.md.
+     */
+    suspend fun sendCallSignalingData(callId: Int, data: ByteArray): Result<Unit> {
+        return sendExpectOk(TdApi.SendCallSignalingData(callId, data))
     }
 
     fun toggleCallMute() {
@@ -1541,6 +1621,7 @@ class TelegramClient(private val application: Application) {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun resetAudioHardware() {
         try {
             val audioManager = application.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
@@ -1550,6 +1631,7 @@ class TelegramClient(private val application: Application) {
         } catch (_: Exception) {}
     }
 
+    @Suppress("DEPRECATION")
     private fun updateAudioHardware(isMuted: Boolean, isSpeakerOn: Boolean) {
         try {
             val audioManager = application.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
@@ -2222,7 +2304,6 @@ class TelegramClient(private val application: Application) {
     fun requestFullMediaDownload(fileId: Int) {
         if (fileId == 0) return
         failedDownloads.remove(fileId)
-        if (activeDownloads[fileId] == true) return
         activeDownloads[fileId] = true
         requestedFiles[fileId] = true
         scope.launch { send(TdApi.DownloadFile(fileId, 32, 0, 0, false)) }
@@ -2236,10 +2317,20 @@ class TelegramClient(private val application: Application) {
 
     fun upsertConversation(chatId: Long, incoming: List<Message>, prepend: Boolean) {
         val normalized = incoming.map { mapped ->
-            rawMessages[mapped.id.toLongOrNull() ?: return@map mapped]
+            val fresh = rawMessages[mapped.id.toLongOrNull() ?: return@map mapped]
                 ?.takeIf { it.chatId == chatId }
                 ?.let(::mapUiMessage)
                 ?: mapped
+            // mapUiMessage always re-derives a fresh Message with no
+            // presentationKey of its own -- a caller that already stamped one
+            // onto `mapped` (see UpdateNewMessage's pending-message handling)
+            // would otherwise have it silently dropped right back out here,
+            // before the merge below even runs.
+            if (fresh.presentationKey == null && mapped.presentationKey != null) {
+                fresh.copy(presentationKey = mapped.presentationKey)
+            } else {
+                fresh
+            }
         }
         conversationFlows.getOrPut(chatId) { MutableStateFlow(emptyList()) }.update { current ->
             // A lookup built once, rather than current.firstOrNull{} per entry below --
@@ -2308,12 +2399,14 @@ class TelegramClient(private val application: Application) {
      */
     val forumTopicRevision: StateFlow<Int> = _forumTopicRevision.asStateFlow()
 
-    private suspend fun handleUpdate(update: TdApi.Object) {
+    /** internal, not private: exercised directly with constructed TdApi updates from [TelegramConversationMergeTest]-style tests, without a running TDLib [Client]. */
+    internal suspend fun handleUpdate(update: TdApi.Object) {
         when (update) {
             is TdApi.UpdateNotificationGroup -> notificationManager?.onUpdateNotificationGroup(update)
             is TdApi.UpdateNotification -> notificationManager?.onUpdateNotification(update)
             is TdApi.UpdateActiveNotifications -> notificationManager?.onUpdateActiveNotifications(update)
             is TdApi.UpdateCall -> handleCallUpdate(update.call)
+            is TdApi.UpdateNewCallSignalingData -> _callSignalingDataFlow.tryEmit(update)
             is TdApi.UpdateAuthorizationState -> onAuth(update.authorizationState)
             is TdApi.UpdateConnectionState -> {
                 val previous = _connection.value
@@ -2504,7 +2597,25 @@ class TelegramClient(private val application: Application) {
                     android.util.Log.d(TAG, "TDLIB_UPDATE_NEW_MESSAGE chatHash=$chatHash msgId=${msg.id} isOutgoing=${msg.isOutgoing} date=${msg.date} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
                 }
                 chats[msg.chatId]?.lastMessage = msg
-                upsertConversation(msg.chatId, listOf(mapUiMessage(msg)), prepend = false)
+                // A pending outgoing message swaps its TDLib id for a real one the
+                // moment the server confirms it (see UpdateMessageSendSucceeded).
+                // The conversation list is keyed by presentationKey with a fallback
+                // to id (see ConversationEntry.Single.key) specifically so that swap
+                // doesn't change the row's identity -- stamping one here, before the
+                // id changes, is what lets replaceMessage carry it across the swap.
+                // Without it the LazyColumn sees a removed key plus an added key
+                // instead of one updated row, and its animateItem() briefly renders
+                // both the exiting and entering bubble at once -- a visible "double
+                // message" for any outgoing send, most noticeable on photos where
+                // the newly-keyed bubble also has an image to redecode.
+                val mapped = mapUiMessage(msg).let { mappedMsg ->
+                    if (msg.sendingState is TdApi.MessageSendingStatePending) {
+                        mappedMsg.copy(presentationKey = "pending_${msg.id}")
+                    } else {
+                        mappedMsg
+                    }
+                }
+                upsertConversation(msg.chatId, listOf(mapped), prepend = false)
                 publishMessageEvent(
                     msg.chatId,
                     msg.id,
@@ -2589,7 +2700,13 @@ class TelegramClient(private val application: Application) {
                 publishMessageEvent(update.message.chatId, update.message.id, MessageMotionEventType.FAILED)
             }
             is TdApi.UpdateDeleteMessages -> {
-                if (update.fromCache) return
+                // fromCache only means TDLib's own store dropped them (e.g. cache
+                // eviction) rather than a confirmed server delete -- it is not a
+                // signal to keep showing messages TDLib itself no longer has. A
+                // real deleteMessages() call (delete for me/everyone) reaches this
+                // same update, and gating removal on fromCache was silently
+                // leaving deleted messages on screen. isPermanent (unused here)
+                // remains available if a future caller needs to tell the two apart.
                 update.messageIds.forEach { messageId ->
                     if (rawMessages[messageId]?.chatId == update.chatId) {
                         rawMessages.remove(messageId)
@@ -2976,8 +3093,10 @@ class TelegramClient(private val application: Application) {
             is TdApi.AuthorizationStateClosed -> {
                 clearSession()
                 _authState.value = AuthUiState.Phone()
+                restartAfterClose()
             }
             is TdApi.AuthorizationStateReady -> {
+                restartPolicy.onReady()
                 _authState.value = AuthUiState.Ready
                 afterReady()
                 flushPendingFcmToken()
@@ -3544,10 +3663,26 @@ class TelegramClient(private val application: Application) {
         replyResolutionJobs.values.forEach { it.cancel() }
         replyResolutionJobs.clear()
         unavailableReplyTargets.clear()
+        // File ids, story data, and group metadata are all specific to the
+        // account that just lost its session -- a fresh login gets a fresh
+        // TDLib database and none of these ids or entities remain meaningful.
+        activeDownloads.clear()
+        failedDownloads.clear()
+        activeStories.clear()
+        storiesCache.clear()
+        supergroups.clear()
+        basicGroups.clear()
+        secretChats.clear()
         myUserId = 0L
         chatsFullyLoaded = false
         _currentUser.value = null
         _chatList.value = emptyList()
+        _pulses.value = emptyList()
+        _myPulse.value = null
+        _canPostPulse.value = true
+        _isLoadingChats.value = false
+        _activeCallState.value = null
+        latestRawCallState.value = null
         // The account this token was registered against no longer has a
         // session; a future login must register fresh rather than trusting
         // this as already-done.

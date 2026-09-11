@@ -76,15 +76,17 @@ fun AetherRichText(
 
     val ordered = remember(value) { value.entities.sortedBy { it.offset } }
 
-    val annotated = buildEntityString(
-        value = value,
-        ordered = ordered,
-        color = color,
-        accentColor = accentColor,
-        spoilerCover = spoilerCover,
-        codeBackground = codeBackground,
-        revealedSpoilers = revealedSpoilers
-    )
+    val annotated = remember(value, ordered, color, accentColor, spoilerCover, codeBackground, revealedSpoilers) {
+        buildEntityString(
+            value = value,
+            ordered = ordered,
+            color = color,
+            accentColor = accentColor,
+            spoilerCover = spoilerCover,
+            codeBackground = codeBackground,
+            revealedSpoilers = revealedSpoilers
+        )
+    }
 
     if (controller != null) {
         controller.tapHandler = handler@{ position ->

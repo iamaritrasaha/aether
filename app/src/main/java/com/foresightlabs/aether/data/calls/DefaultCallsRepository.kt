@@ -1,13 +1,16 @@
 package com.foresightlabs.aether.data.calls
 
 import android.app.Application
-import android.util.Log
-import com.foresightlabs.aether.BuildConfig
+import com.foresightlabs.aether.calls.media.CallDiagnostics
+import com.foresightlabs.aether.calls.media.CallStage
+import com.foresightlabs.aether.calls.media.DecodedVideoFrame
+import com.foresightlabs.aether.calls.media.NativeTelegramCallMediaEngine
 import com.foresightlabs.aether.data.calls.media.TgCallsMediaEngine
 import com.foresightlabs.aether.data.permissions.PermissionCoordinator
 import com.foresightlabs.aether.data.telegram.TelegramCallMessageMapper
 import com.foresightlabs.aether.data.telegram.TelegramClient
 import com.foresightlabs.aether.domain.calls.AudioRoute
+import com.foresightlabs.aether.domain.calls.CallPermissions
 import com.foresightlabs.aether.domain.calls.CallsRepository
 import com.foresightlabs.aether.domain.calls.MediaConnectionState
 import com.foresightlabs.aether.domain.calls.TelegramCallMediaEngine
@@ -15,12 +18,16 @@ import com.foresightlabs.aether.domain.model.ActiveCall
 import com.foresightlabs.aether.domain.model.CallHistoryItem
 import com.foresightlabs.aether.domain.model.CallHistoryUiState
 import com.foresightlabs.aether.domain.model.CallStateEnum
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -28,6 +35,17 @@ import org.drinkless.tdlib.TdApi
 
 /** Raised when a call is attempted with no media transport to carry its audio. */
 class CallMediaUnavailableException(message: String) : Exception(message)
+
+/** The diagnostic stage a media-transport state corresponds to. */
+private fun MediaConnectionState.toStage(): CallStage = when (this) {
+    MediaConnectionState.IDLE -> CallStage.TEARDOWN
+    MediaConnectionState.INITIALIZING -> CallStage.MEDIA_SESSION_CREATED
+    MediaConnectionState.CONNECTING -> CallStage.P2P_CONNECTING
+    MediaConnectionState.CONNECTED -> CallStage.MEDIA_CONNECTED
+    MediaConnectionState.RECONNECTING -> CallStage.P2P_CONNECTING
+    MediaConnectionState.FAILED, MediaConnectionState.UNAVAILABLE -> CallStage.FAILED
+    MediaConnectionState.STOPPED -> CallStage.TEARDOWN
+}
 
 class DefaultCallsRepository(
     private val telegram: TelegramClient,
@@ -45,6 +63,7 @@ class DefaultCallsRepository(
         get() = if (isCallMediaAvailable) null else NO_MEDIA_TRANSPORT
 
     override val activeCallState: StateFlow<ActiveCall?> = telegram.activeCallState
+    override val videoFrames: SharedFlow<DecodedVideoFrame> = mediaEngine.videoFrames
 
     private val _historyState = MutableStateFlow<CallHistoryUiState>(CallHistoryUiState.Loading)
     override val historyState: StateFlow<CallHistoryUiState> = _historyState.asStateFlow()
@@ -53,41 +72,129 @@ class DefaultCallsRepository(
     private var lastTdLibState: CallStateEnum? = null
     private var lastMediaState: MediaConnectionState? = null
 
+    /**
+     * Monotonic id for the one media session this repository owns.
+     *
+     * Bumped every time a media session is started or torn down, so a late
+     * callback, a stale service intent or a delayed coroutine can be attributed
+     * to the session it belongs to instead of silently acting on the one that
+     * replaced it.
+     */
+    private val callGeneration = AtomicLong(0L)
+
+    /** The call id whose media session is currently started, if any. */
+    @Volatile
+    private var startedMediaCallId: Int? = null
+
+    // Guards against a doubled Accept/End tap (or a second tap landing while
+    // the first is still suspended on TDLib) driving the native engine or a
+    // TDLib request twice for the same call. Cleared once the call actually
+    // ends -- see handleTdLibStateChange -- so these never grow unbounded.
+    private val acceptedCallIds = Collections.synchronizedSet(mutableSetOf<Int>())
+    private val discardedCallIds = Collections.synchronizedSet(mutableSetOf<Int>())
+
     init {
+        // Every collector body is guarded: an exception raised while reacting to
+        // a call update must not cancel the collector (which would silently stop
+        // all later call handling) and must never reach the process's uncaught
+        // handler. A call is exactly the moment a crash costs the most.
         scope.launch {
             telegram.activeCallState.collect { call ->
-                handleTdLibStateChange(call)
+                guarded(CallStage.TDLIB_READY) { handleTdLibStateChange(call) }
             }
         }
 
         scope.launch {
             telegram.latestRawCallState.collect { rawCall ->
-                handleRawCallUpdate(rawCall)
+                guarded(CallStage.TDLIB_READY) { handleRawCallUpdate(rawCall) }
             }
         }
 
         scope.launch {
             mediaEngine.state.collect { mediaState ->
-                handleMediaStateChange(mediaState)
+                guarded(CallStage.MEDIA_CONNECTED) { handleMediaStateChange(mediaState) }
+            }
+        }
+
+        // Both signalling directions TDLib and the media engine need to
+        // exchange for the call to connect beyond the initial key/server
+        // handshake -- see docs/architecture/messaging-calls.md.
+        scope.launch {
+            mediaEngine.outgoingSignalingData.collect { data ->
+                val callId = activeCallState.value?.callId ?: return@collect
+                runCatching { telegram.sendCallSignalingData(callId, data) }
+                    .onFailure { CallDiagnostics.failure(callGeneration.get(), CallStage.P2P_CONNECTING, it) }
+            }
+        }
+        scope.launch {
+            telegram.callSignalingDataFlow.collect { update ->
+                val payload = update.data ?: return@collect
+                guarded(CallStage.P2P_CONNECTING) {
+                    mediaEngine.submitIncomingSignalingData(update.callId.toLong(), payload)
+                }
             }
         }
     }
+
+    private inline fun guarded(stage: CallStage, body: () -> Unit) {
+        try {
+            body()
+        } catch (cancellation: CancellationException) {
+            // Cancellation is how a coroutine is told to stop, not a failure to
+            // absorb: swallowing it here would leave the collector believing it
+            // is still running.
+            throw cancellation
+        } catch (t: Throwable) {
+            CallDiagnostics.failure(callGeneration.get(), stage, t)
+        }
+    }
+
+    /**
+     * The call protocol Aether actually asks TDLib to negotiate, built from
+     * what the linked media engine really supports rather than a guessed
+     * layer/version list. Falls back to conservative, TDLib-documented
+     * defaults only when no transport is loaded at all -- a path
+     * [isCallMediaAvailable] should already keep [initiateCall]/[acceptCall]
+     * from reaching.
+     */
+    private fun negotiatedProtocol(): TdApi.CallProtocol =
+        TgCallsAdapter.buildCallProtocol(NativeTelegramCallMediaEngine.supportedProtocol())
 
     private fun handleRawCallUpdate(rawCall: TdApi.Call?) {
         if (rawCall == null) return
         val readyState = rawCall.state as? TdApi.CallStateReady ?: return
 
-        if (mediaEngine.state.value == MediaConnectionState.IDLE ||
-            mediaEngine.state.value == MediaConnectionState.STOPPED
-        ) {
-            if (BuildConfig.DEBUG) {
-                Log.d("CallsRepository", "CallStateReady received. Initializing TgCalls media engine for call ${rawCall.id}")
-            }
-            val callerName = activeCallState.value?.user?.name ?: "Telegram Contact"
-            CallService.startService(application, callerName, isConnected = false)
+        // One media session per call, ever. Re-delivery of CallStateReady (TDLib
+        // repeats the update, and does so again after a process restart) must not
+        // start a second session on top of a live one.
+        if (startedMediaCallId == rawCall.id) return
+        val mediaState = mediaEngine.state.value
+        if (mediaState != MediaConnectionState.IDLE && mediaState != MediaConnectionState.STOPPED) return
 
-            scope.launch {
-                mediaEngine.start(rawCall, readyState)
+        startedMediaCallId = rawCall.id
+        val generation = callGeneration.incrementAndGet()
+        CallDiagnostics.stage(generation, CallStage.TDLIB_READY, "video=${rawCall.isVideo} outgoing=${rawCall.isOutgoing}")
+
+        // Camera capture is a separate capability from the call itself: a video
+        // call whose camera permission was refused still connects, as audio.
+        // Video initialisation must never be on the path a voice call takes.
+        val videoCaptureEnabled = rawCall.isVideo && permissionCoordinator.isGranted(CallPermissions.CAMERA)
+        if (rawCall.isVideo && !videoCaptureEnabled) {
+            CallDiagnostics.stage(generation, CallStage.VIDEO_INITIALIZING, "skipped=no_camera_permission")
+        }
+
+        val callerName = activeCallState.value?.user?.name ?: "Telegram Contact"
+        CallService.startService(
+            application,
+            callerName,
+            isConnected = false,
+            isVideo = videoCaptureEnabled,
+            generation = generation
+        )
+
+        scope.launch {
+            guarded(CallStage.MEDIA_SESSION_CREATED) {
+                mediaEngine.start(rawCall, readyState, videoCaptureEnabled)
             }
         }
     }
@@ -95,21 +202,28 @@ class DefaultCallsRepository(
     private fun handleTdLibStateChange(call: ActiveCall?) {
         val currentState = call?.state
         if (currentState == CallStateEnum.DISCARDED || currentState == CallStateEnum.ERROR) {
+            CallDiagnostics.stage(callGeneration.get(), CallStage.TEARDOWN, "tdlib=${currentState.name}")
             stopTimer()
+            startedMediaCallId = null
+            callGeneration.incrementAndGet()
             mediaEngine.stop()
             CallService.stopService(application)
+            CallDiagnostics.stage(callGeneration.get(), CallStage.SERVICE_STOPPED, "reason=call_ended")
+            call?.let {
+                acceptedCallIds.remove(it.callId)
+                discardedCallIds.remove(it.callId)
+            }
             scope.launch {
                 delay(1000)
-                refreshHistory()
+                guarded(CallStage.TEARDOWN) { refreshHistory() }
             }
         }
         lastTdLibState = currentState
     }
 
     private fun handleMediaStateChange(mediaState: MediaConnectionState) {
-        if (BuildConfig.DEBUG) {
-            Log.d("CallsRepository", "TgCalls MediaState: $mediaState")
-        }
+        val generation = callGeneration.get()
+        CallDiagnostics.stage(generation, mediaState.toStage(), "media=${mediaState.name}")
 
         val currentCall = activeCallState.value
         if (currentCall != null) {
@@ -117,7 +231,15 @@ class DefaultCallsRepository(
 
             when (mediaState) {
                 MediaConnectionState.CONNECTED -> {
-                    CallService.startService(application, callerName, isConnected = true)
+                    CallService.startService(
+                        application,
+                        callerName,
+                        isConnected = true,
+                        // Only claim the camera service type when the camera is
+                        // genuinely in use for this call.
+                        isVideo = currentCall.isVideo && permissionCoordinator.isGranted(CallPermissions.CAMERA),
+                        generation = generation
+                    )
                     startTimer()
                 }
                 MediaConnectionState.FAILED -> {
@@ -175,11 +297,11 @@ class DefaultCallsRepository(
             "Calls can't connect in this build — no call audio engine is included."
     }
 
-    override suspend fun initiateCall(userId: Long): Result<Int> {
+    override suspend fun initiateCall(userId: Long, isVideo: Boolean): Result<Int> {
         if (!mediaEngine.isMediaTransportAvailable) {
             return Result.failure(CallMediaUnavailableException(NO_MEDIA_TRANSPORT))
         }
-        return telegram.createVoiceCall(userId)
+        return telegram.createCall(userId, isVideo, negotiatedProtocol())
     }
 
     override suspend fun acceptCall(callId: Int): Result<Unit> {
@@ -187,10 +309,19 @@ class DefaultCallsRepository(
             telegram.discardCall(callId)
             return Result.failure(CallMediaUnavailableException(NO_MEDIA_TRANSPORT))
         }
-        return telegram.acceptCall(callId)
+        if (!acceptedCallIds.add(callId)) {
+            // Already accepted -- a second tap, or a tap that landed while the
+            // first was still suspended on TDLib. Neither should ask TDLib or
+            // the native engine to accept the same call twice.
+            return Result.success(Unit)
+        }
+        return telegram.acceptCall(callId, negotiatedProtocol())
     }
 
     override suspend fun discardCall(callId: Int): Result<Unit> {
+        if (!discardedCallIds.add(callId)) {
+            return Result.success(Unit)
+        }
         stopTimer()
         mediaEngine.stop()
         CallService.stopService(application)
@@ -201,6 +332,14 @@ class DefaultCallsRepository(
         val newMute = !mediaEngine.isMuted.value
         mediaEngine.setMicrophoneMuted(newMute)
         telegram.toggleCallMute()
+    }
+
+    override fun setCameraEnabled(enabled: Boolean) {
+        mediaEngine.setCameraEnabled(enabled)
+    }
+
+    override fun switchCamera() {
+        mediaEngine.switchCamera()
     }
 
     override fun toggleSpeaker() {

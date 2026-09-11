@@ -2,23 +2,36 @@ package com.foresightlabs.aether
 
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.foresightlabs.aether.data.network.AetherConnectivityState
 import com.foresightlabs.aether.data.notifications.ActiveConversationTracker
 import com.foresightlabs.aether.data.sharing.SharedContentInbox
 import com.foresightlabs.aether.data.sharing.SharedIntents
 import com.foresightlabs.aether.data.sharing.SharedUriGateway
 import com.foresightlabs.aether.data.notifications.AetherNotificationManager
 import com.foresightlabs.aether.navigation.AetherApp
+import com.foresightlabs.aether.ui.home.atmosphere.LocalHeroSeed
+import com.foresightlabs.aether.ui.security.AppLockGate
 import com.foresightlabs.aether.ui.theme.AetherTheme
 import com.foresightlabs.aether.ui.theme.AppThemeState
 import com.foresightlabs.aether.ui.theme.LocalAppThemeState
+import com.foresightlabs.aether.ui.theme.LocalAppearanceRepository
+import kotlinx.coroutines.flow.MutableStateFlow
 
-class MainActivity : ComponentActivity() {
+/**
+ * FragmentActivity, not the plainer ComponentActivity most single-Activity
+ * Compose apps use -- AndroidX BiometricPrompt requires one to host the
+ * system biometric prompt. FragmentActivity is itself a ComponentActivity,
+ * so Compose's setContent and everything else below is unaffected.
+ */
+class MainActivity : androidx.fragment.app.FragmentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     handleNotificationIntent(intent)
@@ -28,15 +41,31 @@ class MainActivity : ComponentActivity() {
       navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
     )
     val appearanceRepository = com.foresightlabs.aether.data.preferences.AppearanceRepository.getInstance(applicationContext)
+    val aetherApp = applicationContext as? AetherApplication
+    val connectivityObserver = aetherApp?.connectivityObserver
+
     setContent {
-      val scope = androidx.compose.runtime.rememberCoroutineScope()
+      val scope = rememberCoroutineScope()
       val themeState = remember { AppThemeState(appearanceRepository, scope) }
+      val sessionSeed = remember { System.currentTimeMillis() }
+      val connectivityState by (connectivityObserver?.state
+          ?: MutableStateFlow(AetherConnectivityState.ONLINE))
+          .collectAsStateWithLifecycle(initialValue = AetherConnectivityState.ONLINE)
+
       CompositionLocalProvider(
         LocalAppThemeState provides themeState,
-        com.foresightlabs.aether.ui.theme.LocalAppearanceRepository provides appearanceRepository,
+        LocalAppearanceRepository provides appearanceRepository,
+        LocalHeroSeed provides sessionSeed,
+        com.foresightlabs.aether.ui.home.atmosphere.LocalAetherConnectivityState provides connectivityState
       ) {
         AetherTheme(themeState = themeState) {
-          AetherApp()
+          // Every entry point -- launcher, notification tap, share target,
+          // process recreation -- reaches AetherApp() through this same call,
+          // so there is exactly one place the lock gate can be bypassed from:
+          // nowhere. See AppLockGate for why locked content is never composed.
+          AppLockGate {
+            AetherApp()
+          }
         }
       }
     }

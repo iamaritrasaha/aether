@@ -3,6 +3,7 @@ package com.foresightlabs.aether.ui.auth
 import android.app.Application
 import android.content.Context
 import android.util.Base64
+import android.util.Log
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetPublicKeyCredentialOption
@@ -10,7 +11,11 @@ import androidx.credentials.PublicKeyCredential
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.foresightlabs.aether.AetherApplication
+import com.foresightlabs.aether.BuildConfig
+import com.foresightlabs.aether.data.telegram.TelegramClient
+import com.foresightlabs.aether.domain.model.AuthCategory
 import com.foresightlabs.aether.domain.model.AuthUiState
+import com.foresightlabs.aether.domain.model.category
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -18,9 +23,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
-class AuthViewModel(application: Application) : AndroidViewModel(application) {
-    private val telegram = (application as AetherApplication).telegram
+class AuthViewModel @JvmOverloads constructor(
+    application: Application,
+    private val telegramClientOverride: TelegramClient? = null
+) : AndroidViewModel(application) {
+    private val telegram = telegramClientOverride
+        ?: (application as AetherApplication).telegram
     private val onboardingRepository = (application as AetherApplication).onboardingRepository
 
     val onboardingCompleted = onboardingRepository.completed
@@ -31,6 +41,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         telegram.authState.value
     )
 
+    private val inFlight = AtomicBoolean(false)
+
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
@@ -40,6 +52,20 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val _passwordRecoveryRequested = MutableStateFlow(false)
     val passwordRecoveryRequested: StateFlow<Boolean> = _passwordRecoveryRequested.asStateFlow()
 
+    private var lastCategory: AuthCategory = authState.value.category
+
+    init {
+        viewModelScope.launch {
+            authState.collect { newState ->
+                val newCategory = newState.category
+                if (newCategory != lastCategory) {
+                    lastCategory = newCategory
+                    _error.value = null
+                }
+            }
+        }
+    }
+
     fun submitPhone(raw: String) {
         val phone = raw.filter { it.isDigit() || it == '+' }
         if (phone.filter { it.isDigit() }.length < 7) {
@@ -47,7 +73,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val normalized = if (phone.startsWith("+")) phone else "+$phone"
-        runRequest { telegram.submitPhoneNumber(normalized) }
+        runRequest("submitPhone") { telegram.submitPhoneNumber(normalized) }
     }
 
     fun submitCode(code: String) {
@@ -56,7 +82,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             _error.value = "Enter the verification code."
             return
         }
-        runRequest { telegram.submitCode(trimmed) }
+        runRequest("submitCode") { telegram.submitCode(trimmed) }
     }
 
     fun submitPassword(password: String) {
@@ -65,13 +91,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (_passwordRecoveryRequested.value) {
-            runRequest {
+            runRequest("submitPasswordRecoveryCode") {
                 telegram.submitPasswordRecoveryCode(password).also { result ->
                     if (result.isSuccess) _passwordRecoveryRequested.value = false
                 }
             }
         } else {
-            runRequest { telegram.submitPassword(password) }
+            runRequest("submitPassword") { telegram.submitPassword(password) }
         }
     }
 
@@ -80,11 +106,11 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             _error.value = "Enter your first name."
             return
         }
-        runRequest { telegram.registerUser(firstName.trim(), lastName.trim()) }
+        runRequest("registerUser") { telegram.registerUser(firstName.trim(), lastName.trim()) }
     }
 
     fun resendCode() {
-        runRequest { telegram.resendCode() }
+        runRequest("resendCode") { telegram.resendCode() }
     }
 
     fun submitEmailAddress(email: String) {
@@ -92,7 +118,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             _error.value = "Enter a valid email address."
             return
         }
-        runRequest { telegram.submitEmailAddress(email.trim()) }
+        runRequest("submitEmailAddress") { telegram.submitEmailAddress(email.trim()) }
     }
 
     fun submitEmailCode(code: String) {
@@ -101,19 +127,19 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             _error.value = "Enter the email verification code."
             return
         }
-        runRequest { telegram.submitEmailCode(normalized) }
+        runRequest("submitEmailCode") { telegram.submitEmailCode(normalized) }
     }
 
     fun resetEmailAddress() {
-        runRequest { telegram.resetAuthenticationEmailAddress() }
+        runRequest("resetAuthenticationEmailAddress") { telegram.resetAuthenticationEmailAddress() }
     }
 
     fun requestQrCodeAuthentication() {
-        runRequest { telegram.requestQrCodeAuthentication() }
+        runRequest("requestQrCodeAuthentication") { telegram.requestQrCodeAuthentication() }
     }
 
     fun requestPasswordRecovery() {
-        runRequest {
+        runRequest("requestPasswordRecovery") {
             telegram.requestPasswordRecovery().also { result ->
                 if (result.isSuccess) _passwordRecoveryRequested.value = true
             }
@@ -121,10 +147,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun usePasskey(context: Context) {
+        if (!inFlight.compareAndSet(false, true)) return
+        _busy.value = true
+        _error.value = null
+        val originCategory = authState.value.category
         viewModelScope.launch {
-            _busy.value = true
-            _error.value = null
-            runCatching {
+            try {
                 val requestJson = telegram.getAuthenticationPasskeyParameters().getOrThrow()
                 val credential = CredentialManager.create(context).getCredential(
                     context = context,
@@ -143,10 +171,14 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     userHandle = responseData.optString("userHandle").takeIf { it.isNotEmpty() }
                         ?.let(::decodeBase64Url) ?: ByteArray(0)
                 ).getOrThrow()
-            }.onFailure { failure ->
-                _error.value = failure.message ?: "Passkey sign-in was not completed."
+            } catch (failure: Exception) {
+                if (authState.value.category == originCategory) {
+                    _error.value = failure.message ?: "Passkey sign-in was not completed."
+                }
+            } finally {
+                _busy.value = false
+                inFlight.set(false)
             }
-            _busy.value = false
         }
     }
 
@@ -158,13 +190,48 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         _error.value = null
     }
 
-    private fun runRequest(block: suspend () -> Result<Unit>) {
+    private fun runRequest(actionName: String, block: suspend () -> Result<Unit>) {
+        if (!inFlight.compareAndSet(false, true)) {
+            if (BuildConfig.DEBUG) {
+                Log.d("AetherAuth", "AUTH_REQUEST $actionName DROPPED_DUPLICATE_IN_FLIGHT")
+            }
+            return
+        }
+        _busy.value = true
+        _error.value = null
+        val originCategory = authState.value.category
+        if (BuildConfig.DEBUG) {
+            Log.d("AetherAuth", "AUTH_REQUEST $actionName originCategory=$originCategory")
+        }
         viewModelScope.launch {
-            _busy.value = true
-            _error.value = null
-            val result = block()
-            _busy.value = false
-            result.exceptionOrNull()?.message?.let { _error.value = it }
+            try {
+                val result = block()
+                val currentCategory = authState.value.category
+                val err = result.exceptionOrNull()
+                if (err != null) {
+                    if (BuildConfig.DEBUG) {
+                        Log.d("AetherAuth", "AUTH_REQUEST_RESULT $actionName ERROR category=$originCategory currentCategory=$currentCategory")
+                    }
+                    if (currentCategory == originCategory) {
+                        _error.value = err.message ?: "Request failed."
+                    }
+                } else {
+                    if (BuildConfig.DEBUG) {
+                        Log.d("AetherAuth", "AUTH_REQUEST_RESULT $actionName OK")
+                    }
+                }
+            } catch (e: Exception) {
+                val currentCategory = authState.value.category
+                if (BuildConfig.DEBUG) {
+                    Log.d("AetherAuth", "AUTH_REQUEST_RESULT $actionName EXCEPTION category=$originCategory currentCategory=$currentCategory")
+                }
+                if (currentCategory == originCategory) {
+                    _error.value = e.message ?: "An unexpected error occurred."
+                }
+            } finally {
+                _busy.value = false
+                inFlight.set(false)
+            }
         }
     }
 

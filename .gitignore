@@ -41,3 +41,5 @@ app/google-services.json
 /tdlib-data/
 /sessions/
 /aether-play-console-upload.zip
+/.claude/
+/.vscode/

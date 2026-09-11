@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
@@ -69,6 +70,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onNavigateToAppearance: () -> Unit,
     onNavigateToAbout: () -> Unit = {},
+    onNavigateToAppLock: () -> Unit = {},
     onRequestLogout: () -> Unit,
     onConfirmLogout: () -> Unit,
     onDismissLogout: () -> Unit,
@@ -173,6 +175,37 @@ fun SettingsScreen(
                             subtitle = "Atmospheric palettes, accents, typography",
                             onClick = onNavigateToAppearance,
                             testTag = "settings_appearance_item"
+                        )
+                    }
+                }
+
+                // Privacy & Security Group
+                item {
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Text(
+                        text = "PRIVACY & SECURITY",
+                        fontFamily = ManropeFontFamily,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = AetherEmber.Colors.AtmosphereTextSecondary,
+                        letterSpacing = 1.2.sp,
+                        modifier = Modifier.padding(start = 24.dp, bottom = 6.dp)
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .clip(AetherEmber.Shapes.L)
+                            .background(colors.surfaceElevated)
+                            .border(1.dp, colors.border, AetherEmber.Shapes.L)
+                    ) {
+                        SettingsRowItem(
+                            icon = Icons.Default.Lock,
+                            title = "App Lock",
+                            subtitle = "Passcode and biometric unlock for Aether",
+                            onClick = onNavigateToAppLock,
+                            testTag = "settings_app_lock_item"
                         )
                     }
                 }

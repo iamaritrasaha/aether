@@ -12,6 +12,8 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import com.foresightlabs.aether.data.preferences.AetherAppearancePreferences
 import com.foresightlabs.aether.data.preferences.AppearanceRepository
+import com.foresightlabs.aether.ui.home.atmosphere.TimeAtmospherePolicy
+import com.foresightlabs.aether.ui.home.atmosphere.TimePeriod
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest

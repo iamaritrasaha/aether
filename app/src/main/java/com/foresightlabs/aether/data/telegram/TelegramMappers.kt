@@ -44,7 +44,9 @@ object TelegramMappers {
                 phoneNumber = state.codeInfo?.phoneNumber.orEmpty(),
                 codeLength = codeLength(state.codeInfo?.type),
                 hint = codeHint(state.codeInfo),
-                isNumeric = codeIsNumeric(state.codeInfo?.type)
+                isNumeric = codeIsNumeric(state.codeInfo?.type),
+                timeoutSeconds = state.codeInfo?.timeout ?: 0,
+                nextTypeDescription = nextTypeLabel(state.codeInfo?.nextType)
             )
             is TdApi.AuthorizationStateWaitPassword -> AuthUiState.Password(
                 hint = state.passwordHint?.takeIf { it.isNotBlank() },
@@ -306,6 +308,7 @@ object TelegramMappers {
             canRetry = message.sendingState is TdApi.MessageSendingStateFailed,
             autoDeleteIn = message.autoDeleteIn,
             selfDestructIn = message.selfDestructIn,
+            isViewOnce = message.selfDestructType is TdApi.MessageSelfDestructTypeImmediately,
             liveLocationExpiresIn = (message.content as? TdApi.MessageLocation)?.expiresIn ?: 0,
             isLiveLocation = (message.content as? TdApi.MessageLocation)?.livePeriod?.let { it > 0 } ?: false,
             venueTitle = (message.content as? TdApi.MessageVenue)?.venue?.title,
@@ -1133,9 +1136,9 @@ object TelegramMappers {
         val type = info?.type ?: return "Enter the verification code from Telegram."
         return when (type) {
             is TdApi.AuthenticationCodeTypeTelegramMessage ->
-                "Check Telegram on your other device."
+                "Telegram sent the code to your other logged-in Telegram session."
             is TdApi.AuthenticationCodeTypeSms ->
-                "We sent an SMS to ${maskedPhone(info.phoneNumber)}."
+                "We sent an SMS with a code to ${maskedPhone(info.phoneNumber)}."
             is TdApi.AuthenticationCodeTypeSmsWord ->
                 "Telegram sent a word by SMS to ${maskedPhone(info.phoneNumber)}."
             is TdApi.AuthenticationCodeTypeSmsPhrase ->
@@ -1147,8 +1150,27 @@ object TelegramMappers {
             is TdApi.AuthenticationCodeTypeFlashCall ->
                 "Telegram will call ${maskedPhone(info.phoneNumber)} to verify this number."
             is TdApi.AuthenticationCodeTypeFragment ->
-                "Enter the code from Fragment."
+                "Enter the verification code from Fragment."
+            is TdApi.AuthenticationCodeTypeFirebaseAndroid,
+            is TdApi.AuthenticationCodeTypeFirebaseIos ->
+                "We sent an SMS with a code to ${maskedPhone(info.phoneNumber)}."
             else -> "Enter the verification code from Telegram."
+        }
+    }
+
+    private fun nextTypeLabel(nextType: TdApi.AuthenticationCodeType?): String? {
+        return when (nextType) {
+            is TdApi.AuthenticationCodeTypeTelegramMessage -> "Telegram app"
+            is TdApi.AuthenticationCodeTypeSms,
+            is TdApi.AuthenticationCodeTypeSmsWord,
+            is TdApi.AuthenticationCodeTypeSmsPhrase,
+            is TdApi.AuthenticationCodeTypeFirebaseAndroid,
+            is TdApi.AuthenticationCodeTypeFirebaseIos -> "SMS"
+            is TdApi.AuthenticationCodeTypeCall -> "phone call"
+            is TdApi.AuthenticationCodeTypeMissedCall -> "missed call"
+            is TdApi.AuthenticationCodeTypeFlashCall -> "flash call"
+            is TdApi.AuthenticationCodeTypeFragment -> "Fragment"
+            else -> null
         }
     }
 

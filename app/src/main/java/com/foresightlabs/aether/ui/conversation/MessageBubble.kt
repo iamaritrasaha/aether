@@ -21,6 +21,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RemoveRedEye
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -76,6 +78,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -89,6 +92,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -143,7 +147,8 @@ fun MessageBubble(
     onRetry: ((Message) -> Unit)? = null,
     onReplyPreviewClick: (chatId: Long, messageId: Long) -> Unit = { _, _ -> },
     motionEvent: MessageMotionEvent? = null,
-    reducedMotion: Boolean = false
+    reducedMotion: Boolean = false,
+    maxAvailableWidth: Dp? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
     val colors = LocalAetherColors.current
@@ -291,6 +296,11 @@ fun MessageBubble(
         else -> Modifier
     }
 
+    val screenWidth = maxAvailableWidth ?: LocalConfiguration.current.screenWidthDp.dp
+    val checkPadding = if (!isOutgoing && isSelected) 26.dp else 0.dp
+    val usableWidth = (screenWidth - 28.dp - checkPadding).coerceAtLeast(100.dp)
+    val maxBubbleWidth = (usableWidth * 0.82f).coerceIn(200.dp, 440.dp).coerceAtMost(usableWidth)
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -327,6 +337,7 @@ fun MessageBubble(
                 }
             )
     ) {
+
         // Reply indicator on drag
         val replyIconAlpha = (-offsetX.value / 120f).coerceIn(0f, 1f)
         val replyIconScale = (-offsetX.value / 120f).coerceIn(0.5f, 1.15f)
@@ -384,7 +395,7 @@ fun MessageBubble(
 
             Column(
                 horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
-                modifier = Modifier.widthIn(max = 258.dp)
+                modifier = Modifier.widthIn(max = maxBubbleWidth)
             ) {
                 // Main Bubble Container
                 Box(
@@ -584,26 +595,32 @@ fun MessageBubble(
                             MessageType.IMAGE -> {
                                 val firstMedia = message.mediaItems.firstOrNull()
                                 if (firstMedia != null) {
-                                    ImageAttachmentContent(
-                                        media = firstMedia,
-                                        caption = message.text,
-                                        onMediaClick = onMediaClick,
-                                        isOutgoing = isOutgoing,
-                                        isSelectionActive = isSelectionActive
-                                    )
+                                    Box {
+                                        ImageAttachmentContent(
+                                            media = firstMedia,
+                                            caption = message.text,
+                                            onMediaClick = onMediaClick,
+                                            isOutgoing = isOutgoing,
+                                            isSelectionActive = isSelectionActive
+                                        )
+                                        if (message.isViewOnce) ViewOnceBadge(modifier = Modifier.align(Alignment.TopEnd))
+                                    }
                                 }
                             }
                             MessageType.VIDEO -> {
                                 val firstMedia = message.mediaItems.firstOrNull()
                                 if (firstMedia != null) {
-                                    VideoAttachmentContent(
-                                        media = firstMedia,
-                                        caption = message.text,
-                                        durationSec = message.voiceDurationSec,
-                                        onMediaClick = onMediaClick,
-                                        isOutgoing = isOutgoing,
-                                        isSelectionActive = isSelectionActive
-                                    )
+                                    Box {
+                                        VideoAttachmentContent(
+                                            media = firstMedia,
+                                            caption = message.text,
+                                            durationSec = message.voiceDurationSec,
+                                            onMediaClick = onMediaClick,
+                                            isOutgoing = isOutgoing,
+                                            isSelectionActive = isSelectionActive
+                                        )
+                                        if (message.isViewOnce) ViewOnceBadge(modifier = Modifier.align(Alignment.TopEnd))
+                                    }
                                 }
                             }
                             MessageType.STICKER -> {
@@ -882,7 +899,7 @@ private fun ReplySnippet(
 
     Row(
         modifier = Modifier
-            .widthIn(max = 240.dp)
+            .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .heightIn(min = 48.dp)
             .onGloballyPositioned(onPositioned)
@@ -947,7 +964,7 @@ private fun FileAttachmentContent(
 
     Row(
         modifier = Modifier
-            .widthIn(max = 240.dp)
+            .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(contentColor.copy(alpha = if (isOutgoing) 0.15f else 0.12f))
             .padding(8.dp),
@@ -997,6 +1014,41 @@ private fun FileAttachmentContent(
  * absent -- the atmospheric hold underneath it. Never a bright system
  * skeleton, never nothing.
  */
+/**
+ * Marks a photo/video bubble as real Telegram view-once media -- from
+ * [Message.isViewOnce], itself read from TDLib's own selfDestructType, never
+ * a client-side flag. A restrained corner badge, not a reworked/hidden
+ * thumbnail: Aether already renders this media the way it renders any other,
+ * so the badge is what tells the difference apart, matching the send-side
+ * toggle's own restrained language ("View once", never "disappearing").
+ */
+@Composable
+private fun ViewOnceBadge(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .padding(6.dp)
+            .clip(CircleShape)
+            .background(Color(0xB0000000))
+            .padding(horizontal = 7.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.RemoveRedEye,
+            contentDescription = "View once",
+            tint = Color.White,
+            modifier = Modifier.size(12.dp)
+        )
+        Spacer(modifier = Modifier.width(3.dp))
+        Text(
+            text = "1",
+            fontFamily = ManropeFontFamily,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+    }
+}
+
 @Composable
 private fun MediaPreviewLayer(previewBitmap: android.graphics.Bitmap?) {
     if (previewBitmap != null) {
@@ -1304,7 +1356,7 @@ private fun LinkPreviewCard(
 
     Column(
         modifier = Modifier
-            .widthIn(max = 250.dp)
+            .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(contentColor.copy(alpha = if (isOutgoing) 0.15f else 0.12f))
             .padding(8.dp)
@@ -1692,7 +1744,7 @@ private fun ContactAttachmentContent(
 
     Row(
         modifier = Modifier
-            .widthIn(max = 240.dp)
+            .fillMaxWidth()
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1750,7 +1802,7 @@ private fun LocationAttachmentContent(
 
     Column(
         modifier = Modifier
-            .widthIn(max = 260.dp)
+            .fillMaxWidth()
             .padding(vertical = 4.dp)
     ) {
         Row(
@@ -1841,7 +1893,7 @@ private fun VenueAttachmentContent(
 
     Row(
         modifier = Modifier
-            .widthIn(max = 260.dp)
+            .fillMaxWidth()
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

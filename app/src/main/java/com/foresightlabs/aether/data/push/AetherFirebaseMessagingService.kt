@@ -36,6 +36,7 @@ import kotlinx.coroutines.runBlocking
  */
 class AetherFirebaseMessagingService : FirebaseMessagingService() {
 
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onNewToken(token: String) {
         if (!BuildConfig.HAS_FCM_CONFIG) {
             if (BuildConfig.DEBUG) {

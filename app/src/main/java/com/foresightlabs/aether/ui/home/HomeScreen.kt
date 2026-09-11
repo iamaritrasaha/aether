@@ -1,5 +1,8 @@
 package com.foresightlabs.aether.ui.home
+import kotlin.math.PI
 import kotlin.math.pow
+import kotlin.math.roundToInt
+import kotlin.math.sin
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -51,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
@@ -62,6 +66,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -80,6 +85,8 @@ import com.foresightlabs.aether.domain.chats.ChatAction
 import com.foresightlabs.aether.ui.home.ChatActionSheet
 import com.foresightlabs.aether.ui.common.ChatRow
 import com.foresightlabs.aether.ui.design.AetherConnectionMote
+import com.foresightlabs.aether.ui.design.AetherCurtainSeamBow
+import com.foresightlabs.aether.ui.design.AetherCurtainSeamShape
 import com.foresightlabs.aether.ui.design.AetherEmptyState
 import com.foresightlabs.aether.ui.design.LocalSceneHeightCache
 import com.foresightlabs.aether.ui.design.LocalSceneOwnsDock
@@ -89,9 +96,11 @@ import com.foresightlabs.aether.ui.home.PresenceDensity
 import com.foresightlabs.aether.ui.home.PresenceStripTokens
 import com.foresightlabs.aether.ui.design.rememberAetherFrostState
 import com.foresightlabs.aether.ui.home.atmosphere.AetherTimeAtmosphere
+import com.foresightlabs.aether.ui.home.atmosphere.TimePeriod
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
+import com.foresightlabs.aether.ui.theme.rememberLocalMinuteOfDay
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
@@ -187,6 +196,10 @@ fun HomeScreen(
         // spring's last fractional step does not flip this back to measuring
         // mode and jitter the layout on the final frame.
         val atRest = sceneProgress == null || sceneProgress < 0.02f
+        // Zero at rest on either end (0 or 1), peaking mid-transition -- the
+        // curtain-seam bow only ever appears while the scene is actually
+        // moving. See AetherCurtainSeamShape.
+        val sceneMorphBow = sceneProgress?.let { sin(it.coerceIn(0f, 1f) * PI.toFloat()) } ?: 0f
         val containerHeightPx = with(density) { maxHeight.toPx() }
         val morphedHeroPx = if (!atRest && heightCache != null) {
             heightCache.edgePx(sceneProgress!!, containerHeightPx)
@@ -263,7 +276,7 @@ fun HomeScreen(
                     bottom = if (isSelectionActive) 80.dp else AetherEmber.Spacing.Space32
                 )
             ) {
-                items(visibleChats, key = { it.id }) { chat ->
+                items(visibleChats, key = { it.id }, contentType = { "chat_row" }) { chat ->
                     ChatRow(
                         chat = chat,
                         onClick = {
@@ -340,7 +353,18 @@ fun HomeScreen(
                         // canvas — reading the same two numbers and the same
                         // progress — are always the same rectangle, not two
                         // independently animated shapes that merely resemble it.
-                        Modifier.height(with(density) { morphedHeroPx.toDp() })
+                        Modifier.layout { measurable, constraints ->
+                            val targetHeight = morphedHeroPx.roundToInt()
+                            val placeable = measurable.measure(
+                                constraints.copy(
+                                    minHeight = targetHeight.coerceAtMost(constraints.maxHeight),
+                                    maxHeight = targetHeight.coerceAtMost(constraints.maxHeight)
+                                )
+                            )
+                            layout(placeable.width, placeable.height) {
+                                placeable.place(0, 0)
+                            }
+                        }
                     } else {
                         // At rest: measured from its own content, exactly as
                         // before, and the result is banked for the next morph.
@@ -350,10 +374,15 @@ fun HomeScreen(
                         }
                     }
                 )
+                // A plain rounded rectangle at rest; while the scene is
+                // mid-morph into or out of a conversation, the seam bows like
+                // a drawn curtain and flattens back out on either end. See
+                // [AetherCurtainSeamShape].
                 .clip(
-                    RoundedCornerShape(
-                        bottomStart = HeroCornerRadius,
-                        bottomEnd = HeroCornerRadius
+                    AetherCurtainSeamShape(
+                        cornerRadius = HeroCornerRadius,
+                        bowFraction = sceneMorphBow,
+                        maxBow = AetherCurtainSeamBow
                     )
                 )
                 .testTag("home_hero")
@@ -399,10 +428,12 @@ fun HomeScreen(
                                 scaleY = greetingScale
                             }
                     ) {
+                        val minuteOfDay = rememberLocalMinuteOfDay()
                         HomeGreeting(
                             currentUser = currentUser,
                             daily = dailyLine,
-                            greetingSize = greetingSize
+                            greetingSize = greetingSize,
+                            hour = minuteOfDay / 60
                         )
                     }
 
@@ -573,12 +604,13 @@ fun HomeSettingsButton(
 private fun HomeGreeting(
     currentUser: User?,
     daily: DailyLine,
-    greetingSize: androidx.compose.ui.unit.TextUnit
+    greetingSize: TextUnit,
+    hour: Int
 ) {
     val colors = LocalAetherColors.current
     Column(modifier = Modifier.padding(horizontal = AetherEmber.Spacing.Space20)) {
         Text(
-            text = greetingFor(currentUser),
+            text = greetingFor(currentUser, hour),
             fontFamily = ManropeFontFamily,
             fontSize = greetingSize,
             // Tight enough that two lines read as one confident block.
@@ -779,8 +811,10 @@ private fun matchesQuery(chat: Chat, query: String): Boolean {
  * The greeting is real: the local hour, and the user's own first name when Telegram
  * has told us one. Nothing is invented when it has not.
  */
-private fun greetingFor(user: User?): String {
-    val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+private fun greetingFor(
+    user: User?,
+    hour: Int
+): String {
     val greeting = when (hour) {
         in 5..11 -> "Good morning"
         in 12..16 -> "Good afternoon"

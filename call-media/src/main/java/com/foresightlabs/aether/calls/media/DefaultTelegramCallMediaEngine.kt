@@ -7,8 +7,11 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.util.Log
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 interface TelegramCallMediaEngine {
@@ -19,9 +22,20 @@ interface TelegramCallMediaEngine {
     val signalBars: StateFlow<Int>
     val audioLevel: StateFlow<Float>
 
+    /** Local/remote decoded video frames, for a video call's renderer to draw. */
+    val videoFrames: SharedFlow<DecodedVideoFrame>
+
+    /** Signalling bytes this engine needs delivered through TDLib's `SendCallSignalingData`. */
+    val outgoingSignalingData: SharedFlow<ByteArray>
+
     suspend fun start(config: CallMediaConfig)
     fun setMicrophoneMuted(muted: Boolean)
     fun setAudioOutput(route: AudioRoute)
+    fun setCameraEnabled(enabled: Boolean)
+    fun switchCamera()
+
+    /** TDLib's `UpdateNewCallSignalingData`, for this engine to consume. */
+    fun submitIncomingSignalingData(callId: Long, data: ByteArray)
     fun stop()
 }
 
@@ -47,6 +61,15 @@ class DefaultTelegramCallMediaEngine(
     private val _audioLevel = MutableStateFlow(0f)
     override val audioLevel: StateFlow<Float> = _audioLevel.asStateFlow()
 
+    // extraBufferCapacity so a frame delivered before a Compose collector has
+    // subscribed is not silently dropped -- the first rendered frame would
+    // otherwise sometimes be lost depending on collection timing.
+    private val _videoFrames = MutableSharedFlow<DecodedVideoFrame>(extraBufferCapacity = 2)
+    override val videoFrames: SharedFlow<DecodedVideoFrame> = _videoFrames.asSharedFlow()
+
+    private val _outgoingSignalingData = MutableSharedFlow<ByteArray>(extraBufferCapacity = 8)
+    override val outgoingSignalingData: SharedFlow<ByteArray> = _outgoingSignalingData.asSharedFlow()
+
     private val nativeEngine = NativeTelegramCallMediaEngine()
 
     override val isMediaTransportAvailable: Boolean
@@ -55,6 +78,7 @@ class DefaultTelegramCallMediaEngine(
     private var focusRequest: AudioFocusRequest? = null
 
     init {
+        nativeEngine.setContext(appContext)
         nativeEngine.init(object : NativeCallEngineCallback {
             override fun onConnectionStateChanged(stateOrdinal: Int) {
                 val newState = MediaConnectionState.entries.getOrElse(stateOrdinal) { MediaConnectionState.FAILED }
@@ -75,6 +99,14 @@ class DefaultTelegramCallMediaEngine(
                     _state.value = MediaConnectionState.FAILED
                 }
             }
+
+            override fun onOutgoingSignalingData(data: ByteArray) {
+                _outgoingSignalingData.tryEmit(data)
+            }
+
+            override fun onVideoFrame(frame: DecodedVideoFrame) {
+                _videoFrames.tryEmit(frame)
+            }
         })
     }
 
@@ -94,8 +126,21 @@ class DefaultTelegramCallMediaEngine(
         } catch (_: Throwable) {}
     }
 
+    override fun setCameraEnabled(enabled: Boolean) {
+        nativeEngine.setCameraEnabled(enabled)
+    }
+
+    override fun switchCamera() {
+        nativeEngine.switchCamera()
+    }
+
+    override fun submitIncomingSignalingData(callId: Long, data: ByteArray) {
+        nativeEngine.submitSignalingData(callId, data)
+    }
+
     override fun setAudioOutput(route: AudioRoute) {
         _audioRoute.value = route
+        nativeEngine.setAudioRoute(route)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val devices = audioManager.availableCommunicationDevices

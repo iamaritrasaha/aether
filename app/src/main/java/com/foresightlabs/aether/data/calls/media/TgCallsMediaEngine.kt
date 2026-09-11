@@ -2,6 +2,7 @@ package com.foresightlabs.aether.data.calls.media
 
 import android.content.Context
 import com.foresightlabs.aether.calls.media.AudioRoute as NativeAudioRoute
+import com.foresightlabs.aether.calls.media.DecodedVideoFrame
 import com.foresightlabs.aether.calls.media.DefaultTelegramCallMediaEngine
 import com.foresightlabs.aether.calls.media.MediaConnectionState as NativeMediaConnectionState
 import com.foresightlabs.aether.data.calls.TgCallsAdapter
@@ -11,6 +12,7 @@ import com.foresightlabs.aether.domain.calls.TelegramCallMediaEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +34,9 @@ class TgCallsMediaEngine(
 
     private val _isMuted = MutableStateFlow(false)
     override val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
+
+    override val videoFrames: SharedFlow<DecodedVideoFrame> = delegate.videoFrames
+    override val outgoingSignalingData: SharedFlow<ByteArray> = delegate.outgoingSignalingData
 
     override val isMediaTransportAvailable: Boolean
         get() = delegate.isMediaTransportAvailable
@@ -85,8 +90,8 @@ class TgCallsMediaEngine(
         }
     }
 
-    override suspend fun start(call: TdApi.Call, ready: TdApi.CallStateReady) {
-        val config = TgCallsAdapter.buildMediaConfig(call, ready)
+    override suspend fun start(call: TdApi.Call, ready: TdApi.CallStateReady, videoCaptureEnabled: Boolean) {
+        val config = TgCallsAdapter.buildMediaConfig(call, ready, videoCaptureEnabled)
         delegate.start(config)
     }
 
@@ -96,6 +101,18 @@ class TgCallsMediaEngine(
 
     override fun setAudioOutput(route: AudioRoute) {
         delegate.setAudioOutput(mapDomainRoute(route))
+    }
+
+    override fun setCameraEnabled(enabled: Boolean) {
+        delegate.setCameraEnabled(enabled)
+    }
+
+    override fun switchCamera() {
+        delegate.switchCamera()
+    }
+
+    override fun submitIncomingSignalingData(callId: Long, data: ByteArray) {
+        delegate.submitIncomingSignalingData(callId, data)
     }
 
     override fun stop() {

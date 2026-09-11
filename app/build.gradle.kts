@@ -48,8 +48,8 @@ android {
     applicationId = "com.foresightlabs.aether"
     minSdk = 24
     targetSdk = 37
-    versionCode = 10
-    versionName = "1.5.4"
+    versionCode = 11
+    versionName = "1.5.5"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -134,6 +134,7 @@ dependencies {
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.credentials)
+  implementation(libs.androidx.biometric)
   implementation("com.google.zxing:core:3.5.3")
   implementation(libs.androidx.camera.core)
   implementation(libs.androidx.camera.camera2)

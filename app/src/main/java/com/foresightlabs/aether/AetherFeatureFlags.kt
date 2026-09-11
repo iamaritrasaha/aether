@@ -12,8 +12,14 @@ package com.foresightlabs.aether
 object AetherFeatureFlags {
 
     /**
-     * Voice and video calling via TDLib / WebRTC media transport.
-     * Held for this milestone until official media transport is finalized.
+     * Voice and video calling via TDLib signalling and a real Telegram-compatible
+     * media transport (ntgcalls; see docs/architecture/calling-native-stack.md).
+     *
+     * Held again: physical testing found that a connected call crashes the
+     * process. Root cause is proven (not hypothesised) via static analysis --
+     * see docs/architecture/ntgcalls-jni-forensics.md -- but no fix has been
+     * built or verified yet. Do not re-enable until a rebuilt/patched
+     * ntgcalls artifact has passed the standalone JNI probe described there.
      */
     const val CALLS_ENABLED = false
 

@@ -111,6 +111,11 @@ class ConversationViewModel(
     private val _sendError = MutableStateFlow<String?>(null)
     val sendError: StateFlow<String?> = _sendError.asStateFlow()
 
+    /** Dismisses the current error banner, whether by timeout or user tap -- see [ConversationScreen]. */
+    fun consumeSendError() {
+        _sendError.value = null
+    }
+
     private val _forwardState = MutableStateFlow<ForwardState>(ForwardState.Idle)
     val forwardState: StateFlow<ForwardState> = _forwardState.asStateFlow()
 
@@ -163,6 +168,8 @@ class ConversationViewModel(
     private var opened = false
     private var typingJob: Job? = null
     private var sendInFlight = false
+    /** Guards sendPhoto/sendPhotoAlbum/sendVideo the way [sendInFlight] guards text -- a duplicate tap (or duplicate touch event) on Send must not become two TDLib sends. */
+    private var mediaSendInFlight = false
     private var pendingDraft: String = ""
     private var searchJob: Job? = null
     private var activeAction: TelegramClient.OutgoingChatAction? = null
@@ -410,8 +417,11 @@ class ConversationViewModel(
     }
 
     fun sendPhoto(photoPath: String, caption: String = "", replyToId: String? = null, viewOnce: Boolean = false) {
+        if (mediaSendInFlight) return
+        mediaSendInFlight = true
         viewModelScope.launch {
             val result = telegram.sendPhoto(activeChatId, photoPath, caption, replyToId?.toLongOrNull(), forumTopicId, viewOnce)
+            mediaSendInFlight = false
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
@@ -423,7 +433,8 @@ class ConversationViewModel(
      * second one. A single photo goes through the ordinary photo send inside it.
      */
     fun sendPhotoAlbum(photoPaths: List<String>, caption: String = "", replyToId: String? = null) {
-        if (photoPaths.isEmpty()) return
+        if (photoPaths.isEmpty() || mediaSendInFlight) return
+        mediaSendInFlight = true
         viewModelScope.launch {
             val result = telegram.sendPhotoAlbum(
                 activeChatId,
@@ -432,13 +443,17 @@ class ConversationViewModel(
                 replyToId?.toLongOrNull(),
                 forumTopicId
             )
+            mediaSendInFlight = false
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
 
     fun sendVideo(videoPath: String, caption: String = "", duration: Int = 0, replyToId: String? = null, viewOnce: Boolean = false) {
+        if (mediaSendInFlight) return
+        mediaSendInFlight = true
         viewModelScope.launch {
             val result = telegram.sendVideo(activeChatId, videoPath, caption, duration, 0, 0, replyToId?.toLongOrNull(), forumTopicId, viewOnce)
+            mediaSendInFlight = false
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
     }
@@ -647,18 +662,57 @@ class ConversationViewModel(
         }
     }
 
+    /**
+     * The other party's user id for this conversation, where there is exactly
+     * one -- the same resolution [initiateAudioCall] uses, factored out so
+     * [activeCallForThisChat] can match the repository's [ActiveCall] against
+     * it without a second, drifting copy of the logic.
+     */
+    private fun resolveCallTargetUserId(): Long = when (target) {
+        is com.foresightlabs.aether.domain.model.ConversationTarget.User -> target.userId
+        // A forum has no single other party to call; the header resolves to
+        // nothing and the repository refuses, which is the truthful outcome.
+        is com.foresightlabs.aether.domain.model.ConversationTarget.Topic,
+        is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> header.value?.directUser?.id?.toLongOrNull() ?: activeChatId
+    }
+
     fun initiateAudioCall() {
-        val targetUserId = when (target) {
-            is com.foresightlabs.aether.domain.model.ConversationTarget.User -> target.userId
-            // A forum has no single other party to call; the header resolves to
-            // nothing and the repository refuses, which is the truthful outcome.
-            is com.foresightlabs.aether.domain.model.ConversationTarget.Topic,
-            is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> header.value?.directUser?.id?.toLongOrNull() ?: activeChatId
-        }
+        val targetUserId = resolveCallTargetUserId()
         viewModelScope.launch {
-            val result = calls.initiateCall(targetUserId)
+            val result = calls.initiateCall(targetUserId, isVideo = false)
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
         }
+    }
+
+    fun initiateVideoCall() {
+        val targetUserId = resolveCallTargetUserId()
+        viewModelScope.launch {
+            val result = calls.initiateCall(targetUserId, isVideo = true)
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    /** Whether a call started right now for this conversation could actually carry audio. */
+    val isCallMediaAvailable: Boolean get() = calls.isCallMediaAvailable
+
+    /**
+     * The repository's single [ActiveCall], surfaced here only when it belongs
+     * to THIS conversation's counterpart -- a call for a different chat must
+     * never hijack this Conversation's header/Curtain/banner.
+     */
+    val activeCallForThisChat: StateFlow<com.foresightlabs.aether.domain.model.ActiveCall?> =
+        calls.activeCallState
+            .map { call -> call?.takeIf { it.userId == resolveCallTargetUserId() } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun toggleCallMute() = calls.toggleMute()
+    fun toggleCallSpeaker() = calls.toggleSpeaker()
+    fun setCallCameraEnabled(enabled: Boolean) = calls.setCameraEnabled(enabled)
+    fun switchCallCamera() = calls.switchCamera()
+
+    fun endActiveCall() {
+        val callId = activeCallForThisChat.value?.callId ?: return
+        viewModelScope.launch { calls.discardCall(callId) }
     }
 
     fun copyMessageLink(message: Message, onLinkResolved: (String) -> Unit) {
@@ -910,6 +964,20 @@ class ConversationViewModel(
         viewModelScope.launch {
             val longs = newIds.mapNotNull { it.toLongOrNull() }.toLongArray()
             telegram.viewMessages(activeChatId, longs)
+        }
+    }
+
+    /**
+     * Call when a message's actual content is opened -- a photo/video shown
+     * full-screen, a voice note played -- not merely scrolled past. See
+     * [com.foresightlabs.aether.data.telegram.TelegramClient.openMessageContent]:
+     * this is what a view-once photo or video is waiting on before it can
+     * begin self-destructing.
+     */
+    fun openMessageContent(messageId: String) {
+        val id = messageId.toLongOrNull() ?: return
+        viewModelScope.launch {
+            telegram.openMessageContent(activeChatId, id)
         }
     }
 

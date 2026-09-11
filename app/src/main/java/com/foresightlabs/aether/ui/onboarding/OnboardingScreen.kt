@@ -24,7 +24,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowForward
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -88,7 +88,7 @@ private fun OnboardingScene(scene: Int, reducedMotion: Boolean, onNext: () -> Un
             Spacer(Modifier.height(28.dp))
             Row(Modifier.fillMaxWidth().widthIn(max = 560.dp).height(56.dp).clip(RoundedCornerShape(22.dp)).background(AetherAuthMist.copy(alpha = 0.92f)).clickable(onClick = onNext).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (scene == 2) "Enter Aether" else "Continue", color = Color(0xFF101019), fontFamily = ManropeFontFamily, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Icon(Icons.Outlined.ArrowForward, contentDescription = null, tint = Color(0xFF101019))
+                Icon(Icons.AutoMirrored.Outlined.ArrowForward, contentDescription = null, tint = Color(0xFF101019))
             }
             if (scene == 2) Text("Skip introduction", color = AetherAuthMist, fontFamily = ManropeFontFamily, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onSkip).padding(horizontal = 16.dp, vertical = 14.dp)) else Spacer(Modifier.height(44.dp))
         }

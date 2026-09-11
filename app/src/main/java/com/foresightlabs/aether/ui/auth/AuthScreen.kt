@@ -61,6 +61,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -107,6 +108,7 @@ import com.foresightlabs.aether.ui.theme.DarkSurface
 import com.foresightlabs.aether.ui.theme.DarkSurfaceElevated
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
+import kotlinx.coroutines.delay
 
 private val AuthRaised = Color(0xFF181A21)
 private val AuthText = Color(0xFFF2F0F7)
@@ -310,7 +312,32 @@ private fun PhoneStep(busy: Boolean, error: String?, country: CountryDial, onCou
 @Composable
 private fun CodeStep(state: AuthUiState.Code, busy: Boolean, error: String?, onSubmit: (String) -> Unit, onResend: () -> Unit) {
     var code by remember { mutableStateOf("") }
-    CodeEntry("Verification code", state.hint.ifBlank { "Enter the code Telegram sent you." }, code, state.codeLength, busy, error, { value -> code = (if (state.isNumeric) value.filter(Char::isDigit) else value.trim()) .let { if (state.codeLength == null) it else it.take(state.codeLength) } }, { onSubmit(code) }, onResend, if (state.isNumeric) KeyboardType.Number else KeyboardType.Text)
+    var timerSeconds by remember(state.timeoutSeconds) { mutableIntStateOf(state.timeoutSeconds) }
+
+    LaunchedEffect(timerSeconds) {
+        if (timerSeconds > 0) {
+            delay(1000L)
+            timerSeconds--
+        }
+    }
+
+    CodeEntry(
+        title = "Verification code",
+        supporting = state.hint.ifBlank { "Enter the code Telegram sent you." },
+        code = code,
+        length = state.codeLength,
+        timeoutSeconds = timerSeconds,
+        nextTypeDescription = state.nextTypeDescription,
+        busy = busy,
+        error = error,
+        onCodeChange = { value ->
+            val filtered = if (state.isNumeric) value.filter(Char::isDigit) else value.trim()
+            code = if (state.codeLength == null) filtered else filtered.take(state.codeLength)
+        },
+        onSubmit = { onSubmit(code) },
+        resend = onResend,
+        keyboardType = if (state.isNumeric) KeyboardType.Number else KeyboardType.Text
+    )
 }
 
 @Composable
@@ -328,12 +355,25 @@ private fun EmailAddressStep(busy: Boolean, error: String?, onSubmit: (String) -
 @Composable
 private fun EmailCodeStep(state: AuthUiState.EmailCode, busy: Boolean, error: String?, onSubmit: (String) -> Unit, onResend: () -> Unit, onReset: () -> Unit) {
     var code by remember { mutableStateOf("") }
-    CodeEntry("Email verification code", "Telegram sent a code to ${state.addressPattern.ifBlank { "your email" }}.", code, state.codeLength, busy, error, { value -> code = value.filter(Char::isDigit).let { state.codeLength?.let(it::take) ?: it } }, { onSubmit(code) }, onResend)
+    CodeEntry("Email verification code", "Telegram sent a code to ${state.addressPattern.ifBlank { "your email" }}.", code, state.codeLength, busy = busy, error = error, onCodeChange = { value -> code = value.filter(Char::isDigit).let { state.codeLength?.let(it::take) ?: it } }, onSubmit = { onSubmit(code) }, resend = onResend)
     if (state.canReset) TextButton(onClick = onReset, modifier = Modifier.height(48.dp)) { Text("Use phone instead", color = AuthSecondary) }
 }
 
 @Composable
-private fun CodeEntry(title: String, supporting: String, code: String, length: Int?, busy: Boolean, error: String?, onCodeChange: (String) -> Unit, onSubmit: () -> Unit, resend: () -> Unit, keyboardType: KeyboardType = KeyboardType.Number) {
+private fun CodeEntry(
+    title: String,
+    supporting: String,
+    code: String,
+    length: Int?,
+    timeoutSeconds: Int = 0,
+    nextTypeDescription: String? = null,
+    busy: Boolean,
+    error: String?,
+    onCodeChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    resend: () -> Unit,
+    keyboardType: KeyboardType = KeyboardType.Number
+) {
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
     Column(Modifier.widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -347,7 +387,19 @@ private fun CodeEntry(title: String, supporting: String, code: String, length: I
             BasicTextField(value = code, onValueChange = onCodeChange, modifier = Modifier.fillMaxWidth().height(62.dp).focusRequester(focusRequester).alpha(0.02f).semantics { contentDescription = "$title. ${length ?: "Adaptive"} characters." }, textStyle = TextStyle(color = AuthText, fontSize = 20.sp, textAlign = TextAlign.Center), cursorBrush = SolidColor(AetherAuthMist), keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { onSubmit() }), singleLine = true)
         }
         PrimaryAuthButton("Continue", busy, code.isNotEmpty()) { onSubmit() }
-        TextButton(onClick = resend, modifier = Modifier.height(48.dp), enabled = !busy) { Text("Resend when Telegram allows it", color = AuthSecondary, fontSize = 13.sp) }
+        val canResend = !busy && timeoutSeconds <= 0
+        TextButton(
+            onClick = resend,
+            modifier = Modifier.height(48.dp),
+            enabled = canResend
+        ) {
+            val resendText = when {
+                timeoutSeconds > 0 -> "Resend code in ${timeoutSeconds}s"
+                nextTypeDescription != null -> "Resend code via $nextTypeDescription"
+                else -> "Resend code"
+            }
+            Text(resendText, color = if (canResend) AuthSecondary else AuthMuted, fontSize = 13.sp)
+        }
         AuthError(error)
     }
 }

@@ -26,7 +26,7 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.MarkEmailUnread
@@ -215,7 +215,7 @@ private fun iconFor(action: ChatAction): ImageVector = when (action) {
     ChatAction.UNARCHIVE -> Icons.Default.Unarchive
     ChatAction.CLEAR_HISTORY -> Icons.Default.DeleteSweep
     ChatAction.DELETE_FOR_ME, ChatAction.DELETE_FOR_EVERYONE -> Icons.Default.Delete
-    ChatAction.LEAVE -> Icons.Default.ExitToApp
+    ChatAction.LEAVE -> Icons.AutoMirrored.Filled.ExitToApp
     ChatAction.CLOSE_SECRET_CHAT -> Icons.Default.Lock
     ChatAction.BLOCK, ChatAction.UNBLOCK -> Icons.Default.Block
     ChatAction.OPEN_PROFILE -> Icons.Default.Person

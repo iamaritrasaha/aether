@@ -1,21 +1,27 @@
 package com.foresightlabs.aether.data.calls
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.annotation.SuppressLint
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.foresightlabs.aether.AetherApplication
 import com.foresightlabs.aether.MainActivity
+import com.foresightlabs.aether.calls.media.CallDiagnostics
+import com.foresightlabs.aether.calls.media.CallStage
+import com.foresightlabs.aether.domain.calls.CallPermissions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-@SuppressLint("ForegroundServiceType")
 class CallService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -38,14 +44,38 @@ class CallService : Service() {
 
         val name = intent?.getStringExtra(EXTRA_CALLER_NAME) ?: "Telegram Call"
         val isConnected = intent?.getBooleanExtra(EXTRA_IS_CONNECTED, false) ?: false
+        val isVideo = intent?.getBooleanExtra(EXTRA_IS_VIDEO, false) ?: false
+        val generation = intent?.getLongExtra(EXTRA_GENERATION, 0L) ?: 0L
 
-        val notification = buildNotification(name, isConnected)
-        startForeground(NOTIFICATION_ID, notification)
+        val type = grantedServiceType(this, isVideo)
+        if (type == 0) {
+            // Android refuses -- and from Android 14 kills the process for --
+            // a microphone/camera foreground service started without the
+            // matching runtime permission. There is nothing to promote here,
+            // so stop instead of asking the system for something it will
+            // answer with a SecurityException.
+            CallDiagnostics.stage(generation, CallStage.SERVICE_STOPPED, "reason=no_media_permission")
+            stopForegroundService()
+            return START_NOT_STICKY
+        }
+
+        val notification = buildNotification(name, isConnected, isVideo)
+        try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
+            CallDiagnostics.stage(generation, CallStage.SERVICE_STARTED, "video=$isVideo connected=$isConnected")
+        } catch (t: Throwable) {
+            // A foreground service is a convenience for a call that continues
+            // in the background -- never a reason to take the process down
+            // while the user is on a call.
+            CallDiagnostics.failure(generation, CallStage.SERVICE_STARTED, t)
+            stopForegroundService()
+            return START_NOT_STICKY
+        }
 
         return START_STICKY
     }
 
-    private fun buildNotification(callerName: String, isConnected: Boolean): Notification {
+    private fun buildNotification(callerName: String, isConnected: Boolean, isVideo: Boolean): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -66,7 +96,11 @@ class CallService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val statusText = if (isConnected) "Voice Call Active" else "Connecting call…"
+        val statusText = when {
+            isConnected && isVideo -> "Video Call Active"
+            isConnected -> "Voice Call Active"
+            else -> "Connecting call…"
+        }
 
         return NotificationCompat.Builder(this, AetherApplication.CHANNEL_CALLS)
             .setSmallIcon(android.R.drawable.ic_menu_call)
@@ -96,23 +130,76 @@ class CallService : Service() {
         const val ACTION_STOP_CALL = "com.foresightlabs.aether.action.STOP_CALL"
         const val EXTRA_CALLER_NAME = "extra_caller_name"
         const val EXTRA_IS_CONNECTED = "extra_is_connected"
+        const val EXTRA_IS_VIDEO = "extra_is_video"
+        const val EXTRA_GENERATION = "extra_generation"
 
-        fun startService(context: Context, callerName: String, isConnected: Boolean) {
+        /**
+         * The foreground service type this call may actually claim, given what
+         * the user has actually granted.
+         *
+         * Android matches each declared service type against its own runtime
+         * permission and, from Android 14, throws `SecurityException` -- fatal
+         * from `onStartCommand` -- when one is missing. So the type is derived
+         * from the grants rather than from what the call wishes it had: a video
+         * call whose camera was refused runs as a microphone service, and a call
+         * with no microphone grant claims nothing at all (`0`).
+         */
+        // FOREGROUND_SERVICE_TYPE_* are API 30 constants used below minSdk (24)
+        // purely as compile-time int flags for ServiceCompat, which applies a
+        // type only on API levels that understand one.
+        @SuppressLint("InlinedApi")
+        internal fun grantedServiceType(context: Context, isVideo: Boolean): Int {
+            fun granted(permission: String) =
+                ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+            if (!granted(CallPermissions.MICROPHONE)) return 0
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            if (isVideo && granted(CallPermissions.CAMERA)) {
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            }
+            return type
+        }
+
+        fun startService(
+            context: Context,
+            callerName: String,
+            isConnected: Boolean,
+            isVideo: Boolean = false,
+            generation: Long = 0L
+        ) {
             val intent = Intent(context, CallService::class.java).apply {
                 action = ACTION_START_CALL
                 putExtra(EXTRA_CALLER_NAME, callerName)
                 putExtra(EXTRA_IS_CONNECTED, isConnected)
+                putExtra(EXTRA_IS_VIDEO, isVideo)
+                putExtra(EXTRA_GENERATION, generation)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            // startForegroundService() promises a startForeground() call within
+            // a few seconds and crashes the process if one never arrives. When
+            // nothing can legally be promoted, never make that promise.
+            if (grantedServiceType(context, isVideo) == 0) {
+                CallDiagnostics.stage(generation, CallStage.SERVICE_STOPPED, "reason=no_media_permission")
+                return
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (t: Throwable) {
+                // Background-start restrictions and OEM policies can refuse the
+                // start outright. The call itself is unaffected.
+                CallDiagnostics.failure(generation, CallStage.SERVICE_STARTED, t)
             }
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, CallService::class.java)
-            context.stopService(intent)
+            try {
+                val intent = Intent(context, CallService::class.java)
+                context.stopService(intent)
+            } catch (_: Throwable) {
+            }
         }
     }
 }

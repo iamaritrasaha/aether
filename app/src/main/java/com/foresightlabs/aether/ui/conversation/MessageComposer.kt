@@ -240,10 +240,23 @@ fun MediaPreviewCurtainContent(
     onToggleViewOnce: () -> Unit,
     onCancel: () -> Unit,
     onSend: () -> Unit,
+    /**
+     * TDLib documents [org.drinkless.tdlib.TdApi.InputMessagePhoto.selfDestructType]
+     * / [org.drinkless.tdlib.TdApi.InputMessageVideo.selfDestructType] as private
+     * chats only -- offering this toggle in a group/channel would let someone
+     * choose a mode Telegram silently won't honor. See ConversationScreen for
+     * where this is derived from the actual chat type.
+     */
+    isViewOnceAvailable: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val ink = Color(0xFFF2F2F5)
     val hint = Color(0xFF9A9AA2)
+    // A duplicate tap/touch event on Send must not become two sends -- the
+    // authoritative guard is ConversationViewModel's mediaSendInFlight, this
+    // is the immediate visual half: once tapped, the button stops responding
+    // rather than staying live until recomposition removes this screen.
+    var sent by remember(media) { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -266,6 +279,7 @@ fun MediaPreviewCurtainContent(
             )
         }
 
+        if (isViewOnceAvailable) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -313,6 +327,7 @@ fun MediaPreviewCurtainContent(
                 )
             }
         }
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -323,7 +338,7 @@ fun MediaPreviewCurtainContent(
                     .weight(1f)
                     .clip(RoundedCornerShape(14.dp))
                     .background(Color(0x14FFFFFF))
-                    .clickable(onClick = onCancel)
+                    .clickable(enabled = !sent, onClick = onCancel)
                     .padding(vertical = 12.dp)
                     .testTag("media_preview_cancel"),
                 contentAlignment = Alignment.Center
@@ -335,13 +350,119 @@ fun MediaPreviewCurtainContent(
                     .weight(1f)
                     .clip(RoundedCornerShape(14.dp))
                     .background(AetherAccent.current)
-                    .clickable(onClick = onSend)
+                    .clickable(enabled = !sent) {
+                        sent = true
+                        onSend()
+                    }
                     .padding(vertical = 12.dp)
                     .testTag("media_preview_send"),
                 contentAlignment = Alignment.Center
             ) {
                 Text("Send", fontFamily = ManropeFontFamily, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0B0B0D))
             }
+        }
+    }
+}
+
+/**
+ * Confirming a pending delete, directly in the Curtain -- not a [androidx.compose.ui.window.Dialog]
+ * (a genuinely separate Android window, which is exactly the kind of second
+ * surface Aether's Curtain law rules out; see [CurtainState.DELETE_CONFIRM]).
+ *
+ * "Delete for everyone" only renders when [canDeleteForAll] is true for every
+ * selected message -- see the call site for why that's `.all`, not `.any`.
+ */
+@Composable
+fun DeleteConfirmCurtainContent(
+    count: Int,
+    canDeleteForAll: Boolean,
+    onCancel: () -> Unit,
+    onDeleteForMe: () -> Unit,
+    onDeleteForEveryone: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val ink = Color(0xFFF2F2F5)
+    val hint = Color(0xFF9A9AA2)
+    var acted by remember(count) { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .testTag("curtain_delete_confirm_content"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            text = if (count == 1) "Delete message?" else "Delete $count messages?",
+            fontFamily = ManropeFontFamily,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = ink
+        )
+        Text(
+            text = if (canDeleteForAll) {
+                "This can be deleted for everyone, or just for you."
+            } else {
+                "This will be deleted for you."
+            },
+            fontFamily = ManropeFontFamily,
+            fontSize = 12.sp,
+            color = hint,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        if (canDeleteForAll) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFFEF4444).copy(alpha = 0.15f))
+                    .clickable(enabled = !acted) {
+                        acted = true
+                        onDeleteForEveryone()
+                    }
+                    .testTag("delete_confirm_for_everyone"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Delete for everyone", fontFamily = ManropeFontFamily, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFEF4444))
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(if (canDeleteForAll) Color(0x14FFFFFF) else Color(0xFFEF4444).copy(alpha = 0.15f))
+                .clickable(enabled = !acted) {
+                    acted = true
+                    onDeleteForMe()
+                }
+                .testTag("delete_confirm_for_me"),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "Delete for me",
+                fontFamily = ManropeFontFamily,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (canDeleteForAll) ink else Color(0xFFEF4444)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(enabled = !acted, onClick = onCancel)
+                .testTag("delete_confirm_cancel"),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Cancel", fontFamily = ManropeFontFamily, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = hint)
         }
     }
 }
@@ -535,8 +656,16 @@ fun MessageComposer(
     onSaveEdit: (Message, String, List<AetherEntity>) -> Unit = { _, _, _ -> },
     pendingMedia: PendingMedia? = null,
     onToggleViewOnce: () -> Unit = {},
+    /** See [MediaPreviewCurtainContent]'s own doc -- false outside DIRECT chats. */
+    isViewOnceAvailable: Boolean = true,
     onCancelPendingMedia: () -> Unit = {},
     onSendPendingMedia: () -> Unit = {},
+    /** How many messages CurtainState.DELETE_CONFIRM is asking about -- see [DeleteConfirmCurtainContent]. */
+    deleteConfirmCount: Int = 0,
+    deleteConfirmCanDeleteForAll: Boolean = false,
+    onCancelDelete: () -> Unit = {},
+    onConfirmDeleteForMe: () -> Unit = {},
+    onConfirmDeleteForEveryone: () -> Unit = {},
     /** Files another application shared into this conversation, awaiting review. */
     pendingShare: PendingShare? = null,
     onCancelPendingShare: () -> Unit = {},
@@ -553,6 +682,17 @@ fun MessageComposer(
     onDismissLinkPreview: () -> Unit = {},
     /** Reported by the shared Curtain root; see [CurtainHeights]. */
     onCurtainHeightChanged: (CurtainHeights) -> Unit = {},
+    /** CurtainState.CALL content -- see [ConversationCallCurtainContent]. Defaults are inert. */
+    callIsMuted: Boolean = false,
+    callAudioRoute: com.foresightlabs.aether.domain.calls.AudioRoute = com.foresightlabs.aether.domain.calls.AudioRoute.EARPIECE,
+    callIsMediaTransportAvailable: Boolean = false,
+    callIsVideo: Boolean = false,
+    callIsCameraEnabled: Boolean = false,
+    onToggleCallMute: () -> Unit = {},
+    onToggleCallSpeaker: () -> Unit = {},
+    onToggleCallCamera: () -> Unit = {},
+    onSwitchCallCamera: () -> Unit = {},
+    onEndCall: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Held as a TextFieldValue so the selection is available for formatting.
@@ -643,6 +783,30 @@ fun MessageComposer(
                 onToggleViewOnce = onToggleViewOnce,
                 onCancel = onCancelPendingMedia,
                 onSend = onSendPendingMedia,
+                isViewOnceAvailable = isViewOnceAvailable,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.DELETE_CONFIRM && deleteConfirmCount > 0) {
+            DeleteConfirmCurtainContent(
+                count = deleteConfirmCount,
+                canDeleteForAll = deleteConfirmCanDeleteForAll,
+                onCancel = onCancelDelete,
+                onDeleteForMe = onConfirmDeleteForMe,
+                onDeleteForEveryone = onConfirmDeleteForEveryone,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.CALL) {
+            ConversationCallCurtainContent(
+                isMuted = callIsMuted,
+                audioRoute = callAudioRoute,
+                isMediaTransportAvailable = callIsMediaTransportAvailable,
+                onToggleMute = onToggleCallMute,
+                onToggleSpeaker = onToggleCallSpeaker,
+                onEndCall = onEndCall,
+                isVideoCall = callIsVideo,
+                isCameraEnabled = callIsCameraEnabled,
+                onToggleCamera = onToggleCallCamera,
+                onSwitchCamera = onSwitchCallCamera,
                 modifier = Modifier.fillMaxWidth()
             )
         } else {
@@ -1273,6 +1437,7 @@ private fun reanchorForEdit(
 private val ComposerRadius = 26.dp
 private val ComposerRowHeight = 52.dp
 
+@Suppress("SENSELESS_COMPARISON")
 @Composable
 private fun MessageSelectionRow(
     selection: List<Message>,

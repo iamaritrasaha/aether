@@ -1,6 +1,7 @@
 package com.foresightlabs.aether.ui.theme
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -10,6 +11,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import java.util.Calendar
 
@@ -49,19 +53,35 @@ fun buildAtmosphere(palette: TimeAtmospherePalette): AetherAtmosphere {
 }
 
 /**
- * Local wall-clock minute of day, recomputed on a slow ticker so the palette
- * actually moves through the day without relying on incidental recomposition.
+ * Local wall-clock minute of day, recomputed on a slow ticker and refreshed on ON_RESUME
+ * so the palette accurately follows local time without relying on incidental recomposition.
  */
 @Composable
-fun rememberLocalMinuteOfDay(): Int {
-    var minute by remember { mutableStateOf(currentMinuteOfDay()) }
+fun rememberLocalMinuteOfDay(
+    clockMillis: () -> Long = { System.currentTimeMillis() }
+): Int {
+    var minute by remember { mutableStateOf(currentMinuteOfDay(clockMillis())) }
     val inspecting = LocalInspectionMode.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                minute = currentMinuteOfDay(clockMillis())
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     LaunchedEffect(inspecting) {
         if (inspecting) return@LaunchedEffect
         while (true) {
-            delay(TICK_MILLIS)
-            val now = currentMinuteOfDay()
+            val now = currentMinuteOfDay(clockMillis())
             if (now != minute) minute = now
+            delay(TICK_MILLIS)
         }
     }
     return minute
@@ -85,7 +105,7 @@ fun rememberAtmosphere(themeState: AppThemeState): AetherAtmosphere {
 
 private const val TICK_MILLIS = 30_000L
 
-private fun currentMinuteOfDay(): Int {
-    val calendar = Calendar.getInstance()
+private fun currentMinuteOfDay(timeMillis: Long = System.currentTimeMillis()): Int {
+    val calendar = Calendar.getInstance().apply { this.timeInMillis = timeMillis }
     return calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
 }

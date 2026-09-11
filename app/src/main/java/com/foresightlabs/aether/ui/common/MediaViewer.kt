@@ -90,6 +90,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun MediaViewer(
     mediaItem: MediaItem?,
@@ -284,11 +285,24 @@ fun MediaViewer(
                         resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                     )
                 } else {
-                    MediaViewerShell(
-                        previewBitmap = previewBitmap,
-                        failed = false,
-                        onRetry = { onRequestDownload(activeItem.videoFileId, true) }
-                    )
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        if (parsedSource != null) {
+                            SubcomposeAsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(parsedSource)
+                                    .crossfade(150)
+                                    .build(),
+                                contentDescription = activeItem.caption.ifBlank { "Video thumbnail" },
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        MediaViewerShell(
+                            previewBitmap = if (parsedSource == null) previewBitmap else null,
+                            failed = activeItem.downloadFailed,
+                            onRetry = { onRequestDownload(activeItem.videoFileId, true) }
+                        )
+                    }
                 }
             } else if (hasValidLocalSource) {
                 SubcomposeAsyncImage(

@@ -20,6 +20,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,7 +73,7 @@ import com.foresightlabs.aether.ui.calls.CallsScreen
 import com.foresightlabs.aether.ui.appearance.ChatAppearanceScreen
 import com.foresightlabs.aether.ui.contacts.ContactsScreen
 import com.foresightlabs.aether.ui.about.AboutScreen
-import com.foresightlabs.aether.ui.calls.FullCallScreen
+import com.foresightlabs.aether.ui.calls.AetherCallScreen
 import com.foresightlabs.aether.ui.home.HomeScreen
 import com.foresightlabs.aether.ui.calls.OngoingCallBar
 import com.foresightlabs.aether.ui.conversation.ConversationScreen
@@ -101,10 +102,14 @@ object Destinations {
     const val SETTINGS = "settings"
     const val ABOUT = "about"
     const val APPEARANCE = "appearance"
+    const val APP_LOCK_SETTINGS = "app-lock-settings"
+    const val APP_LOCK_SETUP = "app-lock-setup"
+    const val APP_LOCK_REAUTH = "app-lock-reauth/{purpose}"
     const val CHAT_APPEARANCE = "chat-appearance/{chatId}"
     const val FORUM_TOPICS = "forum/{chatId}"
     const val CONVERSATION_TOPIC = "conversation/topic/{chatId}/{topicId}"
 
+    fun appLockReauth(purpose: String) = "app-lock-reauth/$purpose"
     fun conversation(chatId: String) = "conversation/chat/$chatId"
     fun forumTopics(chatId: String) = "forum/$chatId"
     fun conversationTopic(chatId: Long, topicId: Int) = "conversation/topic/$chatId/$topicId"
@@ -600,6 +605,18 @@ fun AetherApp(
                     val profileCalls = (application as AetherApplication).callsRepository
                     val coroutineScope = rememberCoroutineScope()
                     var videoNotice by remember { mutableStateOf<String?>(null) }
+                    // A call is never placed before the OS grants what it needs;
+                    // see CallPermissionGate for why that is a crash-level rule.
+                    val startProfileCall = com.foresightlabs.aether.ui.calls.rememberCallStarter { isVideo ->
+                        val targetUserId = chat?.directUser?.id?.toLongOrNull() ?: chat?.id?.toLongOrNull() ?: 0L
+                        if (targetUserId != 0L) {
+                            coroutineScope.launch {
+                                profileCalls.initiateCall(targetUserId, isVideo = isVideo)
+                                    .exceptionOrNull()?.message
+                                    ?.let { videoNotice = it }
+                            }
+                        }
+                    }
                     if (chat != null) {
                         ProfileScreen(
                             chat = chat,
@@ -614,20 +631,9 @@ fun AetherApp(
                                 if (isRetry) tg.retryMediaDownload(fileId) else tg.requestFullMediaDownload(fileId)
                             },
                             canCallAudio = profileCalls.isCallMediaAvailable,
-                            canCallVideo = false,
-                            onStartVoiceCall = {
-                                val targetUserId = chat.directUser?.id?.toLongOrNull() ?: chat.id.toLongOrNull() ?: 0L
-                                if (targetUserId != 0L) {
-                                    coroutineScope.launch {
-                                        profileCalls.initiateCall(targetUserId)
-                                            .exceptionOrNull()?.message
-                                            ?.let { videoNotice = it }
-                                    }
-                                }
-                            },
-                            onStartVideoCall = {
-                                videoNotice = "Video calling isn't available in Aether yet."
-                            }
+                            canCallVideo = profileCalls.isCallMediaAvailable,
+                            onStartVoiceCall = { startProfileCall(false) },
+                            onStartVideoCall = { startProfileCall(true) }
                         )
                         if (videoNotice != null) {
                             androidx.compose.material3.AlertDialog(
@@ -710,9 +716,76 @@ fun AetherApp(
                         onBack = { navController.popBackStack() },
                         onNavigateToAppearance = { navController.navigate(Destinations.APPEARANCE) },
                         onNavigateToAbout = { navController.navigate(Destinations.ABOUT) },
+                        onNavigateToAppLock = { navController.navigate(Destinations.APP_LOCK_SETTINGS) },
                         onRequestLogout = settingsViewModel::requestLogout,
                         onConfirmLogout = settingsViewModel::confirmLogout,
                         onDismissLogout = settingsViewModel::dismissLogout
+                    )
+                }
+
+                composable(
+                    route = Destinations.APP_LOCK_SETTINGS,
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
+                ) {
+                    com.foresightlabs.aether.ui.security.AppLockSettingsScreen(
+                        onBack = { navController.popBackStack() },
+                        onRequestSetup = { navController.navigate(Destinations.APP_LOCK_SETUP) },
+                        onRequestChangePasscode = { navController.navigate(Destinations.appLockReauth("change")) },
+                        onRequestDisable = { navController.navigate(Destinations.appLockReauth("disable")) }
+                    )
+                }
+
+                composable(
+                    route = Destinations.APP_LOCK_SETUP,
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
+                ) {
+                    com.foresightlabs.aether.ui.security.AppLockSetupScreen(
+                        onCancel = { navController.popBackStack() },
+                        onCompleted = {
+                            navController.navigate(Destinations.APP_LOCK_SETTINGS) {
+                                popUpTo(Destinations.APP_LOCK_SETTINGS) { inclusive = true }
+                            }
+                        }
+                    )
+                }
+
+                composable(
+                    route = Destinations.APP_LOCK_REAUTH,
+                    arguments = listOf(navArgument("purpose") { type = NavType.StringType }),
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
+                ) { backStackEntry ->
+                    val purpose = backStackEntry.arguments?.getString("purpose").orEmpty()
+                    val reauthScope = rememberCoroutineScope()
+                    com.foresightlabs.aether.ui.security.AppLockReauthScreen(
+                        reason = if (purpose == "disable") "Confirm passcode to turn off App Lock" else "Confirm your current passcode",
+                        onCancel = { navController.popBackStack() },
+                        onVerified = {
+                            if (purpose == "disable") {
+                                // popBackStack() must wait for disable() to actually
+                                // finish writing: it disposes this composable (and
+                                // reauthScope with it), so calling it before the
+                                // suspend completes could cancel the DataStore write
+                                // mid-flight -- the passcode verifies, the screen
+                                // pops back, but App Lock silently stays on.
+                                reauthScope.launch {
+                                    (application as AetherApplication).appLockRepository.disable()
+                                    navController.popBackStack()
+                                }
+                            } else {
+                                navController.navigate(Destinations.APP_LOCK_SETUP) {
+                                    popUpTo(Destinations.APP_LOCK_SETTINGS)
+                                }
+                            }
+                        }
                     )
                 }
 
@@ -759,6 +832,24 @@ fun AetherApp(
             .collectAsStateWithLifecycle(initialValue = null)
         val navScope = rememberCoroutineScope()
 
+        var remoteVideoFrame by remember { mutableStateOf<com.foresightlabs.aether.calls.media.DecodedVideoFrame?>(null) }
+        var localVideoFrame by remember { mutableStateOf<com.foresightlabs.aether.calls.media.DecodedVideoFrame?>(null) }
+        var isCameraEnabled by remember(activeCall?.callId) { mutableStateOf(activeCall?.isVideo ?: false) }
+        LaunchedEffect(callsRepository) {
+            callsRepository?.videoFrames?.collect { frame ->
+                when (frame.origin) {
+                    com.foresightlabs.aether.calls.media.VideoFrameOrigin.REMOTE -> remoteVideoFrame = frame
+                    com.foresightlabs.aether.calls.media.VideoFrameOrigin.LOCAL -> localVideoFrame = frame
+                }
+            }
+        }
+        LaunchedEffect(activeCall?.callId) {
+            if (activeCall == null) {
+                remoteVideoFrame = null
+                localVideoFrame = null
+            }
+        }
+
         if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED && activeCall != null) {
             if (activeCall!!.isMinimized) {
                 OngoingCallBar(
@@ -766,7 +857,7 @@ fun AetherApp(
                     onExpand = { callsRepository?.setMinimized(false) }
                 )
             } else {
-                FullCallScreen(
+                AetherCallScreen(
                     activeCall = activeCall,
                     onAcceptCall = { callId ->
                         navScope.launch { callsRepository?.acceptCall(callId) }
@@ -776,7 +867,15 @@ fun AetherApp(
                     },
                     onToggleMute = { callsRepository?.toggleMute() },
                     onToggleSpeaker = { callsRepository?.toggleSpeaker() },
-                    onMinimize = { callsRepository?.setMinimized(true) }
+                    onMinimize = { callsRepository?.setMinimized(true) },
+                    remoteVideoFrame = remoteVideoFrame,
+                    localVideoFrame = localVideoFrame,
+                    isCameraEnabled = isCameraEnabled,
+                    onToggleCamera = {
+                        isCameraEnabled = !isCameraEnabled
+                        callsRepository?.setCameraEnabled(isCameraEnabled)
+                    },
+                    onSwitchCamera = { callsRepository?.switchCamera() }
                 )
             }
         }
@@ -829,6 +928,12 @@ private fun ConversationRoute(
     val resolveError by viewModel.resolveError.collectAsStateWithLifecycle()
     val header by viewModel.header.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
+    val activeCallForThisChat by viewModel.activeCallForThisChat.collectAsStateWithLifecycle()
+    // Same rule as Profile: the microphone grant is obtained before the call is
+    // placed, never after it has already connected.
+    val startConversationCall = com.foresightlabs.aether.ui.calls.rememberCallStarter { isVideo ->
+        if (isVideo) viewModel.initiateVideoCall() else viewModel.initiateAudioCall()
+    }
     val canSend by viewModel.composerEnabled.collectAsStateWithLifecycle()
     val messageCapabilities by viewModel.capabilities.collectAsStateWithLifecycle()
     val forwardTargets by viewModel.forwardTargets.collectAsStateWithLifecycle()
@@ -836,6 +941,7 @@ private fun ConversationRoute(
     val searchState by viewModel.search.collectAsStateWithLifecycle()
     val jumpTarget by viewModel.jumpTarget.collectAsStateWithLifecycle()
     val messageMotionEvents by viewModel.messageMotionEvents.collectAsStateWithLifecycle()
+    val sendError by viewModel.sendError.collectAsStateWithLifecycle()
     val pinnedMessages by viewModel.pinnedMessages.collectAsStateWithLifecycle()
     val installedStickerSets by viewModel.installedStickerSets.collectAsStateWithLifecycle()
     val recentStickers by viewModel.recentStickers.collectAsStateWithLifecycle()
@@ -917,7 +1023,15 @@ private fun ConversationRoute(
             onRequestCapabilities = viewModel::loadCapabilities,
             onRetryMessage = viewModel::retry, onVisibleMessages = viewModel::markVisible,
             isResolving = isResolving, resolveError = resolveError, onRetryResolve = viewModel::retryResolve,
-            onStartVoiceCall = viewModel::initiateAudioCall,
+            onStartVoiceCall = { startConversationCall(false) },
+            onStartVideoCall = { startConversationCall(true) },
+            activeCall = activeCallForThisChat,
+            isCallMediaAvailable = viewModel.isCallMediaAvailable,
+            onToggleCallMute = viewModel::toggleCallMute,
+            onToggleCallSpeaker = viewModel::toggleCallSpeaker,
+            onToggleCallCamera = viewModel::setCallCameraEnabled,
+            onSwitchCallCamera = viewModel::switchCallCamera,
+            onEndCall = viewModel::endActiveCall,
             searchState = searchState,
             onOpenSearch = viewModel::openSearch,
             onCloseSearch = viewModel::closeSearch,
@@ -975,7 +1089,10 @@ private fun ConversationRoute(
             messageMotionEvents = messageMotionEvents,
             onRequestMediaDownload = { fileId, isRetry ->
                 if (isRetry) viewModel.retryMediaDownload(fileId) else viewModel.requestFullMediaDownload(fileId)
-            }
+            },
+            errorMessage = sendError,
+            onErrorConsumed = viewModel::consumeSendError,
+            onOpenMessageContent = viewModel::openMessageContent
         )
     }
 }

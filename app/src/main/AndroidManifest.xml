@@ -9,6 +9,13 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Scoped to the active/ringing call only; see CallService and
+         docs/architecture/calling-native-stack.md. Camera is declared
+         because a video call's foreground service type must cover it too;
+         no permanent camera or microphone access is implied by declaring it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -72,6 +79,20 @@
         <receiver
             android:name=".data.notifications.NotificationActionReceiver"
             android:exported="false" />
+
+        <!--
+          Scoped to the active/ringing call only; started when a call
+          reaches CallStateReady or is accepted, stopped the moment it ends
+          (see DefaultCallsRepository, CallService). Never a persistent
+          "Aether is running" service. The camera type is declared alongside
+          microphone because Android requires every media type a foreground
+          service actually uses to be listed; a voice-only call simply never
+          exercises the camera one.
+        -->
+        <service
+            android:name=".data.calls.CallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|camera" />
 
         <!--
           Bound by the FCM SDK, not a foreground service: it runs briefly to

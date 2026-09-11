@@ -57,6 +57,12 @@ data class CallProtocolInfo(
 data class CallMediaConfig(
     val callId: Long,
     val isOutgoing: Boolean,
+    /**
+     * Whether the camera may be opened for this call. Not "this is a video
+     * call": a video call whose camera permission was refused connects with
+     * this false, and nothing in the camera or renderer path runs.
+     */
+    val videoCaptureEnabled: Boolean,
     val encryptionKey: ByteArray,
     val allowP2p: Boolean,
     val servers: List<CallServerEndpoint>,
@@ -69,6 +75,7 @@ data class CallMediaConfig(
         if (other !is CallMediaConfig) return false
         if (callId != other.callId) return false
         if (isOutgoing != other.isOutgoing) return false
+        if (videoCaptureEnabled != other.videoCaptureEnabled) return false
         if (!encryptionKey.contentEquals(other.encryptionKey)) return false
         if (allowP2p != other.allowP2p) return false
         if (servers != other.servers) return false
@@ -81,6 +88,7 @@ data class CallMediaConfig(
     override fun hashCode(): Int {
         var result = callId.hashCode()
         result = 31 * result + isOutgoing.hashCode()
+        result = 31 * result + videoCaptureEnabled.hashCode()
         result = 31 * result + encryptionKey.contentHashCode()
         result = 31 * result + allowP2p.hashCode()
         result = 31 * result + servers.hashCode()

@@ -1,4 +1,8 @@
 package com.foresightlabs.aether.ui.conversation
+import kotlin.math.PI
+import kotlin.math.roundToInt
+import kotlin.math.sin
+import androidx.compose.ui.layout.layout
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -37,6 +41,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.foresightlabs.aether.ui.design.AetherCurtainSeamBow
+import com.foresightlabs.aether.ui.design.AetherCurtainSeamShape
 import com.foresightlabs.aether.ui.design.AetherFrostState
 import com.foresightlabs.aether.ui.design.AetherGlassMenuItem
 import com.foresightlabs.aether.ui.design.AetherGlassPopup
@@ -71,6 +77,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -85,9 +92,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.foresightlabs.aether.domain.model.Chat
+import com.foresightlabs.aether.domain.model.ChatType
 import com.foresightlabs.aether.domain.model.MediaItem
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -194,6 +201,7 @@ import com.foresightlabs.aether.domain.sharing.SharedAttachmentKind
 import com.foresightlabs.aether.domain.sharing.SharedContent
 
 @OptIn(ExperimentalFoundationApi::class)
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun ConversationScreen(
     chat: Chat?,
@@ -225,12 +233,24 @@ fun ConversationScreen(
     onForwardStateConsumed: () -> Unit = {},
     messageCapabilities: Map<String, MessageCapabilities> = emptyMap(),
     onRequestCapabilities: (Message) -> Unit = {},
+    /** A just-failed action (delete, send, pin, ...) -- see ConversationViewModel.sendError. Transient; auto-dismisses. */
+    errorMessage: String? = null,
+    onErrorConsumed: () -> Unit = {},
     onRetryMessage: (Message) -> Unit,
     onVisibleMessages: (List<String>) -> Unit,
     isResolving: Boolean = false,
     resolveError: String? = null,
     onRetryResolve: () -> Unit = {},
     onStartVoiceCall: () -> Unit = {},
+    onStartVideoCall: () -> Unit = {},
+    /** Null when calling is disabled, media transport is unavailable, or this chat is ineligible. */
+    activeCall: com.foresightlabs.aether.domain.model.ActiveCall? = null,
+    isCallMediaAvailable: Boolean = false,
+    onToggleCallMute: () -> Unit = {},
+    onToggleCallSpeaker: () -> Unit = {},
+    onToggleCallCamera: (enabled: Boolean) -> Unit = {},
+    onSwitchCallCamera: () -> Unit = {},
+    onEndCall: () -> Unit = {},
     onOpenUsername: (String) -> Unit = {},
     searchState: ConversationSearchState = ConversationSearchState.Idle,
     onOpenSearch: () -> Unit = {},
@@ -269,6 +289,8 @@ fun ConversationScreen(
     onJumpConsumed: () -> Unit = {},
     /** fileId, isRetry -- called when the media viewer opens on a file TDLib hasn't finished fetching. */
     onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
+    /** A message's content was actually opened (photo/video shown full-screen) -- see ConversationViewModel.openMessageContent. What a view-once photo/video is waiting on to begin self-destructing. */
+    onOpenMessageContent: (String) -> Unit = {},
     messageMotionEvents: Map<String, MessageMotionEvent> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
@@ -302,8 +324,8 @@ fun ConversationScreen(
     var deleteConfirmMessages by remember { mutableStateOf<List<Message>?>(null) }
     // Grouping is derived once per message-list change, not per frame.
     val entries = remember(messages) { MessageGrouping.group(messages) }
-    val selectedMessages by remember(messages, selectedIds) {
-        derivedStateOf { messages.filter { it.id in selectedIds } }
+    val selectedMessages = remember(messages, selectedIds) {
+        messages.filter { it.id in selectedIds }
     }
     var showContactSheet by remember { mutableStateOf(false) }
     var showLocationSheet by remember { mutableStateOf(false) }
@@ -311,6 +333,31 @@ fun ConversationScreen(
     var showVenueSheet by remember { mutableStateOf(false) }
     var showScheduledSheet by remember { mutableStateOf(false) }
     var curtainState by remember { mutableStateOf(CurtainState.COMPOSER) }
+    // Truthful only: derived from the real signalling + media states, never
+    // set directly by this screen. See CallStatePresenter for why ACTIVE is
+    // unreachable without the native transport reporting CONNECTED.
+    val callPresentationState = remember(activeCall) {
+        activeCall?.let {
+            com.foresightlabs.aether.domain.calls.CallStatePresenter.present(it.state, it.mediaState, it.isOutgoing)
+        } ?: com.foresightlabs.aether.domain.calls.CallPresentationState.IDLE
+    }
+    val isCallLive = callPresentationState != com.foresightlabs.aether.domain.calls.CallPresentationState.IDLE &&
+        callPresentationState != com.foresightlabs.aether.domain.calls.CallPresentationState.ENDED
+    // Camera starts on for a video call and off for a voice call; keyed on the
+    // call's id so a new call (video or voice) always starts from that default
+    // rather than inheriting the previous call's toggle.
+    var isCameraEnabled by remember(activeCall?.callId) { mutableStateOf(activeCall?.isVideo ?: false) }
+    // The Curtain follows the call's real lifecycle rather than the reverse:
+    // this conversation never decides a call exists, it only reflects one.
+    LaunchedEffect(isCallLive) {
+        curtainState = if (isCallLive) {
+            CurtainState.CALL
+        } else if (curtainState == CurtainState.CALL) {
+            CurtainState.COMPOSER
+        } else {
+            curtainState
+        }
+    }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     var replacingMediaMessage by remember { mutableStateOf<Message?>(null) }
@@ -548,10 +595,19 @@ fun ConversationScreen(
             .collect { (index, totalItems) ->
                 if (index <= 1 && messages.size >= 15) onLoadOlder()
                 if (totalItems > 0 && index >= totalItems - 3) showJumpToLatest = false
-                val visible = listState.layoutInfo.visibleItemsInfo.mapNotNull { info ->
-                    messages.getOrNull(info.index - 1)?.id
+                val visibleMsgs = listState.layoutInfo.visibleItemsInfo.mapNotNull { info ->
+                    messages.getOrNull(info.index - 1)
                 }
-                if (visible.isNotEmpty()) onVisibleMessages(visible)
+                val visibleIds = visibleMsgs.map { it.id }
+                if (visibleIds.isNotEmpty()) onVisibleMessages(visibleIds)
+
+                // Conservative video prefetch: request download for up to 2 visible videos that are not yet local
+                visibleMsgs.flatMap { it.mediaItems }
+                    .filter { it.isVideo && it.videoFileId != 0 && it.videoLocalPath.isBlank() && !it.downloadFailed }
+                    .take(2)
+                    .forEach { item ->
+                        onRequestMediaDownload(item.videoFileId, false)
+                    }
             }
     }
 
@@ -695,6 +751,10 @@ fun ConversationScreen(
     val sceneProgress = LocalSceneTransitionProgress.current
     val heightCache = LocalSceneHeightCache.current
     val atRest = sceneProgress == null || sceneProgress > 0.98f
+    // Zero at rest on either end (0 or 1), peaking mid-transition -- the
+    // curtain-seam bow only ever appears while the scene is actually moving.
+    // See AetherCurtainSeamShape.
+    val sceneMorphBow = sceneProgress?.let { sin(it.coerceIn(0f, 1f) * PI.toFloat()) } ?: 0f
 
     // Staggered conversation entry: elements resolve continuously as progress moves
     // from 0.0 to 1.0 (Home to Conversation).
@@ -753,6 +813,23 @@ fun ConversationScreen(
                 },
                 replyQuote = replyQuote,
                 curtainState = curtainState,
+                callIsMuted = activeCall?.isMuted ?: false,
+                callAudioRoute = if (activeCall?.isSpeakerOn == true) {
+                    com.foresightlabs.aether.domain.calls.AudioRoute.SPEAKER
+                } else {
+                    com.foresightlabs.aether.domain.calls.AudioRoute.EARPIECE
+                },
+                callIsMediaTransportAvailable = isCallMediaAvailable,
+                callIsVideo = activeCall?.isVideo ?: false,
+                callIsCameraEnabled = isCameraEnabled,
+                onToggleCallMute = onToggleCallMute,
+                onToggleCallSpeaker = onToggleCallSpeaker,
+                onToggleCallCamera = {
+                    isCameraEnabled = !isCameraEnabled
+                    onToggleCallCamera(isCameraEnabled)
+                },
+                onSwitchCallCamera = onSwitchCallCamera,
+                onEndCall = onEndCall,
                 onCurtainStateChange = { mode ->
                     if (mode.isExpanded) {
                         keyboardController?.hide()
@@ -964,6 +1041,27 @@ fun ConversationScreen(
                 onPinSelected = { msg -> onPinMessage(msg) },
                 onDeleteSelected = { chosen ->
                     deleteConfirmMessages = chosen
+                    curtainState = CurtainState.DELETE_CONFIRM
+                },
+                deleteConfirmCount = deleteConfirmMessages?.size ?: 0,
+                deleteConfirmCanDeleteForAll = deleteConfirmMessages
+                    ?.let { it.isNotEmpty() && it.all { m -> messageCapabilities[m.id]?.canBeDeletedForAllUsers == true } }
+                    ?: false,
+                onCancelDelete = {
+                    deleteConfirmMessages = null
+                    curtainState = CurtainState.COMPOSER
+                },
+                onConfirmDeleteForMe = {
+                    deleteConfirmMessages?.forEach { onDeleteMessage(it, false) }
+                    selectedIds = emptySet()
+                    deleteConfirmMessages = null
+                    curtainState = CurtainState.COMPOSER
+                },
+                onConfirmDeleteForEveryone = {
+                    deleteConfirmMessages?.forEach { onDeleteMessage(it, true) }
+                    selectedIds = emptySet()
+                    deleteConfirmMessages = null
+                    curtainState = CurtainState.COMPOSER
                 },
                 pendingShare = pendingShare,
                 prefillText = sharedDraft,
@@ -988,6 +1086,7 @@ fun ConversationScreen(
                 onToggleViewOnce = {
                     pendingMedia = pendingMedia?.let { it.copy(viewOnce = !it.viewOnce) }
                 },
+                isViewOnceAvailable = chat.type == ChatType.DIRECT,
                 onCancelPendingMedia = {
                     pendingMedia = null
                     curtainState = CurtainState.COMPOSER
@@ -1031,19 +1130,38 @@ fun ConversationScreen(
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
                 .zIndex(1f)
-                .height(
-                    with(density) {
-                        (morphedCanvasPx ?: liveForegroundPx).coerceAtLeast(0f).toDp()
+                .layout { measurable, constraints ->
+                    val targetPx = (morphedCanvasPx ?: liveForegroundPx).roundToInt().coerceAtLeast(0)
+                    val placeable = measurable.measure(
+                        constraints.copy(
+                            minHeight = targetPx.coerceAtMost(constraints.maxHeight),
+                            maxHeight = targetPx.coerceAtMost(constraints.maxHeight)
+                        )
+                    )
+                    layout(placeable.width, placeable.height) {
+                        placeable.place(0, 0)
                     }
-                )
+                }
+                // A plain rounded rectangle at rest; while the scene is
+                // mid-morph into or out of Home, the seam bows like a drawn
+                // curtain and flattens back out on either end. See
+                // [AetherCurtainSeamShape].
                 .clip(
-                    RoundedCornerShape(
-                        bottomStart = ConversationCanvasRadius,
-                        bottomEnd = ConversationCanvasRadius
+                    AetherCurtainSeamShape(
+                        cornerRadius = ConversationCanvasRadius,
+                        bowFraction = sceneMorphBow,
+                        maxBow = AetherCurtainSeamBow
                     )
                 )
                 .testTag("conversation_foreground")
         ) {
+        // Sized and clipped with this panel, exactly like Home's hero, so the
+        // rounded bottom corners the clip above cuts are actually visible as
+        // a curve against the Curtain behind -- rather than invisible, since
+        // clipping transparent content does nothing on its own. This still
+        // reaches the header, the messages, and all the way down to the
+        // Curtain seam; it does not need to paint behind the Curtain's own
+        // opaque body, which nothing would ever reveal anyway.
         AetherTimeAtmosphere(
             modifier = Modifier.fillMaxSize(),
             heroFraction = 1f,
@@ -1051,6 +1169,8 @@ fun ConversationScreen(
             frostState = frostState,
             timeAtmosphere = rememberCurrentTimeAtmosphere()
         )
+
+        val maxAvailableWidth = LocalConfiguration.current.screenWidthDp.dp
 
         LazyColumn(
             state = listState,
@@ -1128,6 +1248,7 @@ fun ConversationScreen(
                         onMediaClick = { media ->
                             selectedMediaItem = media
                             isMediaViewerVisible = true
+                            onOpenMessageContent(entry.anchor.id)
                         },
                         modifier = Modifier.animateItem(
                             fadeInSpec = null,
@@ -1145,6 +1266,12 @@ fun ConversationScreen(
                         replyingToMessage = replyTarget
                     },
                     onLongPress = { targetMsg ->
+                        // Reverted: routing this through the context menu when not
+                        // already selecting broke entering selection mode by
+                        // long-press at all (the menu's "Select" action was the
+                        // only way back in). Delete for a single message is
+                        // already reachable through that selection dock below,
+                        // so this only needs to do the one thing it always did.
                         onRequestCapabilities(targetMsg)
                         selectedIds = selectedIds.toggle(targetMsg.id)
                     },
@@ -1162,6 +1289,7 @@ fun ConversationScreen(
                     onMediaClick = { media ->
                         selectedMediaItem = media
                         isMediaViewerVisible = true
+                        onOpenMessageContent(msg.id)
                     },
                     onReactionClick = { targetMsg, emoji ->
                         onAddReaction(targetMsg, emoji)
@@ -1173,6 +1301,7 @@ fun ConversationScreen(
                     onRetry = onRetryMessage,
                     onReplyPreviewClick = onReplyPreviewClick,
                     reducedMotion = reducedMotion,
+                    maxAvailableWidth = maxAvailableWidth,
                     modifier = Modifier.animateItem(
                         fadeInSpec = null,
                         fadeOutSpec = null,
@@ -1200,6 +1329,27 @@ fun ConversationScreen(
             onSearchOlder = onSearchOlder,
             onSearchNewer = onSearchNewer,
             onOpenProfile = onNavigateToProfile,
+            // No disabled/greyed state on purpose: an ineligible or
+            // feature-flagged-off conversation gets no icon at all, not one
+            // that looks tappable and silently does nothing.
+            onCall = if (
+                com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED &&
+                !isCallLive &&
+                com.foresightlabs.aether.domain.calls.CallEligibility.isEligible(chat.conversationClass, isCallMediaAvailable)
+            ) {
+                onStartVoiceCall
+            } else {
+                null
+            },
+            onVideoCall = if (
+                com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED &&
+                !isCallLive &&
+                com.foresightlabs.aether.domain.calls.CallEligibility.isEligible(chat.conversationClass, isCallMediaAvailable)
+            ) {
+                onStartVideoCall
+            } else {
+                null
+            },
             pinned = pinnedMessage,
             pinnedCount = pinnedMessages.size,
             pinnedIndex = pinnedCursor,
@@ -1224,6 +1374,21 @@ fun ConversationScreen(
                     translationY = headerTranslationY
                 }
         )
+
+        // The upper foreground adapting to a live call -- the same
+        // Conversation scene, not a second screen. Absent whenever there is
+        // no call, per isCallLive above.
+        if (isCallLive) {
+            ConversationCallIdentityBanner(
+                name = chat.title,
+                state = callPresentationState,
+                durationSec = activeCall?.durationSec ?: 0,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .zIndex(1.5f)
+                    .padding(top = AetherFloatingHeaderDefaults.TopGap + AetherFloatingHeaderDefaults.ExpandedHeight + 16.dp)
+            )
+        }
 
         if (showJumpToLatest) {
             Box(
@@ -1369,6 +1534,9 @@ fun ConversationScreen(
             } else if (curtainState == CurtainState.MEDIA_PREVIEW) {
                 pendingMedia = null
                 curtainState = CurtainState.COMPOSER
+            } else if (curtainState == CurtainState.DELETE_CONFIRM) {
+                deleteConfirmMessages = null
+                curtainState = CurtainState.COMPOSER
             } else {
                 curtainState = CurtainState.COMPOSER
             }
@@ -1464,25 +1632,9 @@ fun ConversationScreen(
             editingMessage = null
         }
 
-        // Delete Confirmation Modal for Single/Multi Selection
-        if (deleteConfirmMessages != null) {
-            val toDelete = deleteConfirmMessages!!
-            DeleteConfirmationModal(
-                count = toDelete.size,
-                canDeleteForAll = toDelete.any { messageCapabilities[it.id]?.canBeDeletedForAllUsers == true },
-                onDismiss = { deleteConfirmMessages = null },
-                onDeleteForMe = {
-                    toDelete.forEach { onDeleteMessage(it, false) }
-                    selectedIds = emptySet()
-                    deleteConfirmMessages = null
-                },
-                onDeleteForEveryone = {
-                    toDelete.forEach { onDeleteMessage(it, true) }
-                    selectedIds = emptySet()
-                    deleteConfirmMessages = null
-                }
-            )
-        }
+        // Delete confirmation now lives in the Curtain itself -- see
+        // CurtainState.DELETE_CONFIRM and DeleteConfirmCurtainContent -- not a
+        // separate Dialog window.
 
         // Full Screen Media Viewer Overlay
         BackHandler(enabled = isMediaViewerVisible) {
@@ -1499,6 +1651,62 @@ fun ConversationScreen(
             },
             onRequestDownload = onRequestMediaDownload
         )
+
+        ConversationErrorBanner(
+            message = errorMessage,
+            onConsumed = onErrorConsumed,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = AetherFloatingHeaderDefaults.TopGap + AetherFloatingHeaderDefaults.CompactHeight + 8.dp)
+        )
+    }
+}
+
+/**
+ * A transient, restrained notice for an action that just failed (delete, send,
+ * pin, ...) -- see [ConversationViewModel.sendError]. Auto-dismisses; never
+ * blocks input the way a dialog would, since the conversation itself is still
+ * usable while it's showing.
+ */
+@Composable
+private fun ConversationErrorBanner(
+    message: String?,
+    onConsumed: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LaunchedEffect(message) {
+        if (message != null) {
+            kotlinx.coroutines.delay(3500)
+            onConsumed()
+        }
+    }
+    androidx.compose.animation.AnimatedVisibility(
+        visible = message != null,
+        enter = androidx.compose.animation.fadeIn(tween(ConversationMotion.FAST_MS)) +
+            androidx.compose.animation.slideInVertically(tween(ConversationMotion.FAST_MS)) { -it / 2 },
+        exit = androidx.compose.animation.fadeOut(tween(ConversationMotion.FAST_MS)) +
+            androidx.compose.animation.slideOutVertically(tween(ConversationMotion.FAST_MS)) { -it / 2 },
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .clip(AetherEmber.Shapes.Pill)
+                .background(Color(0xEE1C1010))
+                .border(0.5.dp, AetherEmber.Colors.Error.copy(alpha = 0.4f), AetherEmber.Shapes.Pill)
+                .clickable(onClick = onConsumed)
+                .testTag("conversation_error_banner")
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+        ) {
+            Text(
+                text = message.orEmpty(),
+                fontFamily = ManropeFontFamily,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFFFFE5E5),
+                maxLines = 2
+            )
+        }
     }
 }
 
@@ -1669,117 +1877,6 @@ private fun lastKnownCoarseLocation(context: android.content.Context): Pair<Doub
     }
 }
 
-/**
- * Clean, quiet deletion confirmation modal for single or multi-message deletion.
- */
-@Composable
-private fun DeleteConfirmationModal(
-    count: Int,
-    canDeleteForAll: Boolean,
-    onDismiss: () -> Unit,
-    onDeleteForMe: () -> Unit,
-    onDeleteForEveryone: () -> Unit
-) {
-    val colors = LocalAetherColors.current
-    Dialog(onDismissRequest = onDismiss) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .clip(RoundedCornerShape(24.dp))
-                .background(Color(0xFF1B1B22))
-                .border(0.5.dp, Color(0x28FFFFFF), RoundedCornerShape(24.dp))
-                .padding(20.dp)
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Text(
-                    text = if (count == 1) "Delete Message" else "Delete $count Messages",
-                    fontFamily = ManropeFontFamily,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.textPrimary
-                )
-
-                Text(
-                    text = if (canDeleteForAll) {
-                        "Are you sure you want to delete the selected message(s)?"
-                    } else {
-                        "Are you sure you want to delete the selected message(s) for yourself?"
-                    },
-                    fontFamily = ManropeFontFamily,
-                    fontSize = 14.sp,
-                    color = colors.textSecondary,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                if (canDeleteForAll) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(46.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Color(0xFFEF4444).copy(alpha = 0.15f))
-                            .clickable {
-                                onDeleteForEveryone()
-                                onDismiss()
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Delete for everyone",
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFFEF4444)
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(46.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (canDeleteForAll) Color(0x18FFFFFF) else Color(0xFFEF4444).copy(alpha = 0.15f))
-                        .clickable {
-                            onDeleteForMe()
-                            onDismiss()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "Delete for me",
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (canDeleteForAll) colors.textPrimary else Color(0xFFEF4444)
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { onDismiss() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "Cancel",
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colors.textSecondary
-                    )
-                }
-            }
-        }
-    }
-}
 
 /** How softly the conversation canvas turns its lower corners onto the footer. */
 private val ConversationCanvasRadius = 28.dp
@@ -1861,6 +1958,10 @@ fun ConversationIdentityHeader(
     onSearchOlder: () -> Unit = {},
     onSearchNewer: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
+    /** Null hides the call action entirely -- see [com.foresightlabs.aether.domain.calls.CallEligibility]. */
+    onCall: (() -> Unit)? = null,
+    /** Null hides the video call action entirely -- same eligibility rule as [onCall]. */
+    onVideoCall: (() -> Unit)? = null,
     pinned: Message? = null,
     pinnedCount: Int = 0,
     pinnedIndex: Int = 0,
@@ -1962,6 +2063,14 @@ fun ConversationIdentityHeader(
                         }
 
                         Spacer(modifier = Modifier.width(4.dp))
+
+                        if (onVideoCall != null) {
+                            ConversationVideoCallButton(onClick = onVideoCall)
+                        }
+
+                        if (onCall != null) {
+                            ConversationCallButton(onClick = onCall)
+                        }
 
                         // Mac-like restrained optical search button
                         ConversationSearchButton(

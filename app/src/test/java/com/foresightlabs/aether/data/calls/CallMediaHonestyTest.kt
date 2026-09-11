@@ -3,6 +3,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.foresightlabs.aether.calls.media.CallMediaConfig
 import com.foresightlabs.aether.calls.media.CallProtocolInfo
 import com.foresightlabs.aether.calls.media.CallServerEndpoint
+import com.foresightlabs.aether.calls.media.DecodedVideoFrame
 import com.foresightlabs.aether.calls.media.MediaConnectionState as NativeMediaState
 import com.foresightlabs.aether.calls.media.NativeCallEngineCallback
 import com.foresightlabs.aether.calls.media.NativeTelegramCallMediaEngine
@@ -39,11 +40,14 @@ class CallMediaHonestyTest {
         override fun onSignalBarsChanged(bars: Int) { this.bars += bars }
         override fun onAudioLevelsChanged(localLevel: Float, remoteLevel: Float) {}
         override fun onError(error: String) { errors += error }
+        override fun onOutgoingSignalingData(data: ByteArray) {}
+        override fun onVideoFrame(frame: DecodedVideoFrame) {}
     }
 
     private fun config() = CallMediaConfig(
         callId = 101L,
         isOutgoing = true,
+        videoCaptureEnabled = false,
         encryptionKey = ByteArray(256),
         allowP2p = true,
         servers = listOf(

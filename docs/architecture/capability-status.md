@@ -136,16 +136,21 @@ performed. Neither is claimed anywhere in this documen## Chat list
 
 | Capability | Implemented | Unit tested | Emulator | Physical | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Signalling | yes | yes | no | no | `CreateCall`, `AcceptCall`, `DiscardCall` |
+| Signalling, both directions | yes | yes | no | no | `CreateCall`, `AcceptCall`, `DiscardCall`, `SendCallSignalingData` / `UpdateNewCallSignalingData` |
 | Call state tracking | yes | yes | no | no | `UpdateCall` + `CallStateReady` handoff |
 | Call history | yes | yes | no | no | `SearchCallMessages`; survives restart |
 | Audio routing | yes | yes | no | no | `AudioManager.setCommunicationDevice` (API 31+) and legacy earpiece / speaker / Bluetooth SCO fallbacks |
 | Mute | yes | yes | no | no | UI state flow and hardware microphone mute coordination |
-| Foreground service | yes | yes | no | no | `CallService` with microphone service type |
-| **Official tgcalls** | **no** | no | no | no | Upstream `TelegramMessenger/tgcalls` requires full WebRTC compilation/GN toolchain |
-| **Telegram media transport** | **no** | no | no | no | No fake `CONNECTED` state; honest `MediaConnectionState.UNAVAILABLE` is reported |
-| **Bidirectional audio** | **no** | no | no | no | Blocked on official tgcalls WebRTC build |
-| **Video calling** | **no** | no | no | no | not offered |
-| **Group calls** | **no** | no | no | no | not offered |
+| Foreground service | yes | yes | no | no | `CallService`, typed `microphone` or `microphone\|camera` per call |
+| Telegram media transport (ntgcalls) | yes | partial | no | no | Real native library linked and packaged (see `docs/architecture/calling-native-stack.md`); JNI/config-mapping layer unit tested, the audio/video path itself is not unit-testable |
+| Voice call media path | yes | partial | no | no | `skipExchange` + `connectP2p` against TDLib's negotiated key and servers; **NOT PHYSICALLY TESTED** |
+| Video call media path | yes | partial | no | no | Camera capture + raw decoded-frame rendering; pixel-format assumption undocumented by the vendor and unverified; **NOT PHYSICALLY TESTED** |
+| Group calls | no | no | no | no | not offered; ntgcalls supports it, Aether does not expose it |
 
-`MediaConnectionState.UNAVAILABLE` is strictly emitted when official Telegram media transport is absent. No timer or local scaffold may emit `CONNECTED` without a real tgcalls media stream.
+`MediaConnectionState.UNAVAILABLE` is strictly emitted when the media transport is
+absent or fails to load. No timer or local scaffold may emit `CONNECTED` without the
+real native engine reporting a connected state. "Implemented: yes" above means the
+real code path compiles, links and runs against a real dependency -- it is
+**STRUCTURALLY VERIFIED** and **NATIVE LINK VERIFIED**, not **PHYSICALLY VERIFIED**;
+see `docs/qa/calling-manual-test-checklist.md` for the physical validation this still
+needs.

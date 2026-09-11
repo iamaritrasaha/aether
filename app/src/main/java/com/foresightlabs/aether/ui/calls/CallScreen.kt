@@ -1,15 +1,11 @@
 package com.foresightlabs.aether.ui.calls
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -24,433 +21,329 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-import com.foresightlabs.aether.domain.calls.MediaConnectionState
+import com.foresightlabs.aether.calls.media.CallDiagnostics
+import com.foresightlabs.aether.calls.media.CallStage
+import com.foresightlabs.aether.calls.media.DecodedVideoFrame
+import com.foresightlabs.aether.domain.calls.AudioRoute
+import com.foresightlabs.aether.domain.calls.CallPresentationState
+import com.foresightlabs.aether.domain.calls.CallStatePresenter
 import com.foresightlabs.aether.domain.model.ActiveCall
 import com.foresightlabs.aether.domain.model.CallStateEnum
-import com.foresightlabs.aether.ui.design.AetherAtmosphericBackground
-import com.foresightlabs.aether.ui.design.AetherAvatar
-import com.foresightlabs.aether.ui.theme.AetherEmber
+import com.foresightlabs.aether.ui.home.atmosphere.AetherTimeAtmosphere
+import com.foresightlabs.aether.ui.home.atmosphere.AtmosphereExpression
+import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
-import com.foresightlabs.aether.ui.theme.OnlineGreen
-import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
 
+/**
+ * The one full-screen call surface: outgoing, incoming, voice and video.
+ *
+ * It is a scene, not a dashboard -- the Aether atmosphere and its mathematical
+ * geometry continue behind the call, identity sits high with the screen's
+ * quietest region beneath it, and controls sit in a single row at the bottom.
+ * Every control and every label comes from [AetherCallUi], the same ones the
+ * Conversation Curtain uses, so the two surfaces are one system rather than two
+ * designs of the same feature.
+ */
 @Composable
-fun FullCallScreen(
+fun AetherCallScreen(
     activeCall: ActiveCall?,
     onAcceptCall: (Int) -> Unit,
     onDiscardCall: (Int) -> Unit,
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit,
     onMinimize: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    remoteVideoFrame: DecodedVideoFrame? = null,
+    localVideoFrame: DecodedVideoFrame? = null,
+    isCameraEnabled: Boolean = false,
+    onToggleCamera: () -> Unit = {},
+    onSwitchCamera: () -> Unit = {}
 ) {
     if (activeCall == null) return
 
-    val context = LocalContext.current
-    var showPermissionRationale by remember { mutableStateOf(false) }
+    val colors = LocalAetherColors.current
+    val presentation = remember(activeCall) {
+        CallStatePresenter.present(activeCall.state, activeCall.mediaState, activeCall.isOutgoing)
+    }
+    val isIncomingPending = !activeCall.isOutgoing && activeCall.state == CallStateEnum.PENDING
+    // Video is only ever the dominant surface once a real decoded frame exists;
+    // before that the call keeps the Aether scene rather than turning black.
+    val showsRemoteVideo = activeCall.isVideo &&
+        presentation == CallPresentationState.ACTIVE &&
+        remoteVideoFrame != null
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            onAcceptCall(activeCall.callId)
+    // A call is never accepted before the OS grants what it needs -- the same
+    // rule that applies to placing one. See CallPermissionGate.
+    val acceptWithPermission = rememberCallStarter { onAcceptCall(activeCall.callId) }
+
+    // Closes the observable connect sequence: the last stage is only reached
+    // once the UI itself is showing a connected call.
+    LaunchedEffect(presentation, activeCall.callId) {
+        if (presentation == CallPresentationState.ACTIVE) {
+            CallDiagnostics.stage(
+                activeCall.callId.toLong(),
+                CallStage.UI_ACTIVE,
+                "video=${activeCall.isVideo} remote_frame=${remoteVideoFrame != null}"
+            )
         }
     }
 
-    AnimatedVisibility(
-        visible = true,
-        enter = fadeIn(),
-        exit = fadeOut()
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.background)
+            .testTag("aether_call_screen")
     ) {
-        AetherAtmosphericBackground(
-            modifier = modifier.fillMaxSize()
-        ) {
-            Box(
+        // The call happens inside Aether's environment, not on a separate
+        // screen pasted over it.
+        AetherTimeAtmosphere(
+            modifier = Modifier.fillMaxSize(),
+            expression = AtmosphereExpression.CONVERSATION,
+            enableAmbientMotion = true
+        )
+
+        if (showsRemoteVideo) {
+            DecodedVideoFrameImage(
+                frame = remoteVideoFrame,
+                contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.85f))
-                    .statusBarsPadding()
-                    .padding(24.dp)
+                    .testTag("remote_video_surface")
+            )
+        }
+
+        // A single restrained scrim: enough to seat the typography, never a
+        // heavy panel over the video.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = if (showsRemoteVideo) {
+                            listOf(Color(0x66000000), Color(0x1A000000), Color(0x99000000))
+                        } else {
+                            listOf(Color(0xCC0B0B0F), Color(0x990B0B0F), Color(0xE60B0B0F))
+                        }
+                    )
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Top Bar - Minimize
                 Box(
                     modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .size(42.dp)
+                        .size(40.dp)
                         .clip(CircleShape)
-                        .background(Color(0x30000000))
-                        .border(1.dp, Color(0x20FFFFFF), CircleShape)
-                        .clickable { onMinimize() }
+                        .background(AetherCallUi.ControlFill)
+                        .border(0.5.dp, AetherCallUi.ControlBorder, CircleShape)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = ripple(bounded = false, radius = 20.dp),
+                            onClick = onMinimize
+                        )
                         .testTag("minimize_call_button"),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
-                        contentDescription = "Minimize Call",
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp)
+                        contentDescription = "Minimise call",
+                        tint = colors.textPrimary,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
-                // Main Call Info
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 40.dp)
-                ) {
-                    Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.weight(1f))
 
-                    // Avatar
-                    AetherAvatar(
-                        initials = activeCall.user?.avatarInitials ?: "?",
-                        gradient = activeCall.user?.avatarGradient ?: listOf(Color(0xFF4DA3FF), Color(0xFF1D4ED8)),
-                        size = 112.dp,
-                        photoPath = activeCall.user?.photoPath,
-                        showGlowingRim = true
-                    )
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // User Name
-                    Text(
-                        text = activeCall.user?.name ?: "Telegram Contact",
-                        fontFamily = SpaceGroteskFontFamily,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        textAlign = TextAlign.Center
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Call State Label / Monotonic Timer
-                    val stateText = when (activeCall.state) {
-                        CallStateEnum.PENDING -> if (activeCall.isOutgoing) "Calling…" else "Incoming Voice Call"
-                        CallStateEnum.EXCHANGING_KEYS -> "Exchanging keys…"
-                        CallStateEnum.READY -> when (activeCall.mediaState) {
-                            MediaConnectionState.CONNECTED -> formatCallDuration(activeCall.durationSec)
-                            MediaConnectionState.RECONNECTING -> "Reconnecting…"
-                            MediaConnectionState.FAILED -> "Couldn't connect"
-                            else -> "Connecting…"
-                        }
-                        CallStateEnum.HANGING_UP -> "Hanging up…"
-                        CallStateEnum.DISCARDED -> "Call ended"
-                        CallStateEnum.ERROR -> activeCall.errorMessage ?: "Couldn't connect"
-                    }
-
-                    Text(
-                        text = stateText,
-                        fontFamily = ManropeFontFamily,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (activeCall.state == CallStateEnum.READY && activeCall.mediaState == MediaConnectionState.CONNECTED) OnlineGreen else Color(0xDDFFFFFF),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.testTag("call_state_text")
-                    )
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    // Call Action Controls
-                    val isIncomingPending = !activeCall.isOutgoing && activeCall.state == CallStateEnum.PENDING
-
-                    if (isIncomingPending) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(48.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Decline Button
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(68.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFFEF4444))
-                                        .clickable { onDiscardCall(activeCall.callId) }
-                                        .testTag("decline_call_button"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CallEnd,
-                                        contentDescription = "Decline Call",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(30.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "Decline",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 13.5.sp,
-                                    color = Color.White
-                                )
-                            }
-
-                            // Accept Button
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(68.dp)
-                                        .clip(CircleShape)
-                                        .background(OnlineGreen)
-                                        .clickable {
-                                            val hasPermission = ContextCompat.checkSelfPermission(
-                                                context,
-                                                Manifest.permission.RECORD_AUDIO
-                                            ) == PackageManager.PERMISSION_GRANTED
-
-                                            if (hasPermission) {
-                                                onAcceptCall(activeCall.callId)
-                                            } else {
-                                                showPermissionRationale = true
-                                            }
-                                        }
-                                        .testTag("accept_call_button"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Call,
-                                        contentDescription = "Accept Call",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(30.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "Accept",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 13.5.sp,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    } else {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(32.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Mute
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(CircleShape)
-                                        .background(if (activeCall.isMuted) Color.White else Color(0x30FFFFFF))
-                                        .border(1.dp, Color(0x40FFFFFF), CircleShape)
-                                        .clickable { onToggleMute() }
-                                        .testTag("mute_call_button"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (activeCall.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                                        contentDescription = "Mute",
-                                        tint = if (activeCall.isMuted) Color.Black else Color.White,
-                                        modifier = Modifier.size(26.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = if (activeCall.isMuted) "Muted" else "Mute",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 12.5.sp,
-                                    color = Color(0xEEFFFFFF)
-                                )
-                            }
-
-                            // Speaker
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(CircleShape)
-                                        .background(if (activeCall.isSpeakerOn) Color.White else Color(0x30FFFFFF))
-                                        .border(1.dp, Color(0x40FFFFFF), CircleShape)
-                                        .clickable { onToggleSpeaker() }
-                                        .testTag("speaker_call_button"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (activeCall.isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                                        contentDescription = "Speaker",
-                                        tint = if (activeCall.isSpeakerOn) Color.Black else Color.White,
-                                        modifier = Modifier.size(26.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = if (activeCall.isSpeakerOn) "Speaker On" else "Speaker",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 12.5.sp,
-                                    color = Color(0xEEFFFFFF)
-                                )
-                            }
-
-                            // End Call
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(68.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFFEF4444))
-                                        .clickable { onDiscardCall(activeCall.callId) }
-                                        .testTag("end_call_button"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CallEnd,
-                                        contentDescription = "End Call",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(30.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "End",
-                                    fontFamily = ManropeFontFamily,
-                                    fontSize = 12.5.sp,
-                                    color = Color(0xEEFFFFFF)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(40.dp))
-                }
-
-                // Permission Rationale Modal
-                if (showPermissionRationale) {
-                    AlertDialog(
-                        onDismissRequest = { showPermissionRationale = false },
-                        title = {
-                            Text(
-                                text = "Allow microphone access",
-                                fontFamily = SpaceGroteskFontFamily,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        },
-                        text = {
-                            Text(
-                                text = "Aether needs microphone access for voice calls.",
-                                fontFamily = ManropeFontFamily,
-                                color = Color(0xDDFFFFFF)
-                            )
-                        },
-                        confirmButton = {
-                            TextButton(
-                                onClick = {
-                                    showPermissionRationale = false
-                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
-                            ) {
-                                Text("Continue", color = AetherEmber.Colors.Accent, fontWeight = FontWeight.Bold)
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { showPermissionRationale = false }) {
-                                Text("Cancel", color = Color(0xAAFFFFFF))
-                            }
-                        },
-                        containerColor = AetherEmber.Colors.SurfaceElevated,
-                        shape = AetherEmber.Shapes.L
+                // A video call whose local preview is running shows it here,
+                // small and anchored -- never a floating panel over the scene.
+                if (activeCall.isVideo && isCameraEnabled && localVideoFrame != null) {
+                    DecodedVideoFrameImage(
+                        frame = localVideoFrame,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .width(84.dp)
+                            .height(112.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(0.5.dp, AetherCallUi.ControlBorder, RoundedCornerShape(14.dp))
+                            .testTag("local_video_preview")
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(if (showsRemoteVideo) 8.dp else 40.dp))
+
+            // Identity stays high; the centre of the screen is deliberately
+            // left to the atmosphere.
+            CallIdentity(
+                call = activeCall,
+                state = presentation,
+                compact = showsRemoteVideo,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+            )
+
+            if (activeCall.state == CallStateEnum.ERROR && activeCall.errorMessage != null) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                    text = activeCall.errorMessage,
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = colors.textTertiary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 40.dp)
+                        .testTag("call_error_text")
+                )
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            if (isIncomingPending) {
+                IncomingCallControls(
+                    onAnswer = { acceptWithPermission(activeCall.isVideo) },
+                    onDecline = { onDiscardCall(activeCall.callId) }
+                )
+            } else {
+                CallControlRow(
+                    isMuted = activeCall.isMuted,
+                    audioRoute = if (activeCall.isSpeakerOn) AudioRoute.SPEAKER else AudioRoute.EARPIECE,
+                    isVideoCall = activeCall.isVideo,
+                    isCameraEnabled = isCameraEnabled,
+                    onToggleMute = onToggleMute,
+                    onToggleSpeaker = onToggleSpeaker,
+                    onToggleCamera = onToggleCamera,
+                    onSwitchCamera = onSwitchCamera,
+                    onEndCall = { onDiscardCall(activeCall.callId) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(44.dp))
         }
     }
 }
 
+/**
+ * The minimised call, shown while the user is elsewhere in the app. Same
+ * language, same state source -- only smaller.
+ */
 @Composable
 fun OngoingCallBar(
     activeCall: ActiveCall,
     onExpand: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val colors = LocalAetherColors.current
+    val presentation = remember(activeCall) {
+        CallStatePresenter.present(activeCall.state, activeCall.mediaState, activeCall.isOutgoing)
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color(0xDC101828))
-            .border(1.dp, OnlineGreen.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
-            .clickable { onExpand() }
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(colors.surfaceElevated)
+            .border(0.5.dp, AetherCallUi.ControlBorder, RoundedCornerShape(18.dp))
+            .clickable(onClick = onExpand)
+            .padding(horizontal = 16.dp, vertical = 11.dp)
+            .testTag("ongoing_call_bar")
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(OnlineGreen)
-                )
-
-                val callDurationText = if (activeCall.state == CallStateEnum.READY && activeCall.mediaState == MediaConnectionState.CONNECTED) {
-                    formatCallDuration(activeCall.durationSec)
-                } else if (activeCall.state == CallStateEnum.READY && activeCall.mediaState == MediaConnectionState.RECONNECTING) {
-                    "Reconnecting…"
-                } else {
-                    "Connecting…"
-                }
-
-                Text(
-                    text = "${activeCall.user?.name ?: "Call"} • $callDurationText",
-                    fontFamily = ManropeFontFamily,
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White
-                )
-            }
-
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(colors.accent)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
             Text(
-                text = "Tap to return",
+                text = activeCall.user?.name ?: "Call",
+                fontFamily = ManropeFontFamily,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.textPrimary
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = callStatusText(presentation, activeCall.durationSec, activeCall.isVideo),
                 fontFamily = ManropeFontFamily,
                 fontSize = 12.sp,
-                color = OnlineGreen,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                color = colors.textSecondary
             )
         }
     }
 }
 
-private fun formatCallDuration(seconds: Int): String {
-    val mins = seconds / 60
-    val secs = seconds % 60
-    return String.format("%02d:%02d", mins, secs)
+/**
+ * Renders one decoded call video frame.
+ *
+ * The backing [Bitmap] is rebuilt only when the frame instance changes -- there
+ * is no continuous video *stream* object to hand a player, only a sequence of
+ * discrete validated images (see
+ * docs/architecture/calling-native-stack.md). Frames arrive already validated
+ * and bounded by the media engine; this still refuses to build a bitmap from a
+ * buffer whose length disagrees with its dimensions rather than letting the
+ * platform throw.
+ */
+@Composable
+internal fun DecodedVideoFrameImage(
+    frame: DecodedVideoFrame,
+    contentScale: ContentScale,
+    modifier: Modifier = Modifier
+) {
+    val imageBitmap = remember(frame) {
+        if (frame.width <= 0 || frame.height <= 0 ||
+            frame.pixels.size < frame.width * frame.height
+        ) {
+            null
+        } else {
+            runCatching {
+                Bitmap.createBitmap(frame.pixels, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+                    .asImageBitmap()
+            }.getOrNull()
+        }
+    } ?: return
+
+    Image(
+        bitmap = imageBitmap,
+        contentDescription = null,
+        contentScale = contentScale,
+        modifier = modifier.graphicsLayer { rotationZ = frame.rotationDegrees.toFloat() }
+    )
 }

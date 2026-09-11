@@ -42,7 +42,7 @@ class TgCallsMediaEngineTest {
     }
 
     @Test
-    fun adapterBuildsTgCallsConfigFromReady() {
+    fun adapterBuildsMediaConfigFromReady() {
         val call = TdApi.Call().apply {
             id = 101
             isOutgoing = true
@@ -60,9 +60,9 @@ class TgCallsMediaEngineTest {
             customParameters = "{\"p2p\": true}"
         }
 
-        val config = TgCallsAdapter.buildConfig(call, ready)
+        val config = TgCallsAdapter.buildMediaConfig(call, ready)
 
-        assertEquals(101, config.callId)
+        assertEquals(101L, config.callId)
         assertTrue(config.isOutgoing)
         assertTrue(config.allowP2p)
         assertEquals(1, config.servers.size)
@@ -70,6 +70,9 @@ class TgCallsMediaEngineTest {
         assertEquals(443, config.servers[0].port)
         assertEquals("{\"config\": true}", config.configJson)
         assertEquals("{\"p2p\": true}", config.customParameters)
+        assertEquals(65, config.protocol.minLayer)
+        assertEquals(92, config.protocol.maxLayer)
+        assertEquals(listOf("1.0.0"), config.protocol.libraryVersions)
     }
 
     @Test

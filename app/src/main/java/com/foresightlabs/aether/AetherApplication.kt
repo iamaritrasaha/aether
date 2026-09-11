@@ -16,6 +16,9 @@ import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
 import coil.decode.VideoFrameDecoder
 import com.foresightlabs.aether.data.calls.DefaultCallsRepository
+import com.foresightlabs.aether.data.network.AetherConnectivityObserver
+import com.foresightlabs.aether.data.security.AppLockCoordinator
+import com.foresightlabs.aether.data.security.AppLockRepository
 import com.foresightlabs.aether.domain.calls.CallsRepository
 
 class AetherApplication : Application(), ImageLoaderFactory {
@@ -30,6 +33,10 @@ class AetherApplication : Application(), ImageLoaderFactory {
             context = applicationContext,
             telegram = telegram,
         )
+    }
+
+    val connectivityObserver: AetherConnectivityObserver by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        AetherConnectivityObserver.getInstance(this, telegram)
     }
 
     lateinit var permissionCoordinator: PermissionCoordinator
@@ -57,6 +64,18 @@ class AetherApplication : Application(), ImageLoaderFactory {
 
     private val applicationScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
 
+    val appLockRepository: AppLockRepository by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        AppLockRepository.getInstance(this)
+    }
+
+    /**
+     * Created (not just lazily read) in [onCreate] so [AppLockCoordinator.attachTo]
+     * registers before any Activity can start -- a lock-enabled process must
+     * never have a window in front of the user before this is watching it.
+     */
+    lateinit var appLockCoordinator: AppLockCoordinator
+        private set
+
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
             .components {
@@ -73,6 +92,8 @@ class AetherApplication : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        appLockCoordinator = AppLockCoordinator(appLockRepository, applicationScope)
+        appLockCoordinator.attachTo(this)
         permissionCoordinator = PermissionCoordinator(this)
         createNotificationChannels()
         val legacyInstallation = filesDir.resolve("tdlib").exists() ||
@@ -122,6 +143,7 @@ class AetherApplication : Application(), ImageLoaderFactory {
      * gets registered with Telegram. [TelegramClient.registerFcmToken] is
      * idempotent, so this racing with a live onNewToken callback is harmless.
      */
+    @Suppress("DEPRECATION")
     private fun registerExistingFcmToken() {
         if (!BuildConfig.HAS_FCM_CONFIG) {
             if (BuildConfig.DEBUG) {

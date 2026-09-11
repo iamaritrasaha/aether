@@ -1,6 +1,8 @@
 package com.foresightlabs.aether.ui.conversation
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -37,6 +39,7 @@ import androidx.media3.ui.PlayerView
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
+import com.foresightlabs.aether.BuildConfig
 import java.io.File
 
 /**
@@ -155,6 +158,12 @@ fun VideoNotePlayer(
             volume = 1f
             playWhenReady = autoPlay
             addListener(object : Player.Listener {
+                override fun onRenderedFirstFrame() {
+                    if (BuildConfig.DEBUG) {
+                        Log.d("AetherTd", "VIDEO_FIRST_FRAME_RENDERED path=$filePath elapsedRealtime=${SystemClock.elapsedRealtime()}")
+                    }
+                }
+
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_ENDED) {
                         isPlaying = false

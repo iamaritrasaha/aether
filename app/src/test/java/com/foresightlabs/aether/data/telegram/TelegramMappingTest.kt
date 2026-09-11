@@ -128,10 +128,32 @@ class TelegramMappingTest {
     assertTrue(TelegramMappers.mapAuthState(TdApi.AuthorizationStateWaitPhoneNumber()) is AuthUiState.Phone)
     assertTrue(TelegramMappers.mapAuthState(TdApi.AuthorizationStateReady()) is AuthUiState.Ready)
     val code = TdApi.AuthorizationStateWaitCode(
-      TdApi.AuthenticationCodeInfo("+15551212", TdApi.AuthenticationCodeTypeSms(5), null, 60)
+      TdApi.AuthenticationCodeInfo("+15551212", TdApi.AuthenticationCodeTypeSms(5), TdApi.AuthenticationCodeTypeCall(5), 60)
     )
     val mapped = TelegramMappers.mapAuthState(code) as AuthUiState.Code
     assertEquals(5, mapped.codeLength)
+    assertEquals(60, mapped.timeoutSeconds)
+    assertEquals("phone call", mapped.nextTypeDescription)
+  }
+
+  @Test
+  fun telegramMessageCodeHintExplainsTelegramAppSession() {
+    val tgCode = TdApi.AuthorizationStateWaitCode(
+      TdApi.AuthenticationCodeInfo("+15551212", TdApi.AuthenticationCodeTypeTelegramMessage(5), TdApi.AuthenticationCodeTypeSms(5), 45)
+    )
+    val mapped = TelegramMappers.mapAuthState(tgCode) as AuthUiState.Code
+    assertEquals("Telegram sent the code to your other logged-in Telegram session.", mapped.hint)
+    assertEquals(45, mapped.timeoutSeconds)
+    assertEquals("SMS", mapped.nextTypeDescription)
+  }
+
+  @Test
+  fun floodWaitAndAuthErrorsMappedAccurately() {
+    val floodError = TdErrors.userMessage(TdApi.Error(420, "FLOOD_WAIT_120"))
+    assertTrue(floodError.contains("2 minutes"))
+
+    val signupForbidden = TdErrors.userMessage(TdApi.Error(400, "PHONE_NUMBER_APP_SIGNUP_FORBIDDEN"))
+    assertTrue(signupForbidden.contains("official Telegram app"))
   }
 
   @Test

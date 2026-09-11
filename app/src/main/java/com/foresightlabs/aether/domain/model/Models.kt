@@ -235,6 +235,8 @@ data class Message(
     val canRetry: Boolean = false,
     val autoDeleteIn: Double = 0.0,
     val selfDestructIn: Double = 0.0,
+    /** True for TdApi's MessageSelfDestructTypeImmediately -- real Telegram view-once, from TDLib's own selfDestructType, not a client-side flag. */
+    val isViewOnce: Boolean = false,
     val liveLocationExpiresIn: Int = 0,
     val isLiveLocation: Boolean = false,
     val venueTitle: String? = null,
@@ -511,6 +513,21 @@ enum class ConnectionStatus(val label: String) {
     UNKNOWN("")
 }
 
+enum class AuthCategory {
+    INITIALIZING,
+    PHONE,
+    CODE,
+    PASSWORD,
+    EMAIL_ADDRESS,
+    EMAIL_CODE,
+    REGISTRATION,
+    OTHER_DEVICE,
+    READY,
+    LOGGING_OUT,
+    CLOSING,
+    OTHER
+}
+
 sealed interface AuthUiState {
     data object Initializing : AuthUiState
     data object MissingCredentials : AuthUiState
@@ -523,6 +540,8 @@ sealed interface AuthUiState {
         val codeLength: Int?,
         val hint: String,
         val isNumeric: Boolean = true,
+        val timeoutSeconds: Int = 0,
+        val nextTypeDescription: String? = null,
         val isLoading: Boolean = false,
         val error: String? = null
     ) : AuthUiState
@@ -560,3 +579,19 @@ sealed interface AuthUiState {
     data object Closing : AuthUiState
     data object Ready : AuthUiState
 }
+
+val AuthUiState.category: AuthCategory
+    get() = when (this) {
+        AuthUiState.Initializing -> AuthCategory.INITIALIZING
+        is AuthUiState.Phone -> AuthCategory.PHONE
+        is AuthUiState.Code -> AuthCategory.CODE
+        is AuthUiState.Password -> AuthCategory.PASSWORD
+        is AuthUiState.EmailAddress -> AuthCategory.EMAIL_ADDRESS
+        is AuthUiState.EmailCode -> AuthCategory.EMAIL_CODE
+        is AuthUiState.Registration -> AuthCategory.REGISTRATION
+        is AuthUiState.OtherDevice -> AuthCategory.OTHER_DEVICE
+        AuthUiState.Ready -> AuthCategory.READY
+        AuthUiState.LoggingOut -> AuthCategory.LOGGING_OUT
+        AuthUiState.Closing -> AuthCategory.CLOSING
+        else -> AuthCategory.OTHER
+    }

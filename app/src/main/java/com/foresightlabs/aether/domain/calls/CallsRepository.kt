@@ -1,7 +1,9 @@
 package com.foresightlabs.aether.domain.calls
 
+import com.foresightlabs.aether.calls.media.DecodedVideoFrame
 import com.foresightlabs.aether.domain.model.ActiveCall
 import com.foresightlabs.aether.domain.model.CallHistoryUiState
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
 interface CallsRepository {
@@ -21,11 +23,16 @@ interface CallsRepository {
     val activeCallState: StateFlow<ActiveCall?>
     val historyState: StateFlow<CallHistoryUiState>
 
-    suspend fun initiateCall(userId: Long): Result<Int>
+    /** Local/remote decoded video frames for the active call's renderer to draw. */
+    val videoFrames: SharedFlow<DecodedVideoFrame>
+
+    suspend fun initiateCall(userId: Long, isVideo: Boolean = false): Result<Int>
     suspend fun acceptCall(callId: Int): Result<Unit>
     suspend fun discardCall(callId: Int): Result<Unit>
     fun toggleMute()
     fun toggleSpeaker()
+    fun setCameraEnabled(enabled: Boolean)
+    fun switchCamera()
     fun setMinimized(minimized: Boolean)
 
     suspend fun loadInitialHistory()
