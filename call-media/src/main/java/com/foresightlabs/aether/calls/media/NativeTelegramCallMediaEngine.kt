@@ -144,6 +144,13 @@ class NativeTelegramCallMediaEngine {
         @Volatile private var listenersRegistered = false
         @Volatile private var engineInstance: NTgCalls? = null
 
+        /**
+         * Samples the native engine's own capture/playback frame counters
+         * while a call is live -- the only media-activity evidence the
+         * engine's public API exposes (see [MediaActivityMonitor]).
+         */
+        private val mediaActivityMonitor = MediaActivityMonitor()
+
         /** Session counter, so a late callback can be attributed to its session. */
         @Volatile private var generationCounter: Long = 0L
 
@@ -374,6 +381,29 @@ class NativeTelegramCallMediaEngine {
                 ntg.onSignalingData { callId, data ->
                     if (callId == activeCallId) callback?.onOutgoingSignalingData(data)
                 }
+                ntg.onRemoteSourceChange { callId, source ->
+                    // The remote peer's stream appearing (or changing state) is
+                    // the proof that incoming media was actually negotiated:
+                    // without this, "no remote audio" is ambiguous between
+                    // "remote never sent" and "remote sent, we dropped it".
+                    if (callId != activeCallId) return@onRemoteSourceChange
+                    CallDiagnostics.stage(
+                        activeGeneration,
+                        CallStage.MEDIA_ACTIVITY,
+                        "remote_source ssrc=${source.ssrc} state=${source.state?.name ?: "null"} device=${source.device?.name ?: "null"}"
+                    )
+                }
+                ntg.onStreamEnd { callId, type, device ->
+                    // A capture/playback stream reaching EOF -- e.g. the Oboe
+                    // device dying -- is silent otherwise and looks identical
+                    // to "remote stopped talking".
+                    if (callId != activeCallId) return@onStreamEnd
+                    CallDiagnostics.stage(
+                        activeGeneration,
+                        CallStage.MEDIA_ACTIVITY,
+                        "stream_end type=${type?.name ?: "null"} device=${device?.name ?: "null"}"
+                    )
+                }
                 ntg.onFrames { callId, mode, device, frames ->
                     // Runs on a native engine thread. Everything it touches is
                     // either @Volatile or a thread-safe flow, and every frame it
@@ -577,6 +607,7 @@ class NativeTelegramCallMediaEngine {
                 nativeSessionCreated = true
                 skipExchange(config.callId, config.encryptionKey, config.isOutgoing)
                 CallDiagnostics.stage(generation, CallStage.MEDIA_SESSION_CREATED, "outgoing=${config.isOutgoing}")
+                startMediaActivityMonitor(config.callId, generation)
 
                 val rtcServers = toRtcServers(config.servers)
                 CallDiagnostics.stage(generation, CallStage.P2P_CONNECTING, "servers=${rtcServers.size} p2p=${config.allowP2p}")
@@ -614,6 +645,7 @@ class NativeTelegramCallMediaEngine {
             nativeSessionCreated: Boolean,
             stopSession: (Long) -> Unit
         ) {
+            mediaActivityMonitor.stop()
             if (nativeSessionCreated) {
                 try {
                     stopSession(callId)
@@ -624,6 +656,32 @@ class NativeTelegramCallMediaEngine {
             activeCallId = null
             rendererEnabled = false
             rendererAttached = false
+        }
+
+        /**
+         * Starts polling the native engine's media-activity counters for this
+         * session (see [MediaActivityMonitor]). Uses [engineInstance] rather
+         * than a parameter so the testable [startCallInternal] seam needs no
+         * extra lambda: with no engine instance (unit tests, or a session
+         * that never materialised) there is simply nothing to sample.
+         */
+        private fun startMediaActivityMonitor(callId: Long, generation: Long) {
+            val ntg = engineInstance ?: return
+            mediaActivityMonitor.start(
+                callId = callId,
+                generation = generation,
+                sampler = {
+                    val state = ntg.getState(callId)
+                    MediaActivitySample(
+                        captureSeconds = ntg.time(callId, StreamMode.CAPTURE),
+                        playbackSeconds = ntg.time(callId, StreamMode.PLAYBACK),
+                        muted = state.muted,
+                        videoPaused = state.videoPaused,
+                        videoStopped = state.videoStopped
+                    )
+                },
+                stillActive = { activeCallId == callId && activeGeneration == generation }
+            )
         }
 
         /**
@@ -940,6 +998,7 @@ class NativeTelegramCallMediaEngine {
             activeCallId = null
             rendererEnabled = false
             rendererAttached = false
+            mediaActivityMonitor.stop()
             CallDiagnostics.stage(generation, CallStage.TEARDOWN, "had_session=${callId != null}")
             if (ntg != null && callId != null) {
                 try {

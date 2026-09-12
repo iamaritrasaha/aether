@@ -253,7 +253,19 @@ class DefaultTelegramCallMediaEngine(
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             setAudioOutput(_audioRoute.value)
             audioManager.isMicrophoneMute = _isMuted.value
-        } catch (_: Throwable) {}
+            // Routing evidence for the physical-call diagnostics: which device
+            // Android actually selected for communication audio. Type codes
+            // only -- device labels/addresses never enter the log.
+            val deviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.communicationDevice?.type ?: -1
+            } else {
+                if (audioManager.isSpeakerphoneOn) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+            }
+            CallDiagnostics.stage(0L, CallStage.AUDIO_INITIALIZING, "audio_hw mode=${audioManager.mode} commDeviceType=$deviceType micMute=${audioManager.isMicrophoneMute}")
+        } catch (t: Throwable) {
+            CallDiagnostics.failure(0L, CallStage.AUDIO_INITIALIZING, t)
+        }
     }
 
     private fun resetAudioHardware() {

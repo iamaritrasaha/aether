@@ -26,6 +26,15 @@ enum class CallStage {
     /** The native engine itself reports a connected media path. */
     MEDIA_CONNECTED,
 
+    /**
+     * A periodic media-activity sample or a stream-level event, not a
+     * transition: proves whether audio frames are actually flowing through
+     * the capture (microphone → WebRTC send path) and playback (WebRTC
+     * receive path → speaker) pipelines while a call is live. Native
+     * CONNECTED alone only proves ICE/DTLS writability, never media.
+     */
+    MEDIA_ACTIVITY,
+
     /** The call UI has taken the connected state. */
     UI_ACTIVE,
 
