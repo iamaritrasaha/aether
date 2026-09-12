@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The on-device native smoke test constructs a real Oboe capture stream
+         (without starting it), which requires RECORD_AUDIO in the test APK. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+</manifest>

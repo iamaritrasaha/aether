@@ -6,12 +6,20 @@ android {
     namespace = "com.foresightlabs.aether.calls.media"
     compileSdk = 37
 
+    // The native smoke test needs RECORD_AUDIO at runtime; "-g" grants
+    // declared runtime permissions on every (re)install so connected runs
+    // are self-contained.
+    adbOptions {
+        installOptions += "-g"
+    }
+
     defaultConfig {
         minSdk = 24
         consumerProguardFiles("consumer-rules.pro")
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     packaging {
@@ -49,4 +57,11 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // On-device native smoke tests (connectedDebugAndroidTest): exercise the
+    // real NTgCalls load/context/device/session seams on physical hardware.
+    // These live in THIS module because the vendored AAR is an implementation
+    // dependency here -- the app's androidTest classpath cannot see it.
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.runner)
 }

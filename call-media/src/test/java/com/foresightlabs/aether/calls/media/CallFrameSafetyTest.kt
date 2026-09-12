@@ -49,21 +49,41 @@ class CallFrameSafetyTest {
     }
 
     /**
-     * Odd dimensions round the chroma planes up. Getting this wrong is exactly
-     * how a converter reads one byte past the end of a real frame.
+     * Chroma geometry must match the pinned native producer exactly
+     * (`ntgcalls/src/media/video_receiver.cpp`: uv plane size = floor(w*h/4),
+     * chroma stride = w/2, chroma rows = h/2). Getting this wrong either
+     * reads past the buffer or rejects real native frames.
      */
     @Test
-    fun oddDimensionsComputeChromaPlanesThatActuallyFit() {
-        for (width in listOf(1, 3, 17, 65)) {
-            for (height in listOf(1, 3, 17, 65)) {
-                val required = I420Converter.requiredSize(width, height).toInt()
+    fun chromaGeometryMatchesNativeProducerForEveryParity() {
+        for (width in 2..37) {
+            for (height in 2..37) {
+                val native = width * height + 2 * ((width * height) / 4)
+                assertEquals(
+                    "requiredSize($width,$height) must equal native total_size",
+                    native.toLong(),
+                    I420Converter.requiredSize(width, height)
+                )
+                val required = native
                 val data = ByteArray(required)
+                // Every accepted size converts without reading past the end
+                // (this exercises the floor-truncation padding paths).
                 assertNotNull("$width x $height should convert", I420Converter.convert(data, width, height))
                 assertNull(
                     "$width x $height must reject one byte less",
                     I420Converter.convert(ByteArray(required - 1), width, height)
                 )
             }
+        }
+    }
+
+    @Test
+    fun degenerateSubTwoPixelGeometryIsRejected() {
+        // Native cannot meaningfully scale chroma below 2x2, and a 1-wide
+        // chroma plane cannot be indexed safely: reject rather than guess.
+        for ((w, h) in listOf(1 to 1, 1 to 64, 64 to 1)) {
+            assertEquals(-1L, I420Converter.requiredSize(w, h))
+            assertNull(I420Converter.convert(ByteArray(64), w, h))
         }
     }
 

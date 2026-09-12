@@ -1581,6 +1581,11 @@ open class TelegramClient(private val application: Application) {
     fun updateCallMediaState(callId: Int, mediaState: MediaConnectionState) {
         val current = _activeCallState.value ?: return
         if (current.callId != callId) return
+        // A call whose signalling has already ended is over: a late native
+        // callback (engine teardown racing the discard, a stale generation)
+        // must not mutate it -- the same contract the callId guard enforces
+        // for replaced calls, applied to terminated ones.
+        if (current.state == com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED || current.state == com.foresightlabs.aether.domain.model.CallStateEnum.ERROR) return
         // mediaEverConnected is sticky for the session: it is what lets
         // CallStatePresenter distinguish a first "Connecting" from a
         // "Reconnecting" (native reports plain CONNECTING on a transient ICE

@@ -59,6 +59,24 @@ internal class MediaActivityMonitor(
     private var lastPlayback: Long = -1L
     private var quietTicks: Int = 0
     private var sampleFailures: Int = 0
+    private var lastCaptureActivityMs: Long? = null
+    private var lastPlaybackActivityMs: Long? = null
+    private var remoteMicActive: Boolean = false
+
+    /** Latest evidence snapshot; null until the first usable sample. */
+    @Volatile
+    var latestHealth: CallMediaHealth? = null
+        private set
+
+    /** Feeds remote-source evidence (from the engine's remote-source callback). */
+    fun onRemoteMicState(state: String?) {
+        remoteMicActive = state == "ACTIVE"
+        if (remoteMicActive) {
+            latestHealth?.let { h ->
+                latestHealth = h.copy(remoteMicActive = true)
+            }
+        }
+    }
 
     /**
      * Begins sampling [callId]. [sampler] runs on the monitor's thread and
@@ -82,6 +100,10 @@ internal class MediaActivityMonitor(
             lastPlayback = -1L
             quietTicks = 0
             sampleFailures = 0
+            lastCaptureActivityMs = null
+            lastPlaybackActivityMs = null
+            remoteMicActive = false
+            latestHealth = null
             future = scheduler.scheduleWithFixedDelay(
                 { scheduledTick() },
                 periodMillis,
@@ -153,13 +175,28 @@ internal class MediaActivityMonitor(
         }
 
         val line = synchronized(lock) {
+            val now = System.currentTimeMillis()
             val captureDelta = if (lastCapture >= 0) sample.captureSeconds - lastCapture else -1
             val playbackDelta = if (lastPlayback >= 0) sample.playbackSeconds - lastPlayback else -1
+            if (captureDelta > 0) lastCaptureActivityMs = now
+            if (playbackDelta > 0) lastPlaybackActivityMs = now
             val changed = lastCapture != sample.captureSeconds || lastPlayback != sample.playbackSeconds
             lastCapture = sample.captureSeconds
             lastPlayback = sample.playbackSeconds
             quietTicks = if (changed) 0 else quietTicks + 1
             sampleFailures = 0
+
+            latestHealth = CallMediaHealth(
+                generation = generation,
+                muted = sample.muted,
+                videoPaused = sample.videoPaused,
+                videoStopped = sample.videoStopped,
+                captureSeconds = sample.captureSeconds,
+                playbackSeconds = sample.playbackSeconds,
+                lastCaptureActivityMs = lastCaptureActivityMs,
+                lastPlaybackActivityMs = lastPlaybackActivityMs,
+                remoteMicActive = remoteMicActive
+            )
 
             // Emit when there is activity, on the first sample, and as a
             // periodic heartbeat while fully quiet -- so "silence" is a

@@ -2,6 +2,7 @@ package com.foresightlabs.aether.calls.media
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -77,8 +78,58 @@ class DefaultTelegramCallMediaEngine(
 
     private var focusRequest: AudioFocusRequest? = null
 
+    /**
+     * Keeps [_audioRoute] reflecting Android's ACTUAL communication route
+     * rather than the last user request: a Bluetooth headset connecting or a
+     * wired headset being unplugged mid-call changes the route behind our
+     * back, and UI state that only mirrors user intent would then lie.
+     */
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            syncRouteFromSystem("devices_added")
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            syncRouteFromSystem("devices_removed")
+        }
+    }
+
     init {
+        try {
+            audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
+        } catch (_: Throwable) {}
         nativeEngine.setContext(appContext)
+        syncRouteFromSystem("init")
+    }
+
+    /**
+     * Reads Android's actual communication route and, if it differs from the
+     * UI-visible state, adopts it. Evidence, not intent: after this runs,
+     * [_audioRoute] is what Android really selected (or auto-selected on a
+     * device change mid-call), and the change is diagnosable.
+     */
+    private fun syncRouteFromSystem(reason: String) {
+        val actual = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                mapDeviceTypeToRoute(audioManager.communicationDevice?.type ?: return)
+            } else {
+                when {
+                    audioManager.isWiredHeadsetOn -> AudioRoute.WIRED_HEADSET
+                    audioManager.isBluetoothScoOn -> AudioRoute.BLUETOOTH
+                    audioManager.isSpeakerphoneOn -> AudioRoute.SPEAKER
+                    else -> AudioRoute.EARPIECE
+                }
+            }
+        } catch (_: Throwable) {
+            return
+        }
+        if (actual != null && actual != _audioRoute.value) {
+            _audioRoute.value = actual
+            CallDiagnostics.stage(0L, CallStage.AUDIO_INITIALIZING, "route_changed reason=$reason route=${actual.name}")
+        }
+    }
+
+    init {
         nativeEngine.init(object : NativeCallEngineCallback {
             override fun onConnectionStateChanged(stateOrdinal: Int) {
                 val newState = MediaConnectionState.entries.getOrElse(stateOrdinal) { MediaConnectionState.FAILED }
@@ -144,16 +195,16 @@ class DefaultTelegramCallMediaEngine(
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val devices = audioManager.availableCommunicationDevices
-                val targetType = when (route) {
-                    AudioRoute.SPEAKER -> AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
-                    AudioRoute.EARPIECE -> AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
-                    AudioRoute.BLUETOOTH -> AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-                    AudioRoute.WIRED_HEADSET -> AudioDeviceInfo.TYPE_WIRED_HEADSET
+                val targetTypes = when (route) {
+                    AudioRoute.SPEAKER -> intArrayOf(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_BLE_SPEAKER)
+                    AudioRoute.EARPIECE -> intArrayOf(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+                    AudioRoute.BLUETOOTH -> intArrayOf(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET)
+                    AudioRoute.WIRED_HEADSET -> intArrayOf(AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET)
                 }
-                val device = devices.find { it.type == targetType }
-                if (device != null) {
-                    audioManager.setCommunicationDevice(device)
-                } else if (route == AudioRoute.SPEAKER) {
+                val device = devices.firstOrNull { d -> targetTypes.any { it == d.type } }
+                val applied = device != null && audioManager.setCommunicationDevice(device)
+                CallDiagnostics.stage(0L, CallStage.AUDIO_INITIALIZING, "route_request requested=${route.name} applied=$applied deviceType=${device?.type ?: -1}")
+                if (!applied && route == AudioRoute.SPEAKER) {
                     @Suppress("DEPRECATION")
                     audioManager.isSpeakerphoneOn = true
                 }
@@ -283,5 +334,21 @@ class DefaultTelegramCallMediaEngine(
                 audioManager.isBluetoothScoOn = false
             }
         } catch (_: Throwable) {}
+    }
+
+    /** Device-type -> route mapping, pure so it can be unit-tested. */
+    companion object {
+        fun mapDeviceTypeToRoute(type: Int?): AudioRoute? = when (type) {
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> AudioRoute.EARPIECE
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE,
+            AudioDeviceInfo.TYPE_BLE_SPEAKER -> AudioRoute.SPEAKER
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_BLE_HEADSET -> AudioRoute.BLUETOOTH
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET -> AudioRoute.WIRED_HEADSET
+            else -> null
+        }
     }
 }
