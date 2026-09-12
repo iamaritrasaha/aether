@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Capture Aether call diagnostics from the connected device.
+#
+# Usage:
+#   tools/capture-call-diagnostics              # capture until Ctrl-C
+#   tools/capture-call-diagnostics 45           # capture for 45 seconds
+#
+# Captures only sanitized, secret-free diagnostic streams:
+#   AetherCall          - Aether's structured call diagnostics (generations,
+#                         stages, media-activity counters, signalling sizes)
+#   AetherCallNative    - WebRTC/ntgcalls internal logs (ICE/DTLS/pacer);
+#                         patch 4 of the vendored ntgcalls routes these here
+#   AndroidRuntime/CRASH/libc/DEBUG - crashes, if any
+#   AudioTrack/AudioRecord/AAudio - Android audio stack errors
+#
+# Never logs signalling payloads, keys, or message content by construction
+# (see call-media .../CallDiagnostics.kt). Output goes to
+# diagnostics/ (git-ignored); review before sharing anywhere.
+
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUT_DIR="$REPO_DIR/diagnostics"
+mkdir -p "$OUT_DIR"
+
+STAMP="$(date +%Y%m%d-%H%M%S)"
+OUT_FILE="$OUT_DIR/call-diagnostics-$STAMP.log"
+
+DURATION="${1:-0}"
+
+adb logcat -c
+echo "Capturing Aether call diagnostics to:"
+echo "  $OUT_FILE"
+echo "Place the call now. Ctrl-C to stop."
+echo ""
+
+if [ "$DURATION" -gt 0 ] 2>/dev/null; then
+    timeout "$DURATION" adb logcat -v time \
+        -s AetherCall AetherCallNative AndroidRuntime CRASH libc DEBUG AudioTrack AudioRecord AAudio \
+        > "$OUT_FILE" 2>&1 || true
+    echo "Stopped after ${DURATION}s."
+else
+    trap 'echo "Stopped."; exit 0' INT
+    adb logcat -v time \
+        -s AetherCall AetherCallNative AndroidRuntime CRASH libc DEBUG AudioTrack AudioRecord AAudio \
+        > "$OUT_FILE" 2>&1
+fi
+
+LINES="$(wc -l < "$OUT_FILE")"
+echo "Captured $LINES lines. Quick failure-class summary:"
+grep -o "media_activity callId=[0-9]* capture=[0-9]*s" "$OUT_FILE" | tail -1 || true
+grep -o "media_activity callId=[0-9]* playback=[0-9]*s" "$OUT_FILE" | tail -1 || true
+grep -c "AetherDiagnostics outgoing RTP" "$OUT_FILE" | xargs -I{} echo "  outgoing-RTP counter lines: {}"
+grep -c "AetherDiagnostics incoming RTP" "$OUT_FILE" | xargs -I{} echo "  incoming-RTP counter lines: {}"
+echo "Full log: $OUT_FILE"

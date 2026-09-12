@@ -4,13 +4,18 @@ package com.foresightlabs.aether.calls.media
  * Converts a planar I420 (YUV 4:2:0) buffer to packed ARGB_8888 pixels.
  *
  * The native call engine hands video frames back as raw byte buffers with no
- * explicit pixel-format field. Every video code path in its own native source
- * converts through `webrtc::I420Buffer`, so I420 is the documented assumption
- * here -- see docs/architecture/calling-native-stack.md. Because that
- * assumption is *not* device-verified, every entry point below validates before
- * it reads: a buffer whose length does not match the frame's declared geometry
- * is rejected outright rather than read past, and callers are expected to drop
- * the frame. No input shape may produce an out-of-bounds read.
+ * explicit pixel-format field. The I420 layout is now source-proven against
+ * the pinned engine revision (not merely assumed): the remote-video path
+ * (`ntgcalls/src/media/video_receiver.cpp`) converts every incoming frame
+ * through `webrtc::I420Buffer::ToI420()` + `I420Scale` with luminance stride
+ * == width and chroma stride == width/2, producing a tightly packed
+ * `w*h*3/2`-byte buffer; `wrtc/src/models/i420_image_data.cpp` additionally
+ * enforces the exact plane sizes. Because device behaviour can still surprise
+ * (and the cost of a bad read is high), every entry point below still
+ * validates before it reads: a buffer whose length does not match the frame's
+ * declared geometry is rejected outright rather than read past, and callers
+ * are expected to drop the frame. No input shape may produce an out-of-bounds
+ * read.
  */
 object I420Converter {
 

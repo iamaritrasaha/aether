@@ -24,10 +24,10 @@ media engine either loads a real native call library or it reports
 Aether now depends on **ntgcalls**, a native (C++) implementation of
 Telegram's calling protocol, published by the pytgcalls organisation.
 
-- **Dependency**: Patched release `call-media/libs/ntgcalls-3.0.0-rc02-aetherfix-arm64.aar`,
-  carrying **two** independent local patches against the same pinned upstream
-  commit (`call-media/third-party/ntgcalls/patches/`, both required, neither
-  supersedes the other):
+- **Dependency**: Patched release `call-media/libs/ntgcalls-3.0.0-rc02-aetherfix2-arm64.aar`,
+  carrying **five** independent local patches against the same pinned upstream
+  commit (`call-media/third-party/ntgcalls/patches/`, all required, none
+  supersedes another):
   1. `retain-jni-zero-entry-points.patch` — retains all 191 WebRTC `jni_zero`
      JNI entry points (fixes the `Java_J_N_MM6G5xGU` `UnsatisfiedLinkError`;
      see `docs/architecture/ntgcalls-jni-forensics.md`).
@@ -37,12 +37,24 @@ Telegram's calling protocol, published by the pytgcalls organisation.
      crash when a native-created callback thread tried to construct one (see
      ["The real media-connection-failure root cause"](#the-real-media-connection-failure-root-cause-physically-proven)
      below for the full proof chain and physical verification).
+  3. `oboe-stream-restart-robustness.patch` — backported verbatim from upstream
+     `v3.0.0-rc03`: fixes Oboe stream-error/teardown races (Android microphone
+     and speaker device layer; every voice call runs on this code).
+  4. `android-native-logcat-diagnostics.patch` — routes WebRTC/ntgcalls
+     `RTC_LOG` to logcat (`AetherCallNative`; previously everything was
+     swallowed on Android) and adds throttled outgoing/incoming RTP/RTCP
+     packet counters (`AetherDiagnostics`). Diagnostics only; no behaviour
+     change.
+  5. `reconnect-connected-callback.patch` — re-emits `Connected` on recovery
+     from a transient ICE drop (the `!was_connected` guard previously skipped
+     the callback forever after the first connect, leaving a call screen
+     stuck on reconnecting while media had actually recovered).
   - **Current AAR SHA-256** (`SHA256SUMS` is the source of truth for this):
-    `7b63506df1b0c7c99d2d6e7d5351dbdee8c84d80e89dd3fc02fd644f4fbc2766`
-  - **Current `libntgcalls.so` SHA-256**: `c8f48a0682987bbda592ce4bb84e2fb6d0b2c663c9ac42c47de01a89c093ceb9`
+    `b81d8552b129ec251159cb65ea7761f337b96ea8308cc6794940b572d3091523`
+  - **Current `libntgcalls.so` SHA-256**: `ca3843d1794cdb1dc055c4070336dc764fb12ee4db401cf16e8ba8cb166d768f`
   - Upstream base: `io.github.pytgcalls:ntgcalls:3.0.0-rc02` at commit `a1616e280947452d86ac28d140fd1250d31e6959`.
   - Upstream patches, license and checksums are located in `call-media/third-party/ntgcalls/`
-    (`README.md` there documents both patches' rationale, exact source call
+    (`README.md` there documents all five patches' rationale, exact source call
     chains, and full reproduction steps).
 - **Source**: https://github.com/pytgcalls/ntgcalls
 - **Exact revision that produced the base binary**: git commit
@@ -351,3 +363,111 @@ The calling stack is verified across multiple levels:
 - **Contract tests**: Complete unit test suite in `CallMediaModuleTest` validating stream source failure boundaries, video degradation, audio fallback, native-session cleanup on startup failures, and (added alongside the WebRTC-init hardening below) that a failed WebRTC Android-context initialization never latches as success, blocks native session creation, and can retry on a later call.
 - **Fail-closed WebRTC initialization**: `NativeTelegramCallMediaEngine` only marks WebRTC's Android context ready once `PeerConnectionFactory.initialize(...)` has itself returned without throwing; a failure is logged and leaves the flag false so a later attempt retries, and `startCall`/`isMediaTransportAvailable` require this to succeed before `createP2pCall`, `NTgCalls.getMediaDevices()`, or any other native session call is reached — "the `.so` loaded" is no longer treated as "the transport is usable".
 - **Physical device verification (2026-09-12, Samsung SM-M145F, Android 15)**: two consecutive answered outgoing voice calls plus one accidental video call, all against the current AAR (`7b63506d...`), with zero crashes of any kind (no `MM6G5xGU` `UnsatisfiedLinkError`, no `Invalid device metadata`, no `ConnectionInfo` `ClassNotFoundException`, no `JNI DETECTED ERROR`), real bidirectional signalling proven end-to-end, and a clean native `CONNECTING` → `TIMEOUT` → `FAILED` resolution (see the ICE/P2P timeout investigation below — media never reached `CONNECTED` in these tests, which remains open separately from the crashes above).
+
+## Voice audio pipeline trace (pinned source, verified gate-by-gate)
+
+Traced end-to-end against the pinned ntgcalls commit and the WebRTC sources it
+bundles (`m152.7977.0.2`, commit `6f37672d358475cd17544121a12494da454d85fb`).
+
+### OUTGOING
+
+1. Android microphone -> `OboeDeviceModule` capture
+   (`ntgcalls/src/media/devices/oboe_device_module.cpp`; VOICE_COMMUNICATION
+   input preset, usage, 48 kHz mono I16). The stream does NOT open at
+   `setStreamSources` time: `StreamManager::start()` (which opens every reader
+   and writer) runs only on the FIRST `ConnectionState::Connected`
+   (`ntgcalls/src/instances/call_interface.cpp`). Native CONNECTED therefore
+   also proves the Oboe devices opened without throwing.
+2. Oboe callback -> `BaseReader`/`AudioMixer` -> `AudioStreamer::sendData`
+   (increments the engine's capture frame accumulator -- what
+   `NTgCalls.time(callId, CAPTURE)` returns) -> `LocalAudioSinkAdapter`
+   (`audio_sink_` on `NativeConnection`).
+3. `OutgoingAudioChannel` (`wrtc/src/interfaces/media/channels/
+   outgoing_audio_channel.cpp`) wires the adapter into a stock WebRTC
+   `BaseChannel` (`ChannelManager::create_voice_channel`), sets
+   `SetRtpTransport(dtls_srtp_transport_)`, negotiates Opus (ptime 60, inband
+   FEC) via `SetLocalContent`/`SetRemoteContent`, then enables send
+   (`channel_->Enable(true)` + `SetAudioSend(ssrc, true, nullptr, sink_)`).
+4. Encoder -> RTP packetizer -> `RtpSenderEgress` -> `RtpPacketSenderProxy`
+   -> `RtpTransportControllerSend`'s `PacingController` -> `PacketRouter`
+   back to the egress -> `MediaChannel::SendRtp` -> `RtpTransport::
+   SendRtpPacket` -> stock `DtlsSrtpTransport` (SRTP protect) ->
+   `DtlsTransportInternalImpl` -> `P2PTransportChannel` (Telegram reflectors
+   via `ReflectorRelayPortFactory`, plus STUN/TURN) -> network.
+
+### INCOMING
+
+1. Network -> `P2PTransportChannel` -> `DtlsTransportInternalImpl` ->
+   `WrappedDtlsSrtpTransport::OnRtpPacketReceived` (SRTP unprotect; failures
+   are counted and logged) -> `DemuxPacket` into the per-SSRC
+   `IncomingAudioChannel`'s receive channel AND `call_->Receiver()`.
+2. NetEQ decode -> `RemoteAudioSink` -> `AudioReceiver` (increments the
+   playback accumulator -- `NTgCalls.time(callId, PLAYBACK)`) -> speaker
+   writer (`AudioMixer` -> Oboe playback) -> Android speaker.
+
+Incoming channels exist only when `StreamManager::optimize_sources` saw a
+PLAYBACK writer (`writers_.contains(Microphone)`) -- which is exactly why
+Aether configures PLAYBACK sources before `connectP2p` (see
+`NativeTelegramCallMediaEngine.applyPlaybackSources`).
+
+### Send-activation gates (why silence can happen)
+
+| Gate | Where | Proven by |
+| --- | --- | --- |
+| `was_ever_writable_` | `BaseChannel` (`pc/channel.cc` `IsReadyToSendMedia_w`) | same writability that produces native CONNECTED |
+| `SetSend`/stream start | `BaseChannel::UpdateMediaSendRecvState_w` | ntgcalls' explicit `Enable(true)` + `SetAudioSend(true)` |
+| pacer paused | `PacingController` (starts `paused_(false)` in m152) | only `OnNetworkAvailability(false)` pauses it; ntgcalls never calls that |
+| GoogCC creation | `RtpTransportControllerSend::MaybeCreateControllers` | needs `OnNetworkAvailability(true)`; absence degrades bandwidth estimation, never blocks egress |
+
+## The WebRTC network-availability hypothesis: DISPROVEN for this pin
+
+The known failure mode ("CONNECTED but `PacedSender` paused because
+`SignalNetworkState` never reaches Up", reported upstream against ntgcalls
+**2.1.0**) does not exist in the BaseChannel-based 3.0.0-rc02 architecture
+Aether pins. In stock WebRTC m152 the propagation is fully wired inside the
+classes ntgcalls instantiates:
+
+    DtlsSrtpTransport::SetDtlsTransports          (ntgcalls calls this)
+      -> RtpTransport::SetRtpPacketTransport
+         subscribes ReadyToSend + WritableState on the DTLS transport
+      -> RtpTransport::MaybeSignalReadyToSend    (rtcp_mux enabled)
+      -> BaseChannel::ConnectToRtpTransport_n    (subscribed via SetRtpTransport)
+      -> WebRtcVoiceSendChannel::OnReadyToSend
+      -> Call::SignalChannelNetworkState(AUDIO, kNetworkUp)
+      -> Call::UpdateAggregateNetworkState
+      -> RtpTransportControllerSend::OnNetworkAvailability(true)
+      -> pacer_.Resume() (+ MaybeCreateControllers)
+
+`BaseChannel::SetRtpTransport` additionally calls
+`media_send_channel()->OnReadyToSend(rtp_transport_->IsReadyToSend())`
+immediately, covering the DTLS-already-writable ordering; and the m152
+`PacingController` constructor starts with `paused_(false)`, so even a fully
+missing signal would not stop the pacer. Accordingly, NO
+`OnNetworkAvailability` patch was added to the vendored artifact, and the
+diagnostics (below) exist to catch any *other* cause of silence on hardware.
+
+## Media-activity diagnostics (what proves media, not just transport)
+
+`NativeTelegramCallMediaEngine` polls the engine's own frame accumulators
+every 5 s while a call is live (`MediaActivityMonitor` -> `CallDiagnostics`
+`MEDIA_ACTIVITY` lines, `logcat -s AetherCall`):
+
+- `capture=<s>(+<d>s)` — microphone media-time handed to the WebRTC send
+  path. Growing => capture -> encoder input alive. Zero while CONNECTED =>
+  capture-side failure.
+- `playback=<s>(+<d>s)` — decoded remote media-time delivered to the speaker
+  writer. Growing => remote RTP arrives, decrypts and decodes. Zero =>
+  remote silent OR our receive path broken (distinguish via the
+  `AetherDiagnostics incoming RTP` counters from ntgcalls patch 4).
+- `muted`/`videoPaused`/`videoStopped` — the engine's own `MediaState`.
+- `remote_source ssrc=... state=... device=...` — remote stream negotiation
+  events (`onRemoteSourceChange`); `stream_end` — stream EOF
+  (`onStreamEnd`).
+
+RTP-level evidence (outgoing/incoming packet counts at the SRTP transport)
+comes from the vendored ntgcalls' logcat diagnostics patch: `adb logcat -s
+AetherCall AetherCallNative` (see `tools/capture-call-diagnostics`).
+
+Physical two-way audio has NOT yet been observed with these diagnostics in
+place; the instrumentation exists precisely to classify the next physical
+call in one pass.
