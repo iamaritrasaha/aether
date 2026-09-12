@@ -86,7 +86,7 @@ fun AetherCallScreen(
     // duration ticker and would otherwise force presentation to look stale
     // (or force a needless recompute) on every tick that isn't its business.
     val presentation = remember(activeCall.state, activeCall.mediaState, activeCall.isOutgoing) {
-        CallStatePresenter.present(activeCall.state, activeCall.mediaState, activeCall.isOutgoing)
+        CallStatePresenter.present(activeCall.state, activeCall.mediaState, activeCall.isOutgoing, activeCall.mediaEverConnected)
     }
     val isIncomingPending = !activeCall.isOutgoing && activeCall.state == CallStateEnum.PENDING
     // Video is only ever the dominant surface once a real decoded frame exists;
@@ -269,7 +269,7 @@ fun OngoingCallBar(
 ) {
     val colors = LocalAetherColors.current
     val presentation = remember(activeCall.state, activeCall.mediaState, activeCall.isOutgoing) {
-        CallStatePresenter.present(activeCall.state, activeCall.mediaState, activeCall.isOutgoing)
+        CallStatePresenter.present(activeCall.state, activeCall.mediaState, activeCall.isOutgoing, activeCall.mediaEverConnected)
     }
 
     Box(

@@ -45,7 +45,7 @@ dependencies {
     // Pinned fixed Telegram call transport (resolves WebRTC jni_zero symbol retention
     // in libntgcalls.so; see docs/architecture/calling-native-stack.md and
     // call-media/third-party/ntgcalls/README.md).
-    implementation(files("libs/ntgcalls-3.0.0-rc02-aetherfix-arm64.aar"))
+    implementation(files("libs/ntgcalls-3.0.0-rc02-aetherfix2-arm64.aar"))
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

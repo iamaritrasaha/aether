@@ -1581,7 +1581,14 @@ open class TelegramClient(private val application: Application) {
     fun updateCallMediaState(callId: Int, mediaState: MediaConnectionState) {
         val current = _activeCallState.value ?: return
         if (current.callId != callId) return
-        _activeCallState.value = current.copy(mediaState = mediaState)
+        // mediaEverConnected is sticky for the session: it is what lets
+        // CallStatePresenter distinguish a first "Connecting" from a
+        // "Reconnecting" (native reports plain CONNECTING on a transient ICE
+        // drop even after media was up once).
+        _activeCallState.value = current.copy(
+            mediaState = mediaState,
+            mediaEverConnected = current.mediaEverConnected || mediaState == MediaConnectionState.CONNECTED
+        )
     }
 
     suspend fun getUser(userId: Long): User? {

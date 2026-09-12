@@ -27,7 +27,8 @@ object CallStatePresenter {
     fun present(
         signalling: CallStateEnum,
         media: MediaConnectionState,
-        isOutgoing: Boolean
+        isOutgoing: Boolean,
+        mediaEverConnected: Boolean = false
     ): CallPresentationState {
         // Checked first and unconditionally: a media failure ends the call
         // regardless of what signalling still believes.
@@ -45,6 +46,12 @@ object CallStatePresenter {
                 // signalling reaching READY alone.
                 MediaConnectionState.CONNECTED -> CallPresentationState.ACTIVE
                 MediaConnectionState.RECONNECTING -> CallPresentationState.RECONNECTING
+                // Native reports plain CONNECTING for a transient drop after
+                // media was already up once; with the sticky ever-connected
+                // flag that presents as RECONNECTING, not a misleading first
+                // "Connecting".
+                MediaConnectionState.CONNECTING ->
+                    if (mediaEverConnected) CallPresentationState.RECONNECTING else CallPresentationState.CONNECTING
                 // The media engine has already stopped itself -- there is
                 // nothing left to connect, regardless of whether TDLib's own
                 // discard of the call has landed yet. Falling into CONNECTING

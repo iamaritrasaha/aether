@@ -1,0 +1,95 @@
+diff --git a/ntgcalls/src/utils/log_sink_impl.cpp b/ntgcalls/src/utils/log_sink_impl.cpp
+index eae46e91..2c96a7da 100644
+--- a/ntgcalls/src/utils/log_sink_impl.cpp
++++ b/ntgcalls/src/utils/log_sink_impl.cpp
+@@ -7,6 +7,9 @@
+ #include <regex>
+ #include <sstream>
+ #include <rtc_base/ref_counted_object.h>
++#ifdef __ANDROID__
++#include <android/log.h>
++#endif
+ 
+ namespace ntgcalls::utils {
+     webrtc::scoped_refptr<LogSink> LogSink::instance_ = nullptr;
+@@ -83,6 +86,20 @@ namespace ntgcalls::utils {
+     }
+ 
+     void LogSink::OnLogMessage(const std::string& message, const webrtc::LoggingSeverity severity) {
++#ifdef __ANDROID__
++        // The Android bindings register no log-message callback, so without
++        // this bridge every WebRTC/ntgcalls log line was swallowed (stderr is
++        // disabled and on_log_message_ is null): ICE/DTLS/SRTP diagnostics
++        // were invisible on physical devices. Emit to logcat under a stable
++        // tag; severity INFO and above only (LogToDebug(LS_INFO) in release).
++        android_LogPriority priority = ANDROID_LOG_INFO;
++        if (severity == webrtc::LS_ERROR) {
++            priority = ANDROID_LOG_ERROR;
++        } else if (severity == webrtc::LS_WARNING) {
++            priority = ANDROID_LOG_WARN;
++        }
++        __android_log_print(priority, "AetherCallNative", "%s", message.c_str());
++#endif
+         register_log_message(message, severity);
+     }
+ 
+diff --git a/wrtc/include/wrtc/interfaces/wrapped_dtls_srtp_transport.hpp b/wrtc/include/wrtc/interfaces/wrapped_dtls_srtp_transport.hpp
+index 144e44b8..9c10aebe 100644
+--- a/wrtc/include/wrtc/interfaces/wrapped_dtls_srtp_transport.hpp
++++ b/wrtc/include/wrtc/interfaces/wrapped_dtls_srtp_transport.hpp
+@@ -10,10 +10,16 @@ namespace wrtc::interfaces {
+ 
+     class WrappedDtlsSrtpTransport final: public webrtc::DtlsSrtpTransport {
+         utils::synchronized_callback<void(webrtc::RtpPacketReceived)> rtp_packet_callback_;
++        int64_t rtp_sent_count_ = 0;
++        int64_t rtcp_sent_count_ = 0;
++        int64_t rtp_received_ok_count_ = 0;
+         int decryption_failure_count_ = 0;
+ 
+         void OnRtpPacketReceived(const webrtc::ReceivedIpPacket& packet) override;
+ 
++        bool SendRtpPacket(webrtc::CopyOnWriteBuffer* packet, const webrtc::AsyncSocketPacketOptions& options, int flags) override;
++        bool SendRtcpPacket(webrtc::CopyOnWriteBuffer* packet, const webrtc::AsyncSocketPacketOptions& options, int flags) override;
++
+     public:
+         WrappedDtlsSrtpTransport(
+             bool rtcp_mux_enabled,
+diff --git a/wrtc/src/interfaces/wrapped_dtls_srtp_transport.cpp b/wrtc/src/interfaces/wrapped_dtls_srtp_transport.cpp
+index 26bf71d6..c67e5e3d 100644
+--- a/wrtc/src/interfaces/wrapped_dtls_srtp_transport.cpp
++++ b/wrtc/src/interfaces/wrapped_dtls_srtp_transport.cpp
+@@ -61,6 +61,12 @@ namespace wrtc::interfaces {
+             return;
+         }
+ 
++        rtp_received_ok_count_++;
++        if (rtp_received_ok_count_ % 500 == 1) {
++            RTC_LOG(LS_INFO) << "AetherDiagnostics incoming RTP ok=" << rtp_received_ok_count_
++                             << " decrypt_fail=" << decryption_failure_count_;
++        }
++
+         webrtc::RtpPacketReceived parsed_packet(&(this->*c_ptr_rtp_transport_header_extension_map));
+         parsed_packet.set_arrival_time(packet.arrival_time().value_or(webrtc::Timestamp::MinusInfinity()));
+         parsed_packet.set_ecn(packet.ecn());
+@@ -71,4 +77,21 @@ namespace wrtc::interfaces {
+ 
+         DemuxPacket(payload, packet.arrival_time().value_or(webrtc::Timestamp::MinusInfinity()), packet.ecn());
+     }
++
++    bool WrappedDtlsSrtpTransport::SendRtpPacket(webrtc::CopyOnWriteBuffer* packet, const webrtc::AsyncSocketPacketOptions& options, const int flags) {
++        rtp_sent_count_++;
++        if (rtp_sent_count_ % 500 == 1) {
++            RTC_LOG(LS_INFO) << "AetherDiagnostics outgoing RTP count=" << rtp_sent_count_
++                             << " size=" << (packet ? static_cast<int>(packet->size()) : -1);
++        }
++        return DtlsSrtpTransport::SendRtpPacket(packet, options, flags);
++    }
++
++    bool WrappedDtlsSrtpTransport::SendRtcpPacket(webrtc::CopyOnWriteBuffer* packet, const webrtc::AsyncSocketPacketOptions& options, const int flags) {
++        rtcp_sent_count_++;
++        if (rtcp_sent_count_ % 100 == 1) {
++            RTC_LOG(LS_INFO) << "AetherDiagnostics outgoing RTCP count=" << rtcp_sent_count_;
++        }
++        return DtlsSrtpTransport::SendRtcpPacket(packet, options, flags);
++    }
+ } // wrtc::interfaces

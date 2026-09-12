@@ -338,7 +338,7 @@ fun ConversationScreen(
     // unreachable without the native transport reporting CONNECTED.
     val callPresentationState = remember(activeCall) {
         activeCall?.let {
-            com.foresightlabs.aether.domain.calls.CallStatePresenter.present(it.state, it.mediaState, it.isOutgoing)
+            com.foresightlabs.aether.domain.calls.CallStatePresenter.present(it.state, it.mediaState, it.isOutgoing, it.mediaEverConnected)
         } ?: com.foresightlabs.aether.domain.calls.CallPresentationState.IDLE
     }
     val isCallLive = callPresentationState != com.foresightlabs.aether.domain.calls.CallPresentationState.IDLE &&

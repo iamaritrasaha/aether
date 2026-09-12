@@ -109,6 +109,43 @@ class CallStatePresenterTest {
     }
 
     @Test
+    fun readyWithConnectingMediaAndEverConnectedIsReconnecting() {
+        // Native reports plain CONNECTING on a transient ICE drop after media
+        // was already up once (its notify_state_updated only ever emits
+        // Connecting/Connected/Failed). With the sticky ever-connected flag
+        // that must present as RECONNECTING, not a misleading first
+        // "Connecting".
+        assertEquals(
+            CallPresentationState.RECONNECTING,
+            CallStatePresenter.present(CallStateEnum.READY, MediaConnectionState.CONNECTING, isOutgoing = true, mediaEverConnected = true)
+        )
+        // Before media ever connected, the same state is an honest first
+        // "Connecting".
+        assertEquals(
+            CallPresentationState.CONNECTING,
+            CallStatePresenter.present(CallStateEnum.READY, MediaConnectionState.CONNECTING, isOutgoing = true, mediaEverConnected = false)
+        )
+    }
+
+    @Test
+    fun everConnectedNeverPromotesOtherStates() {
+        // The flag only ever rewrites CONNECTING; it must not conjure ACTIVE
+        // or mask a stopped engine.
+        assertEquals(
+            CallPresentationState.CONNECTING,
+            CallStatePresenter.present(CallStateEnum.READY, MediaConnectionState.INITIALIZING, isOutgoing = true, mediaEverConnected = true)
+        )
+        assertEquals(
+            CallPresentationState.ENDED,
+            CallStatePresenter.present(CallStateEnum.READY, MediaConnectionState.STOPPED, isOutgoing = true, mediaEverConnected = true)
+        )
+        assertEquals(
+            CallPresentationState.ACTIVE,
+            CallStatePresenter.present(CallStateEnum.READY, MediaConnectionState.CONNECTED, isOutgoing = true, mediaEverConnected = false)
+        )
+    }
+
+    @Test
     fun durationRunsOnlyWhileActive() {
         for (state in CallPresentationState.entries) {
             assertEquals(state == CallPresentationState.ACTIVE, CallStatePresenter.durationShouldRun(state))

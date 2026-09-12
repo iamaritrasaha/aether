@@ -1,4 +1,23 @@
+# ntgcalls patched-artifact checksums.
+#
+# Line groups:
+#   1. The AAR as shipped, relative to call-media/libs/:
+#        cd call-media/libs && sha256sum -c ../third-party/ntgcalls/SHA256SUMS
+#      (only the first group matches; the remaining groups are paths INSIDE
+#       the AAR archives -- verify by extracting, e.g.:
+#        unzip -j call-media/libs/<aar> 'jni/arm64-v8a/libntgcalls.so' 'libs/webrtc.jar' 'classes.jar' -d /tmp/x
+#        then sha256sum the extracted files).
+#
+# Current artifact: ntgcalls-3.0.0-rc02-aetherfix2-arm64.aar
+# (five patches; see README.md "Patch 3"-"Patch 5")
+b81d8552b129ec251159cb65ea7761f337b96ea8308cc6794940b572d3091523  ntgcalls-3.0.0-rc02-aetherfix2-arm64.aar
+ca3843d1794cdb1dc055c4070336dc764fb12ee4db401cf16e8ba8cb166d768f  aetherfix2:jni/arm64-v8a/libntgcalls.so
+eb51aa8a751acd27296abec35c212571ce0e59f9144fbc8d649f659b6fff18a6  aetherfix2:libs/webrtc.jar
+4dfb1489c937e965176de427f196779dd8ac27b889aae8944a9f34dab3235b43  aetherfix2:classes.jar
+
+# Previous artifact (aetherfix, 2 patches), superseded but retained for
+# provenance of every binary that ever shipped:
 7b63506df1b0c7c99d2d6e7d5351dbdee8c84d80e89dd3fc02fd644f4fbc2766  ntgcalls-3.0.0-rc02-aetherfix-arm64.aar
-c8f48a0682987bbda592ce4bb84e2fb6d0b2c663c9ac42c47de01a89c093ceb9  jni/arm64-v8a/libntgcalls.so
-eb51aa8a751acd27296abec35c212571ce0e59f9144fbc8d649f659b6fff18a6  libs/webrtc.jar
-4dfb1489c937e965176de427f196779dd8ac27b889aae8944a9f34dab3235b43  classes.jar
+c8f48a0682987bbda592ce4bb84e2fb6d0b2c663c9ac42c47de01a89c093ceb9  aetherfix:jni/arm64-v8a/libntgcalls.so
+eb51aa8a751acd27296abec35c212571ce0e59f9144fbc8d649f659b6fff18a6  aetherfix:libs/webrtc.jar
+4dfb1489c937e965176de427f196779dd8ac27b889aae8944a9f34dab3235b43  aetherfix:classes.jar

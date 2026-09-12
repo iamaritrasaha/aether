@@ -7,8 +7,18 @@
 - **WebRTC Revision**: `m152.7977.0.2` (upstream commit `6f37672d358475cd17544121a12494da454d85fb`)
 - **License**: GNU Lesser General Public License v3.0 (LGPL-3.0). See [LICENSE](LICENSE).
 
-This artifact carries **two** independent patches against the same pinned
-upstream commit. Both are required; neither supersedes the other.
+This artifact carries **five** independent patches against the same pinned
+upstream commit. All are required; none supersedes another.
+
+- Patch 1: `retain-jni-zero-entry-points.patch` — linker symbol retention (crash fix).
+- Patch 2: `android-callback-classloader.patch` — JNI class-loader-safe callback conversion (crash fix).
+- Patch 3: `oboe-stream-restart-robustness.patch` — Oboe audio stream restart/teardown races (audio robustness; backported verbatim from upstream `v3.0.0-rc03`).
+- Patch 4: `android-native-logcat-diagnostics.patch` — WebRTC logcat bridge + RTP/RTCP packet counters (diagnostics only, no behaviour change).
+- Patch 5: `reconnect-connected-callback.patch` — re-emit `Connected` on transient-drop recovery (call-state robustness fix).
+
+Patches 1–2 shipped in the previous `ntgcalls-3.0.0-rc02-aetherfix-arm64.aar`
+artifact; patches 3–5 were added in
+`ntgcalls-3.0.0-rc02-aetherfix2-arm64.aar`.
 
 ## Patch 1: JNI entry-point retention (`patches/retain-jni-zero-entry-points.patch`)
 
@@ -119,6 +129,67 @@ This patches the **generator template**, not generated build output — every
 future `cmake` configure regenerates `utils.hpp` from this `.tpl` with the
 fix already in place.
 
+## Patch 3: Oboe stream restart robustness (`patches/oboe-stream-restart-robustness.patch`)
+
+Backported **verbatim** from upstream ntgcalls `v3.0.0-rc03` (the only
+functional change between the pinned `v3.0.0-rc02` commit and rc03; verified
+by `git diff a1616e280947452d86ac28d140fd1250d31e6959 v3.0.0-rc03`). It
+changes `ntgcalls/src/media/devices/oboe_device_module.{hpp,cpp}` only:
+
+- Splits the Oboe error callback into a separate `OboeErrorCallback` object
+  that is `detach()`-ed on module destruction, so a device-error callback
+  firing after (or during) teardown can no longer touch a freed module.
+- Guards the stream with a dedicated `stream_mutex_` and compares the exact
+  stream instance in `restart_stream(audio_stream)`, replacing the racy
+  `restart_required_` atomic that could double-restart or miss restarts.
+- Moves buffer accumulation under `buffer_mutex_` and drains collected
+  frames outside the lock (capture path was unlocked; playback path locked
+  the whole callback).
+- Registers the callback via `setDataCallback`/`setErrorCallback` instead of
+  the deprecated single-callback `setCallback`.
+
+Relevance: this is the microphone/speaker device layer every Aether voice
+call runs on (`AudioDescription` DEVICE sources). A transient Oboe error
+(e.g. audio-device change mid-call) previously left capture or playback dead
+or could race teardown; upstream considers this fix necessary for rc03.
+
+## Patch 4: Android logcat diagnostics bridge + RTP counters (`patches/android-native-logcat-diagnostics.patch`)
+
+Pure diagnostics; no behavioural change. Two parts:
+
+1. **Logcat bridge** (`ntgcalls/src/utils/log_sink_impl.cpp`): the Android
+   bindings register no `LogSink::on_log_message_` callback and stderr is
+   disabled (`SetLogToStderr(false)`), so every WebRTC/ntgcalls `RTC_LOG`
+   line was swallowed on physical devices — ICE/DTLS/SRTP/pacer internals
+   were completely invisible in logcat. The bridge emits each message to
+   `__android_log_print` under the `AetherCallNative` tag (severity-mapped:
+   WARNING/ERROR/else INFO) in addition to the existing sink behaviour.
+
+2. **RTP/RTCP counters** (`wrtc/src/interfaces/wrapped_dtls_srtp_transport.{hpp,cpp}`):
+   the wrapper now overrides `SendRtpPacket`/`SendRtcpPacket` (delegating
+   unchanged to `DtlsSrtpTransport`) and counts them, plus counts successful
+   incoming RTP in `OnRtpPacketReceived`. Throttled summaries are logged
+   under `AetherDiagnostics` (every 500th RTP / 100th RTCP packet ≈ every
+   ~10 s at voice rates) so "did RTP actually leave / arrive" is answerable
+   from one logcat capture. Per-packet logging is deliberately not done.
+
+## Patch 5: Re-emit Connected on reconnect (`patches/reconnect-connected-callback.patch`)
+
+`CallInterface::set_connection_observer` (`ntgcalls/src/instances/
+call_interface.cpp`) forwarded `ConnectionState::Connected` to the host only
+when `!was_connected` — the first connection. `NativeConnection::already_connected_`
+stays `true` for the whole session, and a transient ICE loss reports
+`Connecting` (never `Disconnected`/`Closed` — `NativeConnection::notify_state_updated`
+emits only Connecting/Connected/Failed), so after a temporary network drop
+the host received `Connecting` and then **no `Connected` ever again**, even
+though ICE/DTLS recovered and media was flowing: a call screen driven by
+this callback is stuck on "connecting" for the rest of the call.
+
+The fix keeps `stream_manager_->start()` (Oboe device open) gated on the
+first connection — streams are never closed on a transient drop, so they
+must not be re-opened — but forwards the `Connected` state on every entry
+into Connected. `ConnectionInfo` payloads are unchanged.
+
 ## Artifact Checksums (SHA-256)
 - **AAR (`ntgcalls-3.0.0-rc02-aetherfix-arm64.aar`)**: `7b63506df1b0c7c99d2d6e7d5351dbdee8c84d80e89dd3fc02fd644f4fbc2766`
 - **`jni/arm64-v8a/libntgcalls.so`**: `c8f48a0682987bbda592ce4bb84e2fb6d0b2c663c9ac42c47de01a89c093ceb9`
@@ -126,6 +197,20 @@ fix already in place.
 - **`classes.jar`**: `4dfb1489c937e965176de427f196779dd8ac27b889aae8944a9f34dab3235b43` — also byte-identical, for the same reason.
 - **ELF Build ID (`libntgcalls.so`)**: `1ece9c70eb6964e27fad9d789e8af02416b9de74`
 - **`.so` size**: 21,609,776 bytes (previous patch-1-only build: 21,610,768 bytes — a ~1 KB delta, consistent with one `FindClass` call site becoming one `GetClass` call plus one new header include; nothing structurally different).
+
+## Artifact Checksums — current (`aetherfix2`, five patches)
+
+- **AAR (`ntgcalls-3.0.0-rc02-aetherfix2-arm64.aar`)**: `b81d8552b129ec251159cb65ea7761f337b96ea8308cc6794940b572d3091523`
+- **`jni/arm64-v8a/libntgcalls.so`**: `ca3843d1794cdb1dc055c4070336dc764fb12ee4db401cf16e8ba8cb166d768f`
+- **`libs/webrtc.jar`**: `eb51aa8a751acd27296abec35c212571ce0e59f9144fbc8d649f659b6fff18a6` — **byte-identical** to the two-patch build; patches 3–5 touch no Java/WebRTC-jar code.
+- **`classes.jar`**: `4dfb1489c937e965176de427f196779dd8ac27b889aae8944a9f34dab3235b43` — also byte-identical, for the same reason.
+- **ELF Build ID (`libntgcalls.so`)**: `7cf7d5d56c17e581a2032ff8295512218141d0ae`
+- **`.so` size**: 21,614,824 bytes (two-patch build: 21,609,776 bytes — ~5 KB delta, consistent with the Oboe callback restructure plus the logcat bridge and packet counters).
+- **`Java_J_N_*` dynamic exports**: **191/191** (patch 1 retention re-verified after rebuild).
+- **`Java_io_github_pytgcalls_*` dynamic exports**: **49/49** (`nm -D`), matching every native method on `NTgCalls`.
+- **`PT_LOAD` alignment**: `0x4000` (16 KB), re-verified via `readelf -lW`.
+- `AetherDiagnostics`/`AetherCallNative` log strings verified present in the shipped `.so` (`strings`).
+- Rebuild provenance: NDK `r28b` (`28.1.13356709`, resolved through ntgcalls' own `cmake/FindNDK.cmake` via `deps/ndk/src`), Chromium Clang **22** auto-fetched by `cmake/FindClang.cmake` (per `version.clang=22`), SDK CMake `4.1.2` for the `targets/android` Gradle step, Gradle wrapper 9.5.1, static configure per "How to Reproduce" below, `targets/android` `abiFilters 'arm64-v8a'`, `assembleRelease`.
 
 ### Static verification performed on the rebuilt `.so`
 - `Java_J_N_MM6G5xGU`: present (1 match).
@@ -146,8 +231,8 @@ fix already in place.
 
 ## How to Reproduce
 1. Clone `https://github.com/pytgcalls/ntgcalls.git` and check out commit `a1616e280947452d86ac28d140fd1250d31e6959`.
-2. Initialize submodules: `git submodule update --init --recursive`.
-3. Apply **both** patches: `patches/retain-jni-zero-entry-points.patch` (to `cmake/FindWebRTC.cmake`) and `patches/android-callback-classloader.patch` (to `targets/android/app/src/main/jni/utils.hpp.tpl`).
+2. Initialize submodules: `git submodule update --init --recursive` (`deps/oboe`, `deps/pybind11`).
+3. Apply **all five** patches: `patches/retain-jni-zero-entry-points.patch` (to `cmake/FindWebRTC.cmake`), `patches/android-callback-classloader.patch` (to `targets/android/app/src/main/jni/utils.hpp.tpl`), `patches/oboe-stream-restart-robustness.patch` (to `ntgcalls/{include/ntgcalls/media/devices,src/media/devices}/oboe_device_module.*`), `patches/android-native-logcat-diagnostics.patch` (to `ntgcalls/src/utils/log_sink_impl.cpp` and `wrtc/src/interfaces/wrapped_dtls_srtp_transport.*`), `patches/reconnect-connected-callback.patch` (to `ntgcalls/src/instances/call_interface.cpp`).
 4. In `targets/android/app/build.gradle`:
    - Set `ndkPath = ndkDir` and `ndkVersion = "28.1.13356709"`.
    - Set `ndk { abiFilters 'arm64-v8a' }` (stock is 4 ABIs; building all 4 requires the WebRTC prebuilt's `webrtc.ldflags` for each, generated per-ABI by the standalone configure step in 6 below — restrict to what you actually need).

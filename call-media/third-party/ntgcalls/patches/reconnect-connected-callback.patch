@@ -1,0 +1,22 @@
+diff --git a/ntgcalls/src/instances/call_interface.cpp b/ntgcalls/src/instances/call_interface.cpp
+index f5107659..f6a25273 100644
+--- a/ntgcalls/src/instances/call_interface.cpp
++++ b/ntgcalls/src/instances/call_interface.cpp
+@@ -106,8 +106,17 @@ namespace ntgcalls::instances {
+                 case wrtc::ConnectionState::Connected:
+                     RTC_LOG(LS_VERBOSE) << "Connection established";
+                     if (!was_connected && strong_update->stream_manager_) {
++                        // Opens the Oboe capture/playback devices; the first
++                        // connection is the only time streams need starting.
+                         strong_update->stream_manager_->start();
+                         RTC_LOG(LS_VERBOSE) << "Stream started";
++                    }
++                    if (strong_update->stream_manager_) {
++                        // Emit on every entry into Connected, including
++                        // recovery from a transient drop: was_connected is
++                        // permanently true after the first connect, and the
++                        // old guard skipped this callback entirely on
++                        // recovery, leaving hosts stuck in reconnecting.
+                         (void) strong_update->connection_change_callback_({ConnectionInfo::State::Connected, kind});
+                     }
+                     break;

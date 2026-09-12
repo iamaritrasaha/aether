@@ -432,6 +432,7 @@ data class ActiveCall(
     val isVideo: Boolean = false,
     val state: CallStateEnum = CallStateEnum.PENDING,
     val mediaState: MediaConnectionState = MediaConnectionState.IDLE,
+    val mediaEverConnected: Boolean = false,
     val isMuted: Boolean = false,
     val isSpeakerOn: Boolean = false,
     val durationSec: Int = 0,
