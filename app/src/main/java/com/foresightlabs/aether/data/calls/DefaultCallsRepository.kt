@@ -91,6 +91,12 @@ class DefaultCallsRepository(
     /** The one connection watchdog in flight, if any -- see [startConnectWatchdog]. */
     private var watchdogJob: Job? = null
 
+    /**
+     * Ringing notification for incoming calls; shown while a non-outgoing
+     * call is PENDING, cancelled on any other state. See [IncomingCallNotifier].
+     */
+    private val incomingCallNotifier = IncomingCallNotifier(application)
+
     private val outgoingSignalSeq = AtomicLong(0)
     private val incomingSignalSeq = AtomicLong(0)
 
@@ -344,6 +350,19 @@ class DefaultCallsRepository(
 
     private fun handleTdLibStateChange(call: ActiveCall?) {
         val currentState = call?.state
+        // Ringing surface for incoming calls: shown only while the call is
+        // pending AND incoming, cancelled the moment it resolves (answered,
+        // declined, expired, cancelled remotely).
+        if (call != null && currentState == CallStateEnum.PENDING && !call.isOutgoing) {
+            incomingCallNotifier.showIncoming(
+                callId = call.callId,
+                callerName = call.user?.name ?: "Telegram Contact",
+                isVideo = call.isVideo,
+                generation = callGeneration.get()
+            )
+        } else {
+            incomingCallNotifier.cancel()
+        }
         if (currentState == CallStateEnum.DISCARDED || currentState == CallStateEnum.ERROR) {
             CallDiagnostics.stage(callGeneration.get(), CallStage.TEARDOWN, "tdlib=${currentState.name}")
             stopTimer()

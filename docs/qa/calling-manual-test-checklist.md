@@ -112,3 +112,24 @@ manual testing will need them: native engine connection-state transitions,
 native-engine errors, and TDLib call-state transitions in
 `DefaultCallsRepository`/`TelegramClient`. None of it logs encryption keys,
 signalling payload contents, or Telegram credentials.
+
+
+## Automated precondition (new since 03cab8b)
+
+- On-device native smoke suite (no call needed):
+  `adb shell pm grant com.foresightlabs.aether.calls.media android.permission.RECORD_AUDIO`
+  is unnecessary — `:call-media` installs its test APK with `-g` (auto-grant);
+  run `./gradlew :call-media:connectedDebugAndroidTest` and expect 6/6 PASS
+  (load/ping, WebRTC context, protocol, device enumeration, real
+  session+sources+teardown, callback registration).
+
+## Physical run procedure (current tooling)
+
+1. `tools/capture-call-diagnostics` — starts a clean, tag-filtered capture
+   into git-ignored `diagnostics/`.
+2. Place the call under test (outgoing first, then incoming).
+3. After the call: `tools/call-diagnostics-summary <log-file>` prints the
+   connection timeline, CAPTURE/PLAYBACK progression, RTP send/receive
+   counters, remote-source events, routing evidence and errors — the failure
+   class (capture-dead / playback-dead / incoming-blocked / RTP-level) is
+   readable from that summary without manually scanning logcat.

@@ -154,19 +154,26 @@ this milestone — see the top-level table in `README.md`).
 | --- | --- | --- | --- | --- | --- |
 | Signalling, both directions | yes | yes | no | **yes** | `CreateCall`, `AcceptCall`, `DiscardCall`, `SendCallSignalingData` / `UpdateNewCallSignalingData`. Verified at commit `a7476ab` with per-boundary diagnostics: every outgoing and incoming signalling packet traced end to end with zero loss across 3 real calls. |
 | Call state tracking | yes | yes | no | **yes** | `UpdateCall` + `CallStateReady` handoff; verified at `a7476ab` alongside signalling. |
-| Call history | yes | yes | no | no | `SearchCallMessages`; survives restart. Not specifically exercised during the `a7476ab` physical session. |
-| Audio routing | yes | yes | no | no | `AudioManager.setCommunicationDevice` (API 31+) and legacy earpiece / speaker / Bluetooth SCO fallbacks. Not reachable in the `a7476ab` session — media never reached `CONNECTED`. |
-| Mute | yes | yes | no | no | Same as audio routing: gated on reaching `CONNECTED`, not reached yet. |
+| Call history | yes | yes | no | no | `SearchCallMessages`; survives restart. Not specifically exercised during physical sessions. |
+| Incoming-call ringer | yes | yes | no | no | Since `03cab8b`: MAX-importance `CATEGORY_CALL` ringing notification with Answer/Decline actions for a pending incoming call (no full-screen intent — policy), routed through `CallService` with stale-action call-id guards; posted/cancelled lifecycle unit-tested. |
+| Audio routing | yes | yes | no | no | `AudioManager.setCommunicationDevice` (API 31+ incl. BLE devices) and legacy fallbacks; UI route state now derives from Android's ACTUAL selected device via `AudioDeviceCallback` (synced on device add/remove and on route requests, with result verification and diagnostics). Route-type mapping unit-tested. Runtime route changes still need physical exercise. |
+| Mute | yes | yes | no | no | `toggleMute` -> engine `mute()/unmute()` + AudioManager mic mute, with the flow and state pairing now unit-tested end to end (`DefaultCallsRepositoryLifecycleTest`). Native mute path still needs a physical call. |
 | Foreground service | yes | yes | no | **yes** | `CallService`, typed `microphone` or `microphone\|camera` per call; started/stopped cleanly across all `a7476ab` test calls. |
-| Telegram media transport (ntgcalls) | yes | partial | no | **yes (crash-free)** | Real native library linked and packaged (see `docs/architecture/calling-native-stack.md`). At commit `a7476ab`: the previously-crashing `MM6G5xGU` `UnsatisfiedLinkError`, `Invalid device metadata` failure, WebRTC-Android-context null crash, and `ConnectionInfo` `ClassNotFoundException` are all physically confirmed fixed — zero crashes across 3 voice calls + 1 video call. |
+| Telegram media transport (ntgcalls) | yes | yes | no | **yes (on-device smoke)** | Real native library linked and packaged (see `docs/architecture/calling-native-stack.md`). Since `03cab8b` the vendored artifact carries five patches and `CallMediaNativeSmokeTest` (instrumented, `:call-media:connectedDebugAndroidTest`) proves on real arm64 hardware: native load + `ping`, WebRTC Android-context init, protocol contract, real mic/speaker enumeration with metadata, REAL native session with CAPTURE+PLAYBACK stream-source configuration and clean teardown, callback registration — 6/6 PASS on Samsung SM-P610 (Android 13). Note this is device-level verification of the native boundaries, NOT a real call. At commit `a7476ab`: the previously-crashing `MM6G5xGU` `UnsatisfiedLinkError`, `Invalid device metadata` failure, WebRTC-Android-context null crash, and `ConnectionInfo` `ClassNotFoundException` are all physically confirmed fixed — zero crashes across 3 voice calls + 1 video call. |
 | Voice call media path | yes | yes | no | **partial** | `skipExchange` + `connectP2p` against TDLib's negotiated key and servers. Two fixes since `a7476ab`: (1) `CallServerEndpoint.peerTag` is now a genuine nullable field (was a synthesized `ByteArray(0)`, which made ntgcalls' native `RTCServer::to_rtc_servers()` misclassify every WebRTC/STUN/TURN server as a Telegram reflector) — physically confirmed on hardware to reach native `CONNECTED`, not just `CONNECTING`/`TIMEOUT`. (2) `applyPlaybackSources` now configures a PLAYBACK stream (real speaker device in the `.microphone` slot per `StreamManager::optimize_sources`) in addition to CAPTURE, and native `CONNECTED` now propagates into `ActiveCall.mediaState` so the call screen actually leaves "Connecting…". **`CONNECTED` proves the ICE/DTLS transport is writable, never that audio is actually flowing both ways — that still requires a dedicated physical retest, not yet completed against this change.** |
 | Video call media path | yes | yes | no | **partial (crash regression only)** | Camera capture + raw decoded-frame rendering; pixel-format assumption undocumented by the vendor and unverified. `applyPlaybackSources` now also configures an `EXTERNAL` PLAYBACK camera slot for a video call (per `StreamManager::handle_playback_config`/`setup_video_playback_callbacks`), which is how decoded remote frames are meant to reach `NTgCalls.onFrames` — not yet physically exercised end to end (local capture + remote decode + render) on hardware. |
 | Group calls | no | no | no | no | not offered; ntgcalls supports it, Aether does not expose it |
 
-**None of the "Physical: yes/partial" rows above have been re-verified against the
-current commit** (the WebRTC-init hardening in this change is new since `a7476ab`);
-they describe exactly what was observed at that specific commit, on a Samsung
-SM-M145F (Android 15, arm64-v8a), against a second, separate Telegram test account.
+**None of the "Physical: yes/partial" rows have been re-verified as a real call
+against the current commit** — the current artifacts (five-patch `aetherfix2` AAR,
+media-activity diagnostics, routing/notification hardening) have only been
+exercised by the on-device instrumented smoke suite and JVM tests, on a Samsung
+SM-P610 (Android 13, arm64-v8a). The older `a7476ab`/`54272c8` physical history was
+on a Samsung SM-M145F (Android 15), against a second, separate Telegram test
+account. Two-way physical audio remains the open gate: one outgoing call with
+`tools/capture-call-diagnostics` running classifies the media path via
+`MEDIA_ACTIVITY` counters and the native RTP counters; `tools/call-diagnostics-summary`
+parses the result.
 `MediaConnectionState.UNAVAILABLE` is strictly emitted when the media transport is
 absent or fails to load; no timer or local scaffold may emit `CONNECTED` without the
 real native engine reporting a connected state. See

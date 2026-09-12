@@ -42,6 +42,34 @@ class CallService : Service() {
             return START_NOT_STICKY
         }
 
+        // Notification actions for an INCOMING call. The action carries the
+        // call id it was created for; a mismatch with the live call (stale
+        // notification, call already resolved) is ignored rather than acting
+        // on the wrong session.
+        if (action == ACTION_ACCEPT_CALL || action == ACTION_DECLINE_CALL) {
+            val app = application as? AetherApplication
+            val repo = app?.callsRepository
+            if (repo != null) {
+                val actionCallId = intent?.getIntExtra(EXTRA_CALL_ID, -1) ?: -1
+                val liveCallId = repo.activeCallState.value?.callId
+                val incoming = IncomingCallNotifier(this)
+                incoming.cancel()
+                if (actionCallId == liveCallId && liveCallId != null) {
+                    CoroutineScope(Dispatchers.Default).launch {
+                        if (action == ACTION_ACCEPT_CALL) {
+                            repo.acceptCall(liveCallId)
+                        } else {
+                            repo.discardCall(liveCallId)
+                        }
+                    }
+                } else {
+                    CallDiagnostics.stage(0L, CallStage.TEARDOWN, "stale_call_action action=$action actionCallId=$actionCallId liveCallId=$liveCallId")
+                }
+            }
+            stopForegroundService()
+            return START_NOT_STICKY
+        }
+
         val name = intent?.getStringExtra(EXTRA_CALLER_NAME) ?: "Telegram Call"
         val isConnected = intent?.getBooleanExtra(EXTRA_IS_CONNECTED, false) ?: false
         val isVideo = intent?.getBooleanExtra(EXTRA_IS_VIDEO, false) ?: false
@@ -128,6 +156,9 @@ class CallService : Service() {
         const val NOTIFICATION_ID = 1002
         const val ACTION_START_CALL = "com.foresightlabs.aether.action.START_CALL"
         const val ACTION_STOP_CALL = "com.foresightlabs.aether.action.STOP_CALL"
+        const val ACTION_ACCEPT_CALL = "com.foresightlabs.aether.action.ACCEPT_CALL"
+        const val ACTION_DECLINE_CALL = "com.foresightlabs.aether.action.DECLINE_CALL"
+        const val EXTRA_CALL_ID = "extra_call_id"
         const val EXTRA_CALLER_NAME = "extra_caller_name"
         const val EXTRA_IS_CONNECTED = "extra_is_connected"
         const val EXTRA_IS_VIDEO = "extra_is_video"

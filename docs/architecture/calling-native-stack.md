@@ -471,3 +471,54 @@ AetherCall AetherCallNative` (see `tools/capture-call-diagnostics`).
 Physical two-way audio has NOT yet been observed with these diagnostics in
 place; the instrumentation exists precisely to classify the next physical
 call in one pass.
+
+## Newer-ntgcalls migration decision (2026-09-12)
+
+Upstream delta between Aether's pin (`a1616e2`, v3.0.0-rc02) and the newest
+tag (`v3.0.0-rc03`) is **exactly one functional change**: the Oboe device
+module robustness fix (error-callback detach, stream-restart locking, buffer
+race) — already backported verbatim as patch 3. `version.properties`/WebRTC
+are unchanged between the two tags. No JNI/API/MediaDescription changes exist
+to migrate for. **Decision: stay on the pinned revision + local patches.** A
+future migration only becomes interesting if upstream fixes something the
+diagnostics (patch 4 counters / logcat bridge) or a physical test actually
+implicates; re-evaluate then, starting from `git log a1616e2..origin/main`.
+
+## Official-tgcalls fallback research (architecture note, 2026-09-12)
+
+Telegram's official `tgcalls` (the C++ library inside Telegram Desktop/Android)
+was evaluated as a fallback behind `TelegramCallMediaEngine`. Findings:
+
+- **WebRTC requirement**: tgcalls requires a specific bundled WebRTC
+  (Telegram's forked `libwebrtc` subset) — not the `webrtc-build` prebuilt
+  ntgcalls consumes. Building it means a Chromium-tree dependency (~25–35 GB
+  checkout, multi-hour per-ABI builds), the exact constraint that made ntgcalls
+  the pragmatic choice in the first place (see "Why not build tgcalls + WebRTC
+  from source in this repository" above).
+- **Integration surface**: tgcalls exposes an instance-style C++ API
+  (`tgcalls::Instance` descriptor + signalling callbacks). It expects the host
+  to provide TDLib-side signalling (which Aether has) but does NOT provide an
+  Android AAR packaging — a JNI bridge (like the one ntgcalls ships) would have
+  to be written and maintained, plus per-release ABI builds.
+- **Protocol parity**: both stacks speak Telegram's P2P call protocol; there is
+  no interop win, only vendor alignment (official client behaviour).
+- **Conclusion**: no evidence ntgcalls is fundamentally unsuitable — the native
+  stack physically reaches CONNECTED and every boundary up to RTP egress is now
+  source-verified, instrumented, and on-device smoke-tested. A Level-3
+  migration is NOT justified. Re-evaluate only if a physical call with full
+  diagnostics proves a defect inside ntgcalls that upstream will not fix and
+  that is impractical to patch locally.
+
+## Remaining physical validation checklist
+
+1. Outgoing voice call (Aether → official Telegram) with
+   `tools/capture-call-diagnostics` running; classify via
+   `tools/call-diagnostics-summary` (CAPTURE/PLAYBACK growth, RTP counters,
+   remote-source events).
+2. Two-way audio ≥ 60 s, both sides audible.
+3. Incoming voice call (official Telegram → Aether): ringer notification,
+   Answer/Decline actions, two-way audio.
+4. Mute/unmute heard remotely; speaker/earpiece/BT route changes mid-call.
+5. Reconnect presentation on a transient network drop (everConnected
+   RECONNECTING path — structurally proven, physically unobserved).
+6. Video interop (only after voice passes).

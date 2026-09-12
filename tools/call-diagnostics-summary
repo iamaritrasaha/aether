@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Summarize a captured Aether call-diagnostics log: connection timeline,
+# capture/playback progression, RTP counters, reconnects, errors.
+#
+# Usage: tools/call-diagnostics-summary diagnostics/call-diagnostics-XXXX.log
+
+set -euo pipefail
+LOG="${1:-}"
+if [ -z "$LOG" ] || [ ! -f "$LOG" ]; then
+    echo "usage: $0 <captured-diagnostics-log>" >&2
+    exit 1
+fi
+
+echo "=== Call diagnostics summary: $LOG ==="
+echo ""
+echo "-- Connection / stage timeline (gen, stage, detail) --"
+grep -E "AetherCall" "$LOG" | grep -oE "gen=[0-9]+ stage=[A-Z_]+.*" | sed 's/signal=.*//' | awk '!seen[$0]++ || /CONNECTED|FAILED|TIMEOUT|STOPPED|TEARDOWN/' | head -40 || true
+
+echo ""
+echo "-- Native connection state transitions --"
+grep -oE "native state=[A-Z]+ kind=[a-z]+ mapped=[A-Z_]+" "$LOG" | uniq -c || echo "  (none)"
+
+echo ""
+echo "-- Capture / playback media time (last 6 samples per counter) --"
+grep -oE "media_activity callId=[0-9]+ capture=[0-9]+s(\(\+[0-9]+s\)|\(new\)) playback=[0-9]+s(\(\+[0-9]+s\)|\(new\))" "$LOG" | tail -6 || echo "  (no media_activity samples)"
+
+echo ""
+echo "-- RTP counters (outgoing / incoming, last of each) --"
+grep -oE "outgoing RTP count=[0-9]+ size=[0-9-]+" "$LOG" | tail -1 || true
+grep -oE "incoming RTP ok=[0-9]+ decrypt_fail=[0-9]+" "$LOG" | tail -1 || true
+echo "outgoing-RTP lines: $(grep -c 'outgoing RTP count' "$LOG" || true)"
+echo "incoming-RTP lines: $(grep -c 'incoming RTP ok' "$LOG" || true)"
+
+echo ""
+echo "-- Remote source events --"
+grep -oE "remote_source ssrc=[0-9]+ state=[A-Z]+ device=[A-Z]+" "$LOG" | uniq -c || echo "  (none)"
+
+echo ""
+echo "-- Stream end events --"
+grep -oE "stream_end type=[A-Z]+ device=[A-Z]+" "$LOG" | head -5 || echo "  (none)"
+
+echo ""
+echo "-- Audio routing --"
+grep -oE "audio_hw mode=[0-9]+ commDeviceType=[0-9-]+ micMute=[a-z]+" "$LOG" | tail -2 || true
+grep -oE "route_request requested=[A-Z]+ applied=[a-z]+ deviceType=[0-9-]+" "$LOG" | tail -2 || true
+grep -oE "route_changed reason=[a-z_]+ route=[A-Z]+" "$LOG" | tail -3 || true
+
+echo ""
+echo "-- Failures (sanitised) --"
+grep -oE "at=[A-Z_]+ type=[^ ]+ msg=.*" "$LOG" | head -8 || echo "  (none)"
+
+echo ""
+echo "-- WebRTC/native warnings+errors (AetherCallNative, deduped) --"
+grep "AetherCallNative" "$LOG" | grep -E " W | E " | sed 's/^[0-9:. -]*//; s/[0-9]+//g' | sort -u | head -12 || echo "  (none)"
+
+echo ""
+echo "-- ICE/DTLS hints from WebRTC logs --"
+grep -iE "AetherCallNative.*(ice|dtls|srtp|writable)" "$LOG" | sed 's/^[0-9:. -]*//' | sort -u | head -10 || echo "  (none)"
+
+echo ""
+echo "=== end summary ==="

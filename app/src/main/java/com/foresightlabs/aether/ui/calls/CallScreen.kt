@@ -27,13 +27,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -331,21 +336,29 @@ internal fun DecodedVideoFrameImage(
     contentScale: ContentScale,
     modifier: Modifier = Modifier
 ) {
-    val imageBitmap = remember(frame) {
-        if (frame.width <= 0 || frame.height <= 0 ||
-            frame.pixels.size < frame.width * frame.height
-        ) {
-            null
-        } else {
-            runCatching {
-                Bitmap.createBitmap(frame.pixels, frame.width, frame.height, Bitmap.Config.ARGB_8888)
-                    .asImageBitmap()
-            }.getOrNull()
+    // The ARGB->Bitmap copy is real work (a 640x480 frame moves ~1.2MB), so it
+    // runs off the UI thread. Keying the producer on [frame] means a newer
+    // frame cancels the in-flight conversion of an older one -- the newest
+    // frame always wins, and while a conversion runs the previously produced
+    // bitmap keeps rendering (no flicker, no unbounded queue).
+    val imageBitmap by produceState<ImageBitmap?>(initialValue = null, frame) {
+        value = withContext(Dispatchers.Default) {
+            if (frame.width <= 0 || frame.height <= 0 ||
+                frame.pixels.size < frame.width * frame.height
+            ) {
+                null
+            } else {
+                runCatching {
+                    Bitmap.createBitmap(frame.pixels, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+                        .asImageBitmap()
+                }.getOrNull()
+            }
         }
-    } ?: return
+    }
+    val bitmap: ImageBitmap = imageBitmap ?: return
 
     Image(
-        bitmap = imageBitmap,
+        bitmap = bitmap,
         contentDescription = null,
         contentScale = contentScale,
         modifier = modifier.graphicsLayer { rotationZ = frame.rotationDegrees.toFloat() }

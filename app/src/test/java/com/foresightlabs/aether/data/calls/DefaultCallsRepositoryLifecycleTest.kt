@@ -6,6 +6,7 @@ import com.foresightlabs.aether.calls.media.DecodedVideoFrame
 import com.foresightlabs.aether.data.permissions.PermissionCoordinator
 import com.foresightlabs.aether.data.telegram.TelegramClient
 import com.foresightlabs.aether.domain.calls.AudioRoute
+import com.foresightlabs.aether.domain.model.CallStateEnum
 import com.foresightlabs.aether.domain.calls.MediaConnectionState
 import com.foresightlabs.aether.domain.calls.TelegramCallMediaEngine
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -84,6 +85,38 @@ class DefaultCallsRepositoryLifecycleTest {
     }
 
     @Test
+    fun incomingPendingCallPostsRingingNotificationAndResolveCancels() {
+        val h = Harness()
+        // Grant BEFORE the call update: the notifier fires from the
+        // repository's collector and posts nothing if POST_NOTIFICATIONS is
+        // denied (Android 13+ semantics, which Robolectric enforces).
+        org.robolectric.Shadows.shadowOf(h.application).grantPermissions(
+            android.Manifest.permission.POST_NOTIFICATIONS
+        )
+        // An INCOMING call still pending (not yet answered): isOutgoing=false.
+        h.telegram.handleCallUpdateForTesting(
+            TdApi.Call(9, 0L, 7L, false, false, TdApi.CallStatePending())
+        )
+        h.awaitUntil { h.telegram.activeCallState.value?.callId == 9 }
+
+        val manager = h.application.getSystemService(android.app.NotificationManager::class.java)
+
+        // The ringer is posted from the repository's collector coroutine, so
+        // wait for it rather than asserting immediately.
+        h.awaitUntil {
+            manager.activeNotifications.any { it.id == IncomingCallNotifier.NOTIFICATION_ID }
+        }
+
+        // The call resolving (declined here) must cancel the ringer.
+        h.telegram.handleCallUpdateForTesting(
+            TdApi.Call(9, 0L, 7L, false, false, TdApi.CallStateDiscarded())
+        )
+        h.awaitUntil {
+            manager.activeNotifications.none { it.id == IncomingCallNotifier.NOTIFICATION_ID }
+        }
+    }
+
+    @Test
     fun toggleMuteReachesTheEngineAndStateFlipsTogether() {
         val h = Harness()
         h.telegram.handleCallUpdateForTesting(readyCall(id = 1))
@@ -134,13 +167,18 @@ class DefaultCallsRepositoryLifecycleTest {
         h.telegram.handleCallUpdateForTesting(readyCall(id = 3).copy(state = TdApi.CallStateDiscarded()))
         h.awaitUntil { h.engine.stopCount > 0 }
 
-        // A late media callback for the dead session must not change anything:
-        // updateCallMediaState is callId-guarded and the active call is gone.
+        // Once signalling has terminated, the ActiveCall snapshot is frozen:
+        // a late native callback (engine teardown racing the discard) must
+        // not mutate it -- that is the exact contract of the DISCARDED/ERROR
+        // guard in updateCallMediaState.
+        val frozen = h.telegram.activeCallState.value
+        org.junit.Assert.assertEquals(CallStateEnum.DISCARDED, frozen?.state)
         h.engine.setState(MediaConnectionState.CONNECTED)
         Thread.sleep(200)
-        assertFalse(
-            "a stale CONNECTED after teardown must not resurrect call state",
-            h.telegram.activeCallState.value?.mediaEverConnected == true
+        org.junit.Assert.assertEquals(
+            "a stale CONNECTED after teardown must not mutate the ended call",
+            frozen,
+            h.telegram.activeCallState.value
         )
     }
 }

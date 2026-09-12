@@ -1673,6 +1673,7 @@ open class TelegramClient(private val application: Application) {
             isVideo = call.isVideo,
             state = stateEnum,
             mediaState = sameCall?.mediaState ?: MediaConnectionState.IDLE,
+            mediaEverConnected = sameCall?.mediaEverConnected ?: false,
             isMuted = sameCall?.isMuted ?: false,
             isSpeakerOn = sameCall?.isSpeakerOn ?: false,
             durationSec = if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.READY) (sameCall?.durationSec ?: 0) else 0,

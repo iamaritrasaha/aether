@@ -50,14 +50,17 @@ jobs:
             echo "OK: $rel_path matches SHA256SUMS ($actual)"
           }
 
-          AAR=libs/ntgcalls-3.0.0-rc02-aetherfix-arm64.aar
-          verify "$AAR" "ntgcalls-3.0.0-rc02-aetherfix-arm64.aar"
+          # The AAR itself is keyed by its path relative to call-media/libs;
+          # files INSIDE an AAR are keyed with an "<artifact-name>:" prefix
+          # (see SHA256SUMS header), verified after extraction.
+          AAR=libs/ntgcalls-3.0.0-rc02-aetherfix2-arm64.aar
+          verify "$AAR" "ntgcalls-3.0.0-rc02-aetherfix2-arm64.aar"
 
           WORKDIR=$(mktemp -d)
           unzip -q "$AAR" -d "$WORKDIR"
-          verify "$WORKDIR/jni/arm64-v8a/libntgcalls.so" "jni/arm64-v8a/libntgcalls.so"
-          verify "$WORKDIR/libs/webrtc.jar" "libs/webrtc.jar"
-          verify "$WORKDIR/classes.jar" "classes.jar"
+          verify "$WORKDIR/jni/arm64-v8a/libntgcalls.so" "aetherfix2:jni/arm64-v8a/libntgcalls.so"
+          verify "$WORKDIR/libs/webrtc.jar" "aetherfix2:libs/webrtc.jar"
+          verify "$WORKDIR/classes.jar" "aetherfix2:classes.jar"
 
   build-and-test:
     name: Test, assemble, lint

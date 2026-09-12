@@ -1,5 +1,6 @@
 package com.foresightlabs.aether.data.notifications
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -34,6 +35,29 @@ class AetherNotificationManager(
     private val getMyUserId: () -> Long = { 0L }
 ) {
     private val notificationManager = NotificationManagerCompat.from(context)
+
+    /**
+     * Single canonical posting path for CALL notifications (incoming ringer,
+     * any future call-surface notification). Message notifications go through
+     * the group machinery below; a call notification is not a message, so it
+     * bypasses that machinery — but still posts through THIS object, keeping
+     * the "exactly one notification-output path" architecture invariant
+     * (see PushArchitectureTest) intact.
+     */
+    fun postCallNotification(id: Int, notification: Notification) {
+        // Android 13+ runtime gate; call ringers are opt-in like any other
+        // notification stream. Callers already suppress+log on denial.
+        try {
+            notificationManager.notify(id, notification)
+        } catch (_: SecurityException) {
+            // POST_NOTIFICATIONS not granted: no call ringer, no crash --
+            // same contract as the message-notification paths in this class.
+        }
+    }
+
+    fun cancelNotification(id: Int) {
+        notificationManager.cancel(id)
+    }
 
     // In-memory record of active notification groups: groupId -> GroupData
     private val activeGroups = ConcurrentHashMap<Int, GroupData>()

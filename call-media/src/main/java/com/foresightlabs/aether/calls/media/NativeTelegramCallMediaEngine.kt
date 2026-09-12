@@ -139,6 +139,10 @@ class NativeTelegramCallMediaEngine {
 
     /** Process-wide native engine state. See the class doc above for why this is shared. */
     private object Shared {
+        /** Latest evidence-based media health for the active call, if sampled. */
+        val mediaHealth: CallMediaHealth?
+            get() = mediaActivityMonitor.latestHealth
+
         @Volatile private var loadAttempted = false
         @Volatile private var loaded = false
         @Volatile private var listenersRegistered = false
@@ -392,6 +396,9 @@ class NativeTelegramCallMediaEngine {
                         CallStage.MEDIA_ACTIVITY,
                         "remote_source ssrc=${source.ssrc} state=${source.state?.name ?: "null"} device=${source.device?.name ?: "null"}"
                     )
+                    if (source.device == StreamDevice.MICROPHONE) {
+                        mediaActivityMonitor.onRemoteMicState(source.state?.name)
+                    }
                 }
                 ntg.onStreamEnd { callId, type, device ->
                     // A capture/playback stream reaching EOF -- e.g. the Oboe
