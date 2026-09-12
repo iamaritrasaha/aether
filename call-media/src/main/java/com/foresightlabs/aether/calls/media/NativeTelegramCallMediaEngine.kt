@@ -33,7 +33,7 @@ import org.webrtc.PeerConnectionFactory
 class NativeTelegramCallMediaEngine {
 
     val isMediaTransportAvailable: Boolean
-        get() = ensureNativeLoaded()
+        get() = Shared.isTransportReady()
 
     fun init(callback: NativeCallEngineCallback) {
         Shared.callback = callback
@@ -94,7 +94,47 @@ class NativeTelegramCallMediaEngine {
             Shared.activeCallId = null
             Shared.rendererEnabled = false
             Shared.rendererAttached = false
+            Shared.webrtcContextInitialized = false
+            Shared.applicationContext = null
         }
+
+        /**
+         * Testable seam for the WebRTC-Android-context init flag machinery,
+         * with no Android/native dependency: [handle] is an opaque value
+         * forwarded to [initializer] unexamined, so a plain unit test can
+         * pass `Unit` and a lambda instead of a real [Context] and a real
+         * `PeerConnectionFactory.initialize` call. Exercises exactly the
+         * latch/retry logic [Shared.ensureWebRtcContextInitialized] uses in
+         * production.
+         */
+        @VisibleForTesting
+        internal fun <T> ensureWebRtcContextInitializedForTesting(
+            handle: T,
+            initializer: (T) -> Boolean
+        ): Boolean = Shared.ensureWebRtcContextInitializedInternal(handle, initializer)
+
+        /**
+         * Testable seam for [startCall]'s WebRTC-readiness gate: proves that
+         * when [webRtcReady] is false, no native call/session function
+         * ([createSession] included) is ever invoked, and `FAILED` plus a
+         * non-blank error reaches the registered callback instead.
+         */
+        @VisibleForTesting
+        internal fun startCallWithWebRtcGateForTesting(
+            config: CallMediaConfig,
+            webRtcReady: Boolean,
+            createSession: (Long) -> Unit = {},
+            skipExchange: (Long, ByteArray, Boolean) -> Unit = { _, _, _ -> },
+            applySources: (Long, Boolean) -> Boolean = { _, _ -> true },
+            connectP2p: (Long, List<RTCServer>, List<String>, Boolean, String?) -> Unit = { _, _, _, _, _ -> },
+            stopSession: (Long) -> Unit = {}
+        ) = Shared.startCallWithWebRtcGateInternal(
+            config, webRtcReady, createSession, skipExchange, applySources, connectP2p, stopSession
+        )
+
+        @VisibleForTesting
+        internal fun toRtcServersForTesting(servers: List<CallServerEndpoint>): List<RTCServer> =
+            Shared.toRtcServers(servers)
     }
 
     /** Process-wide native engine state. See the class doc above for why this is shared. */
@@ -130,8 +170,20 @@ class NativeTelegramCallMediaEngine {
         /** Set by the Android adapter before a video session is started. */
         @Volatile private var cameraManager: CameraManager? = null
 
-        /** Guards [initializeWebRtcApplicationContext] to run at most once. */
-        @Volatile private var webrtcContextInitialized = false
+        /** The application [Context] handed in via [setContext], persisted so a
+         * later retry (e.g. from [isTransportReady] or [startCall]) does not
+         * need one threaded through again. */
+        @Volatile var applicationContext: Context? = null
+
+        /**
+         * True only once `PeerConnectionFactory.initialize(...)` has itself
+         * returned successfully -- never set eagerly before that call, and
+         * reset back to false (see [ensureWebRtcContextInitializedInternal])
+         * whenever it fails or throws, so a later attempt can retry instead
+         * of the engine believing forever that WebRTC's Android layer is
+         * ready when it never actually finished initializing.
+         */
+        @Volatile var webrtcContextInitialized = false
 
         /** Consecutive unreadable frames after which the renderer gives up for this session. */
         private const val MALFORMED_FRAME_LIMIT = 30
@@ -191,12 +243,28 @@ class NativeTelegramCallMediaEngine {
 
         fun setContext(context: Context) {
             val appContext = context.applicationContext
+            applicationContext = appContext
             cameraManager = appContext.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
-            initializeWebRtcApplicationContext(appContext)
+            ensureWebRtcContextInitialized(appContext)
         }
 
         /**
-         * Gives WebRTC's Android layer an application [Context], once.
+         * Whether the engine is actually usable right now: not merely "the
+         * native `.so` loaded" (that only proves the JNI bridge exists), but
+         * that WebRTC's Android layer has a real application `Context` too --
+         * see [ensureWebRtcContextInitialized] for why that second condition
+         * is not optional. Re-attempts initialization on every call so a
+         * transient earlier failure (e.g. this queried before [setContext]
+         * ever ran) does not permanently read as unavailable.
+         */
+        fun isTransportReady(): Boolean {
+            if (!ensureNativeLoaded()) return false
+            val context = applicationContext ?: return false
+            return ensureWebRtcContextInitialized(context)
+        }
+
+        /**
+         * Gives WebRTC's Android layer an application [Context].
          *
          * Physically proven necessary, not precautionary: without this call,
          * `org.webrtc.ApplicationContextProvider.getApplicationContext()`
@@ -220,6 +288,47 @@ class NativeTelegramCallMediaEngine {
          * as every WebRTC Android integration requires; nothing upstream does
          * it implicitly.
          *
+         * Fails closed, not latched: this only reports success once
+         * `PeerConnectionFactory.initialize` has itself returned without
+         * throwing (see [ensureWebRtcContextInitializedInternal]). A failure
+         * is logged and leaves [webrtcContextInitialized] false, so the next
+         * call -- another [setContext], or [isTransportReady]/[startCall]
+         * querying readiness -- retries instead of the engine believing
+         * forever that a transport it never actually got is ready.
+         */
+        private fun ensureWebRtcContextInitialized(context: Context): Boolean {
+            // The JNI symbols PeerConnectionFactory.initialize needs live in
+            // libntgcalls.so; it must already be loaded before this runs.
+            if (!ensureNativeLoaded()) return false
+            return ensureWebRtcContextInitializedInternal(context, ::defaultInitializeWebRtc)
+        }
+
+        /**
+         * Pure latch/retry logic, deliberately independent of [Context] or
+         * any native call so it can be unit-tested with a plain lambda (see
+         * `NativeTelegramCallMediaEngine.ensureWebRtcContextInitializedForTesting`)
+         * instead of a mutable production-only test hook.
+         */
+        @Synchronized
+        @VisibleForTesting
+        internal fun <T> ensureWebRtcContextInitializedInternal(
+            handle: T,
+            initializer: (T) -> Boolean
+        ): Boolean {
+            if (webrtcContextInitialized) return true
+            val success = try {
+                initializer(handle)
+            } catch (t: Throwable) {
+                // Not call-scoped (no generation exists yet at app/context
+                // setup time) -- generation 0 is this call's diagnostic home.
+                CallDiagnostics.failure(0L, CallStage.MEDIA_SESSION_CREATED, t)
+                false
+            }
+            webrtcContextInitialized = success
+            return success
+        }
+
+        /**
          * `setNativeLibraryLoader { true }` is required, not cosmetic:
          * WebRTC's default loader calls
          * `System.loadLibrary("jingle_peerconnection_so")`, a separate native
@@ -228,23 +337,13 @@ class NativeTelegramCallMediaEngine {
          * [ensureNativeLoaded]'s `NTgCalls.ping()`. Letting the default
          * loader run would fail looking for a library that was never built.
          */
-        private fun initializeWebRtcApplicationContext(appContext: Context) {
-            if (webrtcContextInitialized) return
-            // The JNI symbols PeerConnectionFactory.initialize needs live in
-            // libntgcalls.so; it must already be loaded before this runs.
-            if (!ensureNativeLoaded()) return
-            webrtcContextInitialized = true
-            try {
-                PeerConnectionFactory.initialize(
-                    PeerConnectionFactory.InitializationOptions.builder(appContext)
-                        .setNativeLibraryLoader { true }
-                        .createInitializationOptions()
-                )
-            } catch (t: Throwable) {
-                // Not call-scoped (no generation exists yet at app/context
-                // setup time) -- generation 0 is this call's diagnostic home.
-                CallDiagnostics.failure(0L, CallStage.MEDIA_SESSION_CREATED, t)
-            }
+        private fun defaultInitializeWebRtc(context: Context): Boolean {
+            PeerConnectionFactory.initialize(
+                PeerConnectionFactory.InitializationOptions.builder(context)
+                    .setNativeLibraryLoader { true }
+                    .createInitializationOptions()
+            )
+            return true
         }
 
         private fun registerListeners(ntg: NTgCalls) {
@@ -381,8 +480,17 @@ class NativeTelegramCallMediaEngine {
                 callback?.onError("Official Telegram call transport is not available on this device/build")
                 return
             }
-            startCallInternal(
+            // Distinct from the engine() == null / UNAVAILABLE path above:
+            // the native bridge loaded fine, but WebRTC's Android layer
+            // never got a working application Context, so createP2pCall/
+            // getMediaDevices are not safe to reach yet. See
+            // ensureWebRtcContextInitialized's doc for the exact crash this
+            // prevents.
+            val context = applicationContext
+            val webRtcReady = context != null && ensureWebRtcContextInitialized(context)
+            startCallWithWebRtcGateInternal(
                 config = config,
+                webRtcReady = webRtcReady,
                 createSession = { ntg.createP2pCall(it) },
                 skipExchange = { id, key, out -> ntg.skipExchange(id, key, out) },
                 applySources = { id, cam -> applyStreamSources(ntg, id, cam) },
@@ -390,6 +498,56 @@ class NativeTelegramCallMediaEngine {
                     ntg.connectP2p(id, servers, versions, allowP2p, customParams)
                 },
                 stopSession = { ntg.stop(it) }
+            )
+        }
+
+        @VisibleForTesting
+        internal fun startCallWithWebRtcGateInternal(
+            config: CallMediaConfig,
+            webRtcReady: Boolean,
+            createSession: (Long) -> Unit,
+            skipExchange: (Long, ByteArray, Boolean) -> Unit,
+            applySources: (Long, Boolean) -> Boolean,
+            connectP2p: (Long, List<RTCServer>, List<String>, Boolean, String?) -> Unit,
+            stopSession: (Long) -> Unit
+        ) {
+            if (!webRtcReady) {
+                callback?.onConnectionStateChanged(MediaConnectionState.FAILED.ordinal)
+                callback?.onError("WebRTC Android context failed to initialize; call transport is not ready")
+                return
+            }
+            startCallInternal(config, createSession, skipExchange, applySources, connectP2p, stopSession)
+        }
+
+        /**
+         * Maps Aether's own [CallServerEndpoint] list to the exact
+         * `io.github.pytgcalls.p2p.RTCServer` constructor argument order
+         * (verified via `javap` against the shipped AAR, not assumed).
+         *
+         * [CallServerEndpoint.peerTag] is passed through exactly as-is --
+         * `null` for a real `null`, never coerced to an empty array -- so a
+         * genuine STUN/TURN (`CallServerTypeWebrtc`) server reaches
+         * ntgcalls' native `RTCServer::to_rtc_servers()` with `peer_tag`
+         * absent (`std::nullopt`) rather than being misread as a Telegram
+         * reflector. Extracted out of [startCallInternal] specifically so
+         * this mapping is directly unit-testable against the real
+         * `io.github.pytgcalls.p2p.RTCServer` Java class (a plain data
+         * holder with no native calls of its own) without needing a running
+         * native call session.
+         */
+        @VisibleForTesting
+        internal fun toRtcServers(servers: List<CallServerEndpoint>): List<RTCServer> = servers.map { server ->
+            RTCServer(
+                server.id,
+                server.ipAddress,
+                server.ipv6Address,
+                server.port,
+                server.username,
+                server.password,
+                server.supportsTurn,
+                server.supportsStun,
+                server.isTcp,
+                server.peerTag
             )
         }
 
@@ -420,20 +578,7 @@ class NativeTelegramCallMediaEngine {
                 skipExchange(config.callId, config.encryptionKey, config.isOutgoing)
                 CallDiagnostics.stage(generation, CallStage.MEDIA_SESSION_CREATED, "outgoing=${config.isOutgoing}")
 
-                val rtcServers = config.servers.map { server ->
-                    RTCServer(
-                        server.id,
-                        server.ipAddress,
-                        server.ipv6Address,
-                        server.port,
-                        server.username,
-                        server.password,
-                        server.supportsTurn,
-                        server.supportsStun,
-                        server.isTcp,
-                        server.peerTag
-                    )
-                }
+                val rtcServers = toRtcServers(config.servers)
                 CallDiagnostics.stage(generation, CallStage.P2P_CONNECTING, "servers=${rtcServers.size} p2p=${config.allowP2p}")
 
                 // ntgcalls expects capture sources to exist before transport
@@ -504,6 +649,25 @@ class NativeTelegramCallMediaEngine {
             )
         }
 
+        /**
+         * Configures both CAPTURE (this device's mic/camera going out) and
+         * PLAYBACK (the remote peer's audio/video coming in) sources.
+         *
+         * Configuring CAPTURE alone -- Aether's whole behaviour before this --
+         * is exactly why native could reach CONNECTED while nobody heard or
+         * saw anything: pinned rc02's own `StreamManager::optimize_sources`
+         * (`ntgcalls/src/media/stream_manager.cpp`) only turns on incoming
+         * audio/video on the peer connection once a PLAYBACK writer exists
+         * (`writers_.contains(Microphone)` / `writers_.contains(Camera)`).
+         * With no PLAYBACK call ever made, those writers never existed, so
+         * ICE/DTLS could finish and native could still report CONNECTED with
+         * incoming media permanently disabled at the peer-connection level.
+         *
+         * PLAYBACK failing here is never fatal to the call -- CAPTURE (this
+         * device's own outgoing audio, and the call itself) must still
+         * succeed with no speaker device enumerated; see
+         * [applyPlaybackSources]'s own doc.
+         */
         @VisibleForTesting
         internal fun applyStreamSourcesInternal(
             callId: Long,
@@ -520,6 +684,21 @@ class NativeTelegramCallMediaEngine {
                 null
             }
 
+            if (!applyCaptureSources(generation, callId, cameraEnabled, devices, streamSourceSetter, cameraSelector)) {
+                return false
+            }
+            applyPlaybackSources(generation, callId, cameraEnabled, devices, streamSourceSetter)
+            return true
+        }
+
+        private fun applyCaptureSources(
+            generation: Long,
+            callId: Long,
+            cameraEnabled: Boolean,
+            devices: MediaDevices?,
+            streamSourceSetter: (Long, StreamMode, MediaDescription) -> Unit,
+            cameraSelector: ((MediaDevices, Boolean) -> DeviceInfo?)?
+        ): Boolean {
             CallDiagnostics.stage(generation, CallStage.AUDIO_INITIALIZING, "devices=${devices?.microphone?.size ?: -1}")
             val microphone = try {
                 devices?.microphone?.firstOrNull()?.let {
@@ -569,6 +748,7 @@ class NativeTelegramCallMediaEngine {
                     StreamMode.CAPTURE,
                     MediaDescription(microphone, null, camera, null)
                 )
+                CallDiagnostics.stage(generation, CallStage.AUDIO_INITIALIZING, "CAPTURE_CONFIG audio=true camera=${camera != null}")
                 return true
             } catch (t: Throwable) {
                 CallDiagnostics.failure(generation, CallStage.AUDIO_INITIALIZING, t)
@@ -582,6 +762,7 @@ class NativeTelegramCallMediaEngine {
                             StreamMode.CAPTURE,
                             MediaDescription(microphone, null, null, null)
                         )
+                        CallDiagnostics.stage(generation, CallStage.AUDIO_INITIALIZING, "CAPTURE_CONFIG audio=true camera=false")
                         return true
                     } catch (retry: Throwable) {
                         CallDiagnostics.failure(generation, CallStage.AUDIO_INITIALIZING, retry)
@@ -589,6 +770,90 @@ class NativeTelegramCallMediaEngine {
                     }
                 }
                 return false
+            }
+        }
+
+        /**
+         * Enables incoming media on the peer connection: without this,
+         * `StreamManager::optimize_sources` never turns on incoming
+         * audio/video regardless of how healthy ICE/DTLS is (see this
+         * function's caller for the exact native proof).
+         *
+         * Two different device slots, and neither is the "obvious" one --
+         * proven against pinned rc02's own `stream_manager.cpp`, not
+         * guessed:
+         *
+         * - Audio: `optimize_sources` checks `writers_.contains(Microphone)`,
+         *   never `Speaker`. `set_stream_sources` maps
+         *   `MediaDescription.microphone` to the `Microphone` device slot
+         *   regardless of [StreamMode] -- so the real output/speaker device
+         *   must be placed in the `.microphone` field of a PLAYBACK call, or
+         *   `optimize_sources` never sees a writer there and leaves incoming
+         *   audio permanently disabled. The device itself still comes from
+         *   [MediaDevices.speaker] (a genuine output device, `is_microphone`
+         *   false in its real metadata) -- never [MediaDevices.microphone],
+         *   and never synthesized metadata.
+         * - Video: `handle_playback_config` only accepts `MediaSource.EXTERNAL`
+         *   for a PLAYBACK video slot (any other source throws
+         *   `InvalidParams("Invalid input mode")`); that registers
+         *   `Device::Camera` as an external writer and wires
+         *   `setup_video_playback_callbacks`, which is how decoded remote
+         *   frames reach `NTgCalls.onFrames` -- already plumbed through to
+         *   [handleFrames] in this class. Width/height/fps are unused on this
+         *   path (confirmed against `VideoSink::set_config`, which this
+         *   playback-mode slot never even reaches) and are left at 0.
+         *
+         * Never fatal: a device that cannot carry PLAYBACK audio (no output
+         * device enumerated) or PLAYBACK video must not fail a CAPTURE-only
+         * call that otherwise succeeded -- see [applyStreamSourcesInternal].
+         * A voice call (cameraEnabled=false) never configures playback video.
+         */
+        private fun applyPlaybackSources(
+            generation: Long,
+            callId: Long,
+            cameraEnabled: Boolean,
+            devices: MediaDevices?,
+            streamSourceSetter: (Long, StreamMode, MediaDescription) -> Unit
+        ) {
+            val playbackAudio = try {
+                devices?.speaker?.firstOrNull()?.let {
+                    AudioDescription(MediaSource.DEVICE, 48000, 1, it.metadata, false)
+                }
+            } catch (t: Throwable) {
+                CallDiagnostics.failure(generation, CallStage.AUDIO_INITIALIZING, t)
+                null
+            }
+            if (playbackAudio == null) {
+                CallDiagnostics.failure(
+                    generation,
+                    CallStage.AUDIO_INITIALIZING,
+                    IllegalStateException("No speaker/output media device is available for playback")
+                )
+            }
+
+            // A voice call never configures playback video: rendererEnabled
+            // gates handleFrames the same way, but this keeps a video-typed
+            // PLAYBACK slot from ever being opened for a call that has no
+            // camera/renderer to begin with.
+            val playbackVideo = if (cameraEnabled) {
+                VideoDescription(MediaSource.EXTERNAL, 0, 0, 0, "", false)
+            } else {
+                null
+            }
+
+            try {
+                streamSourceSetter(
+                    callId,
+                    StreamMode.PLAYBACK,
+                    MediaDescription(playbackAudio, null, playbackVideo, null)
+                )
+                CallDiagnostics.stage(
+                    generation,
+                    CallStage.AUDIO_INITIALIZING,
+                    "PLAYBACK_CONFIG audio=${playbackAudio != null} video=${playbackVideo != null}"
+                )
+            } catch (t: Throwable) {
+                CallDiagnostics.failure(generation, CallStage.AUDIO_INITIALIZING, t)
             }
         }
 

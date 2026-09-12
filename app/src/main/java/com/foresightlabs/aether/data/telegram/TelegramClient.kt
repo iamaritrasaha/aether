@@ -1568,6 +1568,22 @@ open class TelegramClient(private val application: Application) {
         _activeCallState.value = current.copy(durationSec = durationSec)
     }
 
+    /**
+     * The one path native media-transport state (see [MediaConnectionState])
+     * reaches [ActiveCall.mediaState] -- without it, native reaching
+     * CONNECTED can never make [CallStatePresenter][com.foresightlabs.aether.domain.calls.CallStatePresenter]
+     * report ACTIVE, no matter how long the call actually stays connected.
+     * Call-id-guarded like every other post-hoc mutation of
+     * [_activeCallState]: a late media callback for a call that already
+     * ended (or was replaced by a new one at the same slot) must never
+     * mutate the call that succeeded it.
+     */
+    fun updateCallMediaState(callId: Int, mediaState: MediaConnectionState) {
+        val current = _activeCallState.value ?: return
+        if (current.callId != callId) return
+        _activeCallState.value = current.copy(mediaState = mediaState)
+    }
+
     suspend fun getUser(userId: Long): User? {
         val cached = users[userId]
         if (cached != null) return TelegramMappers.mapUser(cached)
@@ -1587,6 +1603,9 @@ open class TelegramClient(private val application: Application) {
             else -> Result.failure(IllegalStateException("Failed to search call messages"))
         }
     }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun handleCallUpdateForTesting(call: TdApi.Call) = handleCallUpdate(call)
 
     private fun handleCallUpdate(call: TdApi.Call) {
         latestRawCallState.value = call
@@ -1628,17 +1647,24 @@ open class TelegramClient(private val application: Application) {
         val currentCall = _activeCallState.value
         val cachedUser = users[call.userId]?.let { TelegramMappers.mapUser(it) }
 
+        // Only the SAME call's prior state may be carried forward -- a
+        // TDLib update for a new call landing at this callId (or a stale
+        // currentCall left over from one that already ended) must never
+        // leak this or any other transient in-call UI state into it.
+        val sameCall = currentCall?.takeIf { it.callId == call.id }
+
         val updated = com.foresightlabs.aether.domain.model.ActiveCall(
             callId = call.id,
             userId = call.userId,
-            user = cachedUser ?: currentCall?.user,
+            user = cachedUser ?: sameCall?.user,
             isOutgoing = call.isOutgoing,
             isVideo = call.isVideo,
             state = stateEnum,
-            isMuted = currentCall?.isMuted ?: false,
-            isSpeakerOn = currentCall?.isSpeakerOn ?: false,
-            durationSec = if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.READY) (currentCall?.durationSec ?: 0) else 0,
-            isMinimized = currentCall?.isMinimized ?: false,
+            mediaState = sameCall?.mediaState ?: MediaConnectionState.IDLE,
+            isMuted = sameCall?.isMuted ?: false,
+            isSpeakerOn = sameCall?.isSpeakerOn ?: false,
+            durationSec = if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.READY) (sameCall?.durationSec ?: 0) else 0,
+            isMinimized = sameCall?.isMinimized ?: false,
             errorMessage = errorMsg
         )
         _activeCallState.value = updated

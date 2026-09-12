@@ -1,17 +1,26 @@
 # Calling — manual validation checklist
 
 This implementation pass is structurally complete, compiles, packages the real
-native transport, and passes its automated tests — but **none of it has been
-physically tested against official Telegram**. That testing is this
-checklist, to be run by hand on real devices. See
+native transport, and passes its automated tests. Some of it **has** now been
+physically tested (Samsung SM-M145F, Android 15, against a second, separate
+Telegram test account, at commit `a7476ab` — see
+`docs/architecture/capability-status.md`'s Calling section for exactly which
+rows): signalling delivery end to end, and every previously-crashing boundary
+(JNI symbol retention, WebRTC Android-context init, real microphone metadata,
+the native-callback classloader crash) are confirmed fixed with zero crashes
+across four real calls. **None of that testing reached `CONNECTED` or
+two-way audio** — native media consistently times out (`TIMEOUT`) around 10
+seconds into `CONNECTING`, an open issue tracked in
+`calling-native-stack.md`. Every checkbox below therefore remains
+unchecked and still needs a real run once that boundary is resolved. See
 `docs/architecture/calling-native-stack.md` for what is actually running
 under the hood, including the one assumption (video pixel format) that could
 not be confirmed without a device.
 
 Do not treat a green run of `testDebugUnitTest` / `assembleDebug` /
 `lintDebug` as evidence that any of the rows below are true. They are not
-evidence of physical interoperability with official Telegram — only this
-checklist is.
+evidence of physical interoperability with official Telegram — only a real
+device run, of the kind described above, is.
 
 ## Setup
 

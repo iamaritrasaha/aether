@@ -6,6 +6,7 @@ import com.foresightlabs.aether.calls.media.CallStage
 import com.foresightlabs.aether.calls.media.DecodedVideoFrame
 import com.foresightlabs.aether.calls.media.NativeTelegramCallMediaEngine
 import com.foresightlabs.aether.data.calls.media.TgCallsMediaEngine
+import com.foresightlabs.aether.data.notifications.ActiveConversationTracker
 import com.foresightlabs.aether.data.permissions.PermissionCoordinator
 import com.foresightlabs.aether.data.telegram.TelegramCallMessageMapper
 import com.foresightlabs.aether.data.telegram.TelegramClient
@@ -114,6 +115,13 @@ class DefaultCallsRepository(
     private val acceptedCallIds = Collections.synchronizedSet(mutableSetOf<Int>())
     private val discardedCallIds = Collections.synchronizedSet(mutableSetOf<Int>())
 
+    /**
+     * Pauses local camera capture on background and resumes it on
+     * foreground during a video call -- see [CameraBackgroundState]'s own
+     * doc for why this exists and its full race/stale-call contract.
+     */
+    private val cameraBackgroundState = CameraBackgroundState()
+
     init {
         // Every collector body is guarded: an exception raised while reacting to
         // a call update must not cancel the collector (which would silently stop
@@ -134,6 +142,19 @@ class DefaultCallsRepository(
         scope.launch {
             mediaEngine.state.collect { mediaState ->
                 guarded(CallStage.MEDIA_CONNECTED) { handleMediaStateChange(mediaState) }
+            }
+        }
+
+        // Aether declares no camera-typed foreground service (see
+        // CallService's manifest entry) -- Android does not allow camera
+        // access from a background process without one, and there is no
+        // picture-in-picture experience here to justify holding the camera
+        // open off-screen anyway. So local capture is explicitly paused the
+        // moment the app backgrounds during a video call, and restored the
+        // moment it foregrounds again, if the user still wants it on.
+        scope.launch {
+            ActiveConversationTracker.isForeground.collect { foreground ->
+                guarded(CallStage.VIDEO_INITIALIZING) { handleAppForegroundChange(foreground) }
             }
         }
 
@@ -299,6 +320,7 @@ class DefaultCallsRepository(
         // call whose camera permission was refused still connects, as audio.
         // Video initialisation must never be on the path a voice call takes.
         val videoCaptureEnabled = rawCall.isVideo && permissionCoordinator.isGranted(CallPermissions.CAMERA)
+        cameraBackgroundState.onCallStarted(videoCaptureEnabled)
         if (rawCall.isVideo && !videoCaptureEnabled) {
             CallDiagnostics.stage(generation, CallStage.VIDEO_INITIALIZING, "skipped=no_camera_permission")
         }
@@ -327,6 +349,7 @@ class DefaultCallsRepository(
             stopTimer()
             stopConnectWatchdog()
             startedMediaCallId = null
+            cameraBackgroundState.onCallEnded()
             callGeneration.incrementAndGet()
             mediaEngine.stop()
             CallService.stopService(application)
@@ -343,6 +366,39 @@ class DefaultCallsRepository(
         lastTdLibState = currentState
     }
 
+    /**
+     * Pauses local camera capture the moment the app leaves the foreground
+     * during a video call, and restores it the moment the app returns --
+     * but only if the user still wanted the camera on, never overriding a
+     * choice they made themselves (including while backgrounded, e.g. from
+     * a call notification action).
+     *
+     * Exists because Aether declares no camera-typed foreground service
+     * (see `CallService`'s manifest entry): Android does not allow camera
+     * access from a background process without one, so continuing to hold
+     * the camera open here would not silently keep working -- it would
+     * either throw or the system would revoke it. Voice audio is unaffected
+     * either way: it runs through the microphone-typed foreground service,
+     * which this never touches.
+     */
+    private fun handleAppForegroundChange(foreground: Boolean) {
+        val currentCall = activeCallState.value ?: return
+        when (cameraBackgroundState.onForegroundChanged(foreground, currentCall.isVideo, currentCall.callId)) {
+            CameraBackgroundAction.PAUSE -> {
+                CallDiagnostics.stage(callGeneration.get(), CallStage.VIDEO_INITIALIZING, "camera_paused_for_background")
+                // mediaEngine.setCameraEnabled, not this.setCameraEnabled:
+                // the latter would overwrite the tracked user preference and
+                // erase the very state this pause needs to restore later.
+                mediaEngine.setCameraEnabled(false)
+            }
+            CameraBackgroundAction.RESUME -> {
+                CallDiagnostics.stage(callGeneration.get(), CallStage.VIDEO_INITIALIZING, "camera_resumed_from_background")
+                mediaEngine.setCameraEnabled(true)
+            }
+            CameraBackgroundAction.NONE -> {}
+        }
+    }
+
     private fun handleMediaStateChange(mediaState: MediaConnectionState) {
         val generation = callGeneration.get()
         CallDiagnostics.stage(generation, mediaState.toStage(), "media=${mediaState.name}")
@@ -350,6 +406,15 @@ class DefaultCallsRepository(
         val currentCall = activeCallState.value
         if (currentCall != null) {
             val callerName = currentCall.user?.name ?: "Telegram Contact"
+
+            // Propagated for every relevant transition, not only CONNECTED:
+            // CallStatePresenter (and the RECONNECTING/STOPPED cases it
+            // handles) needs the media engine's real, current state, not a
+            // stale one frozen at whatever it was on the last CONNECTED.
+            // updateCallMediaState is itself callId-guarded, so a callback
+            // for a call this repository has already moved on from is a
+            // no-op rather than a stale mutation.
+            telegram.updateCallMediaState(currentCall.callId, mediaState)
 
             when (mediaState) {
                 MediaConnectionState.CONNECTED -> {
@@ -474,6 +539,10 @@ class DefaultCallsRepository(
     }
 
     override fun setCameraEnabled(enabled: Boolean) {
+        // The explicit user choice this call is scoped around -- see
+        // handleAppForegroundChange, which only ever restores this value,
+        // never invents its own.
+        cameraBackgroundState.onUserSetCameraEnabled(enabled)
         mediaEngine.setCameraEnabled(enabled)
     }
 

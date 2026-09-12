@@ -40,7 +40,10 @@ object TgCallsAdapter {
         videoCaptureEnabled: Boolean = false
     ): CallMediaConfig {
         val serverList = ready.servers?.map { server ->
-            var peerTag = ByteArray(0)
+            // null, never a synthesized ByteArray(0): see CallServerEndpoint.peerTag's
+            // doc for why an empty-but-present array is not a safe stand-in for
+            // absence at the native layer.
+            var peerTag: ByteArray? = null
             var isTcp = false
             var username = ""
             var password = ""
@@ -49,10 +52,12 @@ object TgCallsAdapter {
 
             when (val serverType = server.type) {
                 is TdApi.CallServerTypeTelegramReflector -> {
-                    peerTag = serverType.peerTag ?: ByteArray(0)
+                    peerTag = serverType.peerTag
                     isTcp = serverType.isTcp
                 }
                 is TdApi.CallServerTypeWebrtc -> {
+                    // peerTag stays null: this is a STUN/TURN server, never
+                    // a Telegram reflector, and must reach ntgcalls that way.
                     username = serverType.username.orEmpty()
                     password = serverType.password.orEmpty()
                     supportsTurn = serverType.supportsTurn

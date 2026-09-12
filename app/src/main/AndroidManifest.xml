@@ -10,12 +10,17 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Scoped to the active/ringing call only; see CallService and
-         docs/architecture/calling-native-stack.md. Camera is declared
-         because a video call's foreground service type must cover it too;
-         no permanent camera or microphone access is implied by declaring it. -->
+         docs/architecture/calling-native-stack.md. Microphone-typed only:
+         audio must keep flowing while Aether is backgrounded during a call,
+         which is exactly what this type exists for. There is no camera type
+         here: Aether has no picture-in-picture or background-video
+         experience to justify holding the camera open off-screen, so local
+         camera capture is explicitly paused when the app backgrounds during
+         a video call (see DefaultCallsRepository) rather than declaring a
+         permission to keep something running that was never intended to
+         keep running. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -84,15 +89,16 @@
           Scoped to the active/ringing call only; started when a call
           reaches CallStateReady or is accepted, stopped the moment it ends
           (see DefaultCallsRepository, CallService). Never a persistent
-          "Aether is running" service. The camera type is declared alongside
-          microphone because Android requires every media type a foreground
-          service actually uses to be listed; a voice-only call simply never
-          exercises the camera one.
+          "Aether is running" service. Microphone-typed only: local camera
+          capture is explicitly stopped when the app backgrounds during a
+          video call (see DefaultCallsRepository), so this service never
+          actually holds the camera while running: there is nothing to
+          declare a camera type for.
         -->
         <service
             android:name=".data.calls.CallService"
             android:exported="false"
-            android:foregroundServiceType="microphone|camera" />
+            android:foregroundServiceType="microphone" />
 
         <!--
           Bound by the FCM SDK, not a foreground service: it runs briefly to

@@ -5,7 +5,28 @@ data class CallServerEndpoint(
     val ipAddress: String,
     val ipv6Address: String,
     val port: Int,
-    val peerTag: ByteArray = ByteArray(0),
+    /**
+     * Absent (`null`) for a genuine STUN/TURN (`CallServerTypeWebrtc`)
+     * server, present for a Telegram reflector (`CallServerTypeTelegramReflector`).
+     *
+     * This distinction is load-bearing, not cosmetic: ntgcalls' native
+     * `RTCServer::to_rtc_servers()` (`ntgcalls/src/p2p/rtc_server.cpp` at
+     * the pinned rc02 commit) branches on `if (server.peer_tag)` -- and its
+     * JNI binding's `parseOptional` (`targets/android/app/src/main/jni/
+     * utils.hpp.tpl`) converts a Java field to `std::nullopt` only when the
+     * field is literally `null`; an empty-but-non-null `byte[]` still
+     * becomes a *present* `std::optional<bytes::binary>`. A synthesized
+     * `ByteArray(0)` default here was therefore silently misclassifying
+     * every WebRTC STUN/TURN server as a Telegram reflector, which
+     * `push_phone` in the same native function turns into a "phone"/
+     * reflector RTC server entry (`login = "reflector"`, `password =
+     * hex(peer_tag)`) instead of the real STUN/TURN entry -- reproduced on
+     * physical hardware as ntgcalls' own `reflector_port.cpp`: "Allocation
+     * can't be started without setting the peer tag." Never synthesize a
+     * non-null placeholder for this field; absence must reach the native
+     * layer as absence.
+     */
+    val peerTag: ByteArray? = null,
     val isTcp: Boolean = false,
     val username: String = "",
     val password: String = "",
@@ -19,7 +40,11 @@ data class CallServerEndpoint(
         if (ipAddress != other.ipAddress) return false
         if (ipv6Address != other.ipv6Address) return false
         if (port != other.port) return false
-        if (!peerTag.contentEquals(other.peerTag)) return false
+        if (peerTag != null) {
+            if (other.peerTag == null || !peerTag.contentEquals(other.peerTag)) return false
+        } else if (other.peerTag != null) {
+            return false
+        }
         if (isTcp != other.isTcp) return false
         if (username != other.username) return false
         if (password != other.password) return false
@@ -33,7 +58,7 @@ data class CallServerEndpoint(
         result = 31 * result + ipAddress.hashCode()
         result = 31 * result + ipv6Address.hashCode()
         result = 31 * result + port
-        result = 31 * result + peerTag.contentHashCode()
+        result = 31 * result + (peerTag?.contentHashCode() ?: 0)
         result = 31 * result + isTcp.hashCode()
         result = 31 * result + username.hashCode()
         result = 31 * result + password.hashCode()

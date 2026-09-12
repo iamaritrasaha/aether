@@ -81,7 +81,11 @@ fun AetherCallScreen(
     if (activeCall == null) return
 
     val colors = LocalAetherColors.current
-    val presentation = remember(activeCall) {
+    // Keyed explicitly by exactly the fields present() reads -- never by the
+    // whole activeCall instance, which also changes every second from the
+    // duration ticker and would otherwise force presentation to look stale
+    // (or force a needless recompute) on every tick that isn't its business.
+    val presentation = remember(activeCall.state, activeCall.mediaState, activeCall.isOutgoing) {
         CallStatePresenter.present(activeCall.state, activeCall.mediaState, activeCall.isOutgoing)
     }
     val isIncomingPending = !activeCall.isOutgoing && activeCall.state == CallStateEnum.PENDING
@@ -264,7 +268,7 @@ fun OngoingCallBar(
     modifier: Modifier = Modifier
 ) {
     val colors = LocalAetherColors.current
-    val presentation = remember(activeCall) {
+    val presentation = remember(activeCall.state, activeCall.mediaState, activeCall.isOutgoing) {
         CallStatePresenter.present(activeCall.state, activeCall.mediaState, activeCall.isOutgoing)
     }
 

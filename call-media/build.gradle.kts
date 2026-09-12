@@ -26,7 +26,11 @@ android {
     }
 
     lint {
-        abortOnError = false
+        // See app/build.gradle.kts's lint block for the rationale: zero
+        // errors were present when this was enabled (verified via
+        // `./gradlew :call-media:lintDebug`'s SARIF report), so this is a
+        // real gate from a clean baseline, not blanket suppression.
+        abortOnError = true
         checkReleaseBuilds = false
     }
 }

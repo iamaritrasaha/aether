@@ -140,9 +140,19 @@ class CallService : Service() {
          * Android matches each declared service type against its own runtime
          * permission and, from Android 14, throws `SecurityException` -- fatal
          * from `onStartCommand` -- when one is missing. So the type is derived
-         * from the grants rather than from what the call wishes it had: a video
-         * call whose camera was refused runs as a microphone service, and a call
+         * from the grants rather than from what the call wishes it had: a call
          * with no microphone grant claims nothing at all (`0`).
+         *
+         * Microphone-typed only, deliberately: the manifest's `CallService`
+         * declaration no longer lists `FOREGROUND_SERVICE_TYPE_CAMERA` (see
+         * its comment there) because Aether explicitly pauses local camera
+         * capture when the app backgrounds during a video call
+         * (`DefaultCallsRepository`'s foreground/background handling) rather
+         * than holding the camera open off-screen. Requesting a type the
+         * manifest does not declare throws
+         * `MissingForegroundServiceTypeException`, so `isVideo` is
+         * intentionally not consulted here -- adding it back would require
+         * re-declaring the camera type in the manifest first.
          */
         // FOREGROUND_SERVICE_TYPE_* are API 30 constants used below minSdk (24)
         // purely as compile-time int flags for ServiceCompat, which applies a
@@ -153,10 +163,7 @@ class CallService : Service() {
                 ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
             if (!granted(CallPermissions.MICROPHONE)) return 0
-            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            if (isVideo && granted(CallPermissions.CAMERA)) {
-                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-            }
+            val type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             return type
         }
 

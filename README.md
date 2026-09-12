@@ -86,10 +86,10 @@ That rule drives Aether's frosted surfaces: the material reacts to the scene beh
 | Media / documents | ✅ Active |
 | Search | ✅ Active |
 | Stories / Pulse | ✅ Active |
-| App Lock / biometrics | ✅ Active |
+| App Lock / biometrics | ⏸ Held for this milestone (implementation and stored data preserved; hidden from UI) |
 | Tablet adaptation | 🛠 In refinement |
 | Performance / media latency | 🛠 In active optimization |
-| Voice calling | ⏸ Held until real media transport is complete |
+| Voice / video calling | 🛠 Enabled, in physical validation (real TDLib + ntgcalls transport; see [calling-native-stack.md](docs/architecture/calling-native-stack.md)) |
 | Continuous live location | ⏸ Held |
 | Device contact-book sync | ⏸ Held |
 
@@ -138,8 +138,8 @@ Release builds currently target **arm64-v8a** only.
 ### Requirements
 
 - Android Studio
-- JDK 11 or newer
-- Android SDK 36
+- JDK 17 or newer to run Gradle/AGP itself (this is the toolchain Gradle runs on, separate from the app's own Java 11 bytecode target). JDK 25 is the deterministic daemon JDK this project pins via `gradle/gradle-daemon-jvm.properties` and is the recommended choice.
+- Android SDK Platform 37
 - Telegram API credentials from [my.telegram.org](https://my.telegram.org)
 - Vendored TDLib Java/JNI artifacts described in [TDLIB.md](TDLIB.md)
 
@@ -153,9 +153,21 @@ For FCM-backed background notifications, provide the untracked `app/google-servi
 
 ```bash
 ./gradlew testDebugUnitTest
-./gradlew assembleDebug
-./gradlew lintDebug
+./gradlew :app:assembleDebug
+./gradlew :app:lintDebug :call-media:lintDebug
 ```
+
+The root `./gradlew assembleDebug` (every module's own `assemble`, not just the
+app) currently **fails**, not `:app`'s: `:call-media:bundleDebugAar` — the
+`call-media` library module packaging *itself* as a standalone AAR, which
+nothing consumes — is rejected by AGP because `call-media` depends on a local
+`.aar` file (the vendored ntgcalls artifact under `call-media/libs/`), and AGP
+refuses to bundle a local `.aar` dependency into another AAR. This is a
+property of `call-media`'s own unused packaging output, not of the app: `:app`
+never consumes `call-media` as a packaged AAR (only via `project(":call-media")`),
+so `:app:assembleDebug` is unaffected and is the actual build/CI gate. The
+project as a whole does not support root `assembleDebug`; only the scoped
+per-module tasks above are the supported checks.
 
 Release signing is configured outside the repository.
 

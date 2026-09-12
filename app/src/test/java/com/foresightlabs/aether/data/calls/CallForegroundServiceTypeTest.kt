@@ -6,7 +6,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.foresightlabs.aether.domain.calls.CallPermissions
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Shadows.shadowOf
@@ -69,13 +68,24 @@ class CallForegroundServiceTypeTest {
         assertEquals(0, type and ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
     }
 
+    /**
+     * The manifest's `CallService` declaration no longer lists
+     * `FOREGROUND_SERVICE_TYPE_CAMERA` at all (see its comment there):
+     * Aether explicitly pauses local camera capture when the app
+     * backgrounds during a video call (`DefaultCallsRepository`) rather
+     * than holding the camera open off-screen, so there is nothing for a
+     * camera-typed foreground service to protect. A video call with both
+     * grants therefore claims only microphone -- requesting a type the
+     * manifest does not declare would throw
+     * `MissingForegroundServiceTypeException`.
+     */
     @Test
-    fun aVideoCallWithBothGrantsClaimsBoth() {
+    fun aVideoCallWithBothGrantsClaimsMicrophoneOnlyNotCamera() {
         grant(CallPermissions.MICROPHONE, CallPermissions.CAMERA)
 
         val type = CallService.grantedServiceType(application, isVideo = true)
-        assertTrue(type and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0)
-        assertTrue(type and ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA != 0)
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE, type)
+        assertEquals(0, type and ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
     }
 
     /**

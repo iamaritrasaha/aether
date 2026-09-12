@@ -108,8 +108,16 @@ Aether and left unsent appears in Telegram's other clients.
 
 TDLib reaching `CallStateReady` means the two sides have agreed on servers and an
 encryption key. It is **not** evidence that a single audio packet has flowed. Only
-`MediaConnectionState.CONNECTED` means audio is running, and only the media transport
-may report it.
+the media transport may report `MediaConnectionState.CONNECTED` at all -- but
+even that proves only that the peer connection's ICE/DTLS transport is
+writable, not that audio is actually flowing. ntgcalls' own
+`StreamManager::optimize_sources` only enables incoming audio/video on the
+peer connection once a PLAYBACK source has been configured (see
+`call-media/.../NativeTelegramCallMediaEngine.applyPlaybackSources`); a build
+that configures CAPTURE alone can physically reach `CONNECTED` with incoming
+media permanently disabled. Treat `CONNECTED` as "transport is up", and
+confirm actual two-way audio the same way every other claim in this file is
+confirmed: physically, on hardware.
 
 The duration timer starts from `MediaConnectionState.CONNECTED`, never from
 `CallStateReady`. Final call durations in history come from Telegram's own

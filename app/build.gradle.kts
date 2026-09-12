@@ -48,8 +48,8 @@ android {
     applicationId = "com.foresightlabs.aether"
     minSdk = 24
     targetSdk = 37
-    versionCode = 11
-    versionName = "1.5.5"
+    versionCode = 12
+    versionName = "1.5.6"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -106,7 +106,12 @@ android {
     includeInBundle = true
   }
   lint {
-    abortOnError = false
+    // A real gate, not advisory: at the time this was enabled, :app had zero
+    // lint errors (verified via `./gradlew :app:lintDebug` and its SARIF
+    // report), so no baseline was needed. A future genuine error should be
+    // fixed, not silenced -- if one is ever unavoidable, use a narrowly
+    // scoped `lint-baseline.xml` rather than reverting this to false.
+    abortOnError = true
     checkReleaseBuilds = false
   }
 }

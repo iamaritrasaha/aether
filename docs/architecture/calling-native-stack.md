@@ -24,12 +24,26 @@ media engine either loads a real native call library or it reports
 Aether now depends on **ntgcalls**, a native (C++) implementation of
 Telegram's calling protocol, published by the pytgcalls organisation.
 
-- **Dependency**: Patched release `call-media/libs/ntgcalls-3.0.0-rc02-aetherfix-arm64.aar`
-  (retaining all 191 WebRTC `jni_zero` entry points).
-  - AAR SHA-256: `9c1fcedf664e389cdb07c3475eb37fecd27c5f07c102f916517e2c000cf13394`
-  - `libntgcalls.so` SHA-256: `3529fdd5964bc52b08c90bcd4474be14a28b97a2c6dbb21e464210e13d7d3e83`
+- **Dependency**: Patched release `call-media/libs/ntgcalls-3.0.0-rc02-aetherfix-arm64.aar`,
+  carrying **two** independent local patches against the same pinned upstream
+  commit (`call-media/third-party/ntgcalls/patches/`, both required, neither
+  supersedes the other):
+  1. `retain-jni-zero-entry-points.patch` — retains all 191 WebRTC `jni_zero`
+     JNI entry points (fixes the `Java_J_N_MM6G5xGU` `UnsatisfiedLinkError`;
+     see `docs/architecture/ntgcalls-jni-forensics.md`).
+  2. `android-callback-classloader.patch` — resolves generated JNI callback
+     classes (`ConnectionInfo` and 30 others) via WebRTC's class-loader-safe
+     `GetClass` instead of a raw `FindClass`, fixing a `ClassNotFoundException`
+     crash when a native-created callback thread tried to construct one (see
+     ["The real media-connection-failure root cause"](#the-real-media-connection-failure-root-cause-physically-proven)
+     below for the full proof chain and physical verification).
+  - **Current AAR SHA-256** (`SHA256SUMS` is the source of truth for this):
+    `7b63506df1b0c7c99d2d6e7d5351dbdee8c84d80e89dd3fc02fd644f4fbc2766`
+  - **Current `libntgcalls.so` SHA-256**: `c8f48a0682987bbda592ce4bb84e2fb6d0b2c663c9ac42c47de01a89c093ceb9`
   - Upstream base: `io.github.pytgcalls:ntgcalls:3.0.0-rc02` at commit `a1616e280947452d86ac28d140fd1250d31e6959`.
-  - Upstream patch, license and checksums are located in `call-media/third-party/ntgcalls/`.
+  - Upstream patches, license and checksums are located in `call-media/third-party/ntgcalls/`
+    (`README.md` there documents both patches' rationale, exact source call
+    chains, and full reproduction steps).
 - **Source**: https://github.com/pytgcalls/ntgcalls
 - **Exact revision that produced the base binary**: git commit
   `a1616e2` (embedded in the artifact's own `BuildConfig.GIT_COMMIT`, verified
@@ -262,11 +276,14 @@ true }` (WebRTC's default loader looks for a separate
 statically linked into `libntgcalls.so`, already loaded via
 `NTgCalls.ping()`).
 
-### 3. NEW boundary found after the above two fixes: native connection-callback JNI classloader crash — NOT YET FIXED
+### 3. Native connection-callback JNI classloader crash — FIXED
 
 With both of the above fixed, a physical retest voice call progressed
 further than ever previously observed: real signalling flowed (`seq=1`,
-`seq=2` reaching TDLib successfully), then the process crashed again, fatally:
+`seq=2` reaching TDLib successfully), then the process crashed again, fatally.
+This is the **historical regression evidence** for the crash the
+`android-callback-classloader.patch` below fixes — the exact trace captured
+before the fix existed:
 
 ```
 JNI DETECTED ERROR IN APPLICATION: JNI GetMethodID called with pending
@@ -288,21 +305,49 @@ JNI environment cannot resolve app-space classes like
 native code explicitly cached a `ClassLoader` reference obtained from a
 correctly-attached thread and used `ClassLoader.loadClass()` instead.
 
-This is likely an ntgcalls-side (or WebRTC-Android-bridge-side) JNI
-integration gap, not a defect in Aether's Kotlin call orchestration — the
-crash occurs entirely inside the native→Java connection-state callback
-bridge, on a thread Aether's code never creates or touches. It was **not**
-fixed this session: the evidence does not yet point at a safe, verified
-single-variable change, and the task's own instructions are explicit about
-not guessing multi-variable native-level fixes. A plausible, untested
-mitigation worth trying next: proactively touch (`Class.forName(...)`) each
-`io.github.pytgcalls.*` callback-model class from Kotlin early, in case
-ntgcalls caches a global class reference after any successful first lookup.
+**Root cause, proven against WebRTC's own source, not guessed**:
+`wrtc::utils::GetJNIEnv()` does call `webrtc::AttachCurrentThreadIfNeeded()` —
+the calling thread genuinely is JVM-attached. The defect is JNI *class-loader*
+context, a distinct and separately-documented Android pitfall: `FindClass`
+resolves against the ClassLoader of the nearest Java stack frame on the
+calling thread, and a thread merely attached from native code has none, so it
+silently falls back to the system/bootstrap ClassLoader — which cannot see
+any app-packaged class. `sdk/android/native_api/jni/class_loader.h` (fetched
+at the pinned WebRTC commit `6f37672d358475cd17544121a12494da454d85fb`)
+documents and solves exactly this with `webrtc::GetClass`, and
+`sdk/android/native_api/base/init.cc` confirms `webrtc::InitAndroid` (which
+ntgcalls' own `JNI_OnLoad` already calls) already calls `InitClassLoader`
+internally — the correct ClassLoader was already cached and ready; ntgcalls'
+own generated JNI binding template (`targets/android/app/src/main/jni/
+utils.hpp.tpl`) simply never used it, calling raw `env->FindClass` instead.
+
+**The fix**: `android-callback-classloader.patch` changes that template's one
+`findClass(JNIEnv*, const char*)` helper — the single choke point every
+generated struct/enum `parseJ<Name>` conversion in the file routes through,
+`ConnectionInfo` included — from `env->FindClass(name)` to
+`webrtc::GetClass(env, name)`. Generic by construction: it covers all 31
+generated callback DTOs (`ConnectionInfo`, `MediaState`, `CallInfo`, `Frame`,
+etc.), not just the one that happened to crash first, and patches the
+*generator template*, so every future `cmake` configure regenerates the
+fixed binding automatically.
+
+**Physically verified fixed**, not merely believed fixed: two consecutive
+answered voice calls on the same physical Samsung SM-M145F (Android 15) that
+previously crashed with the trace above instead ran to a clean native
+`CONNECTING` → `TIMEOUT` → `FAILED` → TDLib-discard sequence with zero
+crashes, real bidirectional signalling proven end-to-end (see
+["The real media-connection-failure root cause"](#the-real-media-connection-failure-root-cause-physically-proven)
+below), and the same regression check repeated on an accidental video call
+(camera path exercises the same WebRTC-Android-context dependency as fix #2
+above) with the same clean result. Full artifact provenance for the rebuilt
+`.so` carrying this patch is in `call-media/third-party/ntgcalls/README.md`.
 
 ## Verification & quality gates
 
 The calling stack is verified across multiple levels:
-- **Static JNI proof**: 191/191 `Java_J_N_*` symbols matched between `webrtc.jar` and `libntgcalls.so` dynamic symbol table.
+- **Static JNI proof**: 191/191 `Java_J_N_*` symbols matched between `webrtc.jar` and `libntgcalls.so` dynamic symbol table, re-verified after the classloader patch rebuild (patch 1 not regressed by patch 2). 49/49 `Java_io_github_pytgcalls_*` entry points present.
 - **ELF 16 KB page alignment**: Verified via `readelf -l` (all `PT_LOAD` segments aligned to `0x4000`).
 - **Isolated JNI regression probe**: Standalone off-repo probe (`com.probe.stock` vs `com.probe.fixed`) executed on physical `arm64-v8a` hardware (Android 15), reproducing `UnsatisfiedLinkError` on stock rc02 and verifying successful codec creation on fixed AAR. In-app smoke check is covered by `ZeroTelegramJniRegressionProbeTest`.
-- **Contract tests**: Complete unit test suite in `CallMediaModuleTest` validating stream source failure boundaries, video degradation, audio fallback, and native-session cleanup on startup failures.
+- **Contract tests**: Complete unit test suite in `CallMediaModuleTest` validating stream source failure boundaries, video degradation, audio fallback, native-session cleanup on startup failures, and (added alongside the WebRTC-init hardening below) that a failed WebRTC Android-context initialization never latches as success, blocks native session creation, and can retry on a later call.
+- **Fail-closed WebRTC initialization**: `NativeTelegramCallMediaEngine` only marks WebRTC's Android context ready once `PeerConnectionFactory.initialize(...)` has itself returned without throwing; a failure is logged and leaves the flag false so a later attempt retries, and `startCall`/`isMediaTransportAvailable` require this to succeed before `createP2pCall`, `NTgCalls.getMediaDevices()`, or any other native session call is reached — "the `.so` loaded" is no longer treated as "the transport is usable".
+- **Physical device verification (2026-09-12, Samsung SM-M145F, Android 15)**: two consecutive answered outgoing voice calls plus one accidental video call, all against the current AAR (`7b63506d...`), with zero crashes of any kind (no `MM6G5xGU` `UnsatisfiedLinkError`, no `Invalid device metadata`, no `ConnectionInfo` `ClassNotFoundException`, no `JNI DETECTED ERROR`), real bidirectional signalling proven end-to-end, and a clean native `CONNECTING` → `TIMEOUT` → `FAILED` resolution (see the ICE/P2P timeout investigation below — media never reached `CONNECTED` in these tests, which remains open separately from the crashes above).

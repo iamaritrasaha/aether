@@ -10,10 +10,22 @@ Verification is tracked in four separate columns because they mean different thi
 - **Emulator verified** — exercised on a running Android instance
 - **Physically verified** — exercised against two real Telegram accounts on hardware
 
-**No row below is marked Emulator verified or Physically verified.** This machine's
-only emulator image is x86_64 while the TDLib native library Aether ships is
-arm64-only, so the app cannot be booted here; and no two-account hardware run was
-performed. Neither is claimed anywhere in this documen## Chat list
+**No row below is marked Emulator verified.** This machine's only emulator image is
+x86_64 while the TDLib and ntgcalls native libraries Aether ships are arm64-only, so
+the app cannot exercise its real native call/media path there; the emulator is used
+only for UI/navigation smoke checks, never as evidence of a native-dependent
+capability.
+
+**Calling is the one section with real physical hardware history** (Samsung
+SM-M145F, Android 15, arm64-v8a) against a second, separate Telegram account — see
+the Calling section below for exactly what was and was not verified, and at which
+commit. Every other section remains genuinely untested on hardware; "Implemented:
+yes" there means the real code path compiles, links and runs against a real
+dependency in a unit test — **STRUCTURALLY VERIFIED**, not **PHYSICALLY VERIFIED**.
+A physically verified result is only ever claimed for the specific commit it was
+observed at, never assumed to still hold after later changes until re-run.
+
+## Chat list
 
 | Capability | TDLib operation | Implemented | Unit tested | Emulator | Physical |
 | --- | --- | --- | --- | --- | --- |
@@ -134,23 +146,29 @@ performed. Neither is claimed anywhere in this documen## Chat list
 
 ## Calling
 
+`AetherFeatureFlags.CALLS_ENABLED = true`: calling is a live, enabled capability, not
+held. `AetherFeatureFlags.APP_LOCK_ENABLED = false` (unrelated capability, held for
+this milestone — see the top-level table in `README.md`).
+
 | Capability | Implemented | Unit tested | Emulator | Physical | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Signalling, both directions | yes | yes | no | no | `CreateCall`, `AcceptCall`, `DiscardCall`, `SendCallSignalingData` / `UpdateNewCallSignalingData` |
-| Call state tracking | yes | yes | no | no | `UpdateCall` + `CallStateReady` handoff |
-| Call history | yes | yes | no | no | `SearchCallMessages`; survives restart |
-| Audio routing | yes | yes | no | no | `AudioManager.setCommunicationDevice` (API 31+) and legacy earpiece / speaker / Bluetooth SCO fallbacks |
-| Mute | yes | yes | no | no | UI state flow and hardware microphone mute coordination |
-| Foreground service | yes | yes | no | no | `CallService`, typed `microphone` or `microphone\|camera` per call |
-| Telegram media transport (ntgcalls) | yes | partial | no | no | Real native library linked and packaged (see `docs/architecture/calling-native-stack.md`); JNI/config-mapping layer unit tested, the audio/video path itself is not unit-testable |
-| Voice call media path | yes | partial | no | no | `skipExchange` + `connectP2p` against TDLib's negotiated key and servers; **NOT PHYSICALLY TESTED** |
-| Video call media path | yes | partial | no | no | Camera capture + raw decoded-frame rendering; pixel-format assumption undocumented by the vendor and unverified; **NOT PHYSICALLY TESTED** |
+| Signalling, both directions | yes | yes | no | **yes** | `CreateCall`, `AcceptCall`, `DiscardCall`, `SendCallSignalingData` / `UpdateNewCallSignalingData`. Verified at commit `a7476ab` with per-boundary diagnostics: every outgoing and incoming signalling packet traced end to end with zero loss across 3 real calls. |
+| Call state tracking | yes | yes | no | **yes** | `UpdateCall` + `CallStateReady` handoff; verified at `a7476ab` alongside signalling. |
+| Call history | yes | yes | no | no | `SearchCallMessages`; survives restart. Not specifically exercised during the `a7476ab` physical session. |
+| Audio routing | yes | yes | no | no | `AudioManager.setCommunicationDevice` (API 31+) and legacy earpiece / speaker / Bluetooth SCO fallbacks. Not reachable in the `a7476ab` session — media never reached `CONNECTED`. |
+| Mute | yes | yes | no | no | Same as audio routing: gated on reaching `CONNECTED`, not reached yet. |
+| Foreground service | yes | yes | no | **yes** | `CallService`, typed `microphone` or `microphone\|camera` per call; started/stopped cleanly across all `a7476ab` test calls. |
+| Telegram media transport (ntgcalls) | yes | partial | no | **yes (crash-free)** | Real native library linked and packaged (see `docs/architecture/calling-native-stack.md`). At commit `a7476ab`: the previously-crashing `MM6G5xGU` `UnsatisfiedLinkError`, `Invalid device metadata` failure, WebRTC-Android-context null crash, and `ConnectionInfo` `ClassNotFoundException` are all physically confirmed fixed — zero crashes across 3 voice calls + 1 video call. |
+| Voice call media path | yes | yes | no | **partial** | `skipExchange` + `connectP2p` against TDLib's negotiated key and servers. Two fixes since `a7476ab`: (1) `CallServerEndpoint.peerTag` is now a genuine nullable field (was a synthesized `ByteArray(0)`, which made ntgcalls' native `RTCServer::to_rtc_servers()` misclassify every WebRTC/STUN/TURN server as a Telegram reflector) — physically confirmed on hardware to reach native `CONNECTED`, not just `CONNECTING`/`TIMEOUT`. (2) `applyPlaybackSources` now configures a PLAYBACK stream (real speaker device in the `.microphone` slot per `StreamManager::optimize_sources`) in addition to CAPTURE, and native `CONNECTED` now propagates into `ActiveCall.mediaState` so the call screen actually leaves "Connecting…". **`CONNECTED` proves the ICE/DTLS transport is writable, never that audio is actually flowing both ways — that still requires a dedicated physical retest, not yet completed against this change.** |
+| Video call media path | yes | yes | no | **partial (crash regression only)** | Camera capture + raw decoded-frame rendering; pixel-format assumption undocumented by the vendor and unverified. `applyPlaybackSources` now also configures an `EXTERNAL` PLAYBACK camera slot for a video call (per `StreamManager::handle_playback_config`/`setup_video_playback_callbacks`), which is how decoded remote frames are meant to reach `NTgCalls.onFrames` — not yet physically exercised end to end (local capture + remote decode + render) on hardware. |
 | Group calls | no | no | no | no | not offered; ntgcalls supports it, Aether does not expose it |
 
+**None of the "Physical: yes/partial" rows above have been re-verified against the
+current commit** (the WebRTC-init hardening in this change is new since `a7476ab`);
+they describe exactly what was observed at that specific commit, on a Samsung
+SM-M145F (Android 15, arm64-v8a), against a second, separate Telegram test account.
 `MediaConnectionState.UNAVAILABLE` is strictly emitted when the media transport is
-absent or fails to load. No timer or local scaffold may emit `CONNECTED` without the
-real native engine reporting a connected state. "Implemented: yes" above means the
-real code path compiles, links and runs against a real dependency -- it is
-**STRUCTURALLY VERIFIED** and **NATIVE LINK VERIFIED**, not **PHYSICALLY VERIFIED**;
-see `docs/qa/calling-manual-test-checklist.md` for the physical validation this still
-needs.
+absent or fails to load; no timer or local scaffold may emit `CONNECTED` without the
+real native engine reporting a connected state. See
+`docs/qa/calling-manual-test-checklist.md` for the outstanding physical validation
+(reaching `CONNECTED`, two-way audio, mute, routing, second call, incoming call).

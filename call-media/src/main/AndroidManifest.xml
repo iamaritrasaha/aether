@@ -4,7 +4,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Microphone-typed only: see app/src/main/AndroidManifest.xml's
+         CallService declaration for why there is no camera-typed foreground
+         service permission here. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
 
 </manifest>

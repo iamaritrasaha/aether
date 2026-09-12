@@ -1,0 +1,113 @@
+name: Android CI
+
+# Debug-only CI: no Telegram API credentials, no Firebase config
+# (google-services.json), and no release signing secrets are required for
+# any job here. `app/build.gradle.kts` already treats all three as optional
+# for a debug build (BuildConfig fields default empty/false; the
+# google-services plugin is only applied when the file exists), and debug
+# signing uses the toolchain's own auto-created debug keystore.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-native-artifact:
+    name: Verify vendored ntgcalls AAR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify AAR and its contents against SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd call-media
+
+          expected_hash_for() {
+            # SHA256SUMS lines are "<sha256>  <path>" (sha256sum's own
+            # format); match on the exact path field, not a substring.
+            awk -v p="$1" '$2 == p { print $1 }' third-party/ntgcalls/SHA256SUMS
+          }
+
+          verify() {
+            local file="$1" rel_path="$2"
+            local expected actual
+            expected=$(expected_hash_for "$rel_path")
+            if [ -z "$expected" ]; then
+              echo "::error::No SHA256SUMS entry found for $rel_path"
+              exit 1
+            fi
+            actual=$(sha256sum "$file" | awk '{print $1}')
+            if [ "$expected" != "$actual" ]; then
+              echo "::error::$rel_path hash mismatch: expected $expected, got $actual"
+              exit 1
+            fi
+            echo "OK: $rel_path matches SHA256SUMS ($actual)"
+          }
+
+          AAR=libs/ntgcalls-3.0.0-rc02-aetherfix-arm64.aar
+          verify "$AAR" "ntgcalls-3.0.0-rc02-aetherfix-arm64.aar"
+
+          WORKDIR=$(mktemp -d)
+          unzip -q "$AAR" -d "$WORKDIR"
+          verify "$WORKDIR/jni/arm64-v8a/libntgcalls.so" "jni/arm64-v8a/libntgcalls.so"
+          verify "$WORKDIR/libs/webrtc.jar" "libs/webrtc.jar"
+          verify "$WORKDIR/classes.jar" "classes.jar"
+
+  build-and-test:
+    name: Test, assemble, lint
+    needs: verify-native-artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 25 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Android SDK Platform 37 and build tools
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" \
+            "platform-tools" \
+            "platforms;android-37.0" \
+            "build-tools;36.0.0"
+
+      - name: Unit tests (call-media + app)
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      # Scoped to :app deliberately, not the bare `assembleDebug` aggregate:
+      # `:call-media:bundleDebugAar` (call-media's own, never-consumed
+      # standalone AAR output) fails under current AGP because it depends on
+      # a local .aar file (the vendored ntgcalls artifact) -- AGP refuses to
+      # bundle a local .aar dependency into another AAR. This is pre-existing
+      # and harmless: :app never consumes call-media as a packaged AAR, only
+      # via project(":call-media"), and :app:assembleDebug (the actual
+      # shippable artifact) builds cleanly.
+      - name: Assemble debug (app)
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Lint (app + call-media)
+        run: ./gradlew --no-daemon :app:lintDebug :call-media:lintDebug
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/reports/lint-results-*.html
+            **/build/reports/lint-results-*.sarif
+          retention-days: 7
