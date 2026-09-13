@@ -161,10 +161,12 @@ class CallService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Telegram calls carry their Beta label everywhere the user sees
+        // them; the active-call screen itself stays warning-free.
         val statusText = when {
-            isConnected && isVideo -> "Video Call Active"
-            isConnected -> "Voice Call Active"
-            else -> "Connecting call…"
+            isConnected && isVideo -> "Video Call Active · Telegram (Beta)"
+            isConnected -> "Voice Call Active · Telegram (Beta)"
+            else -> "Connecting call… · Telegram (Beta)"
         }
 
         return NotificationCompat.Builder(this, AetherApplication.CHANNEL_CALLS)

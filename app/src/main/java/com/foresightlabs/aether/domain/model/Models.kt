@@ -451,7 +451,9 @@ data class ActiveCall(
     /** Facing of the camera the engine actually selected. */
     val isFrontCamera: Boolean = true,
     /** Wall-clock (epoch ms) at which the media transport itself reported CONNECTED; null before that. */
-    val connectedAtMs: Long? = null
+    val connectedAtMs: Long? = null,
+    /** Which calling transport owns this call. Never mixed: backend callbacks must check this before mutating. */
+    val backend: com.foresightlabs.aether.domain.calls.CallBackend = com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA
 )
 
 enum class CallOutcome {

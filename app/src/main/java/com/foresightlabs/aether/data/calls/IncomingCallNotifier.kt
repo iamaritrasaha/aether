@@ -75,7 +75,7 @@ class IncomingCallNotifier(private val context: Context) {
         val notification: Notification = NotificationCompat.Builder(context, AetherApplication.CHANNEL_CALLS)
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentTitle(callerName)
-            .setContentText(if (isVideo) "Incoming video call" else "Incoming voice call")
+            .setContentText((if (isVideo) "Incoming video call" else "Incoming voice call") + " · Telegram Call (Beta)")
             .setOngoing(true)
             .setContentIntent(pendingOpen)
             .setCategory(NotificationCompat.CATEGORY_CALL)

@@ -95,6 +95,13 @@ fun AetherCallScreen(
 ) {
     if (activeCall == null) return
 
+    // Back does NOT end the call: the canonical call state lives outside this
+    // composable. Back only leaves the surface -- the call keeps running in
+    // the background (foreground-service notification persists) and the
+    // owning conversation's animated call icon is the way back in. There is
+    // deliberately no floating call bar anywhere else in the app.
+    androidx.activity.compose.BackHandler(enabled = true) { onMinimize() }
+
     val colors = LocalAetherColors.current
     // Keyed explicitly by exactly the fields present() reads -- never by the
     // whole activeCall instance, which also changes every second from the
@@ -330,63 +337,6 @@ fun AetherCallScreen(
             }
 
             Spacer(modifier = Modifier.height(44.dp))
-        }
-    }
-}
-
-/**
- * The minimised call, shown while the user is elsewhere in the app. Same
- * language, same state source -- only smaller.
- */
-@Composable
-fun OngoingCallBar(
-    activeCall: ActiveCall,
-    onExpand: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val colors = LocalAetherColors.current
-    val presentation = remember(activeCall.state, activeCall.mediaState, activeCall.isOutgoing) {
-        CallStatePresenter.present(activeCall.state, activeCall.mediaState, activeCall.isOutgoing, activeCall.mediaEverConnected)
-    }
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(colors.surfaceElevated)
-            .border(0.5.dp, AetherCallUi.ControlBorder, RoundedCornerShape(18.dp))
-            .clickable(onClick = onExpand)
-            .padding(horizontal = 16.dp, vertical = 11.dp)
-            .testTag("ongoing_call_bar")
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(colors.accent)
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(
-                text = activeCall.user?.name ?: "Call",
-                fontFamily = ManropeFontFamily,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.textPrimary
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Text(
-                text = callStatusText(presentation, activeCall.durationSec, activeCall.isVideo),
-                fontFamily = ManropeFontFamily,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = colors.textSecondary
-            )
         }
     }
 }

@@ -20,6 +20,7 @@ import com.foresightlabs.aether.data.network.AetherConnectivityObserver
 import com.foresightlabs.aether.data.security.AppLockCoordinator
 import com.foresightlabs.aether.data.security.AppLockRepository
 import com.foresightlabs.aether.domain.calls.CallsRepository
+import kotlinx.coroutines.launch
 
 class AetherApplication : Application(), ImageLoaderFactory {
     lateinit var telegram: TelegramClient
@@ -47,6 +48,20 @@ class AetherApplication : Application(), ImageLoaderFactory {
             telegram = telegram,
             application = this,
             permissionCoordinator = permissionCoordinator
+        )
+    }
+
+    /**
+     * The one canonical active call across BOTH call backends
+     * ([com.foresightlabs.aether.domain.calls.CallBackend]): a LiveKit call
+     * and a Telegram call must never coexist -- they would fight over the
+     * microphone, camera and audio focus. App surfaces observe this, never a
+     * backend's flow directly.
+     */
+    val callHub: com.foresightlabs.aether.domain.calls.CallHub by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        com.foresightlabs.aether.domain.calls.CallHub(
+            telegramState = (callsRepository as DefaultCallsRepository).activeCallState,
+            scope = applicationScope
         )
     }
 
@@ -132,6 +147,22 @@ class AetherApplication : Application(), ImageLoaderFactory {
             override fun onActivityDestroyed(activity: android.app.Activity) {}
         })
         telegram.start()
+
+        // Cross-backend preemption: when the OTHER backend's newer call takes
+        // the single call slot, the displaced backend tears its own call down.
+        // Each side only ever reacts to its own name here -- backend isolation.
+        applicationScope.launch {
+            callHub.preemptedBackend.collect { preempted ->
+                if (preempted == com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA) {
+                    val repo = callsRepository
+                    repo.activeCallState.value?.callId?.let { callId ->
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                            repo.discardCall(callId)
+                        }
+                    }
+                }
+            }
+        }
         telegram.setOnline(false)
         registerExistingFcmToken()
     }

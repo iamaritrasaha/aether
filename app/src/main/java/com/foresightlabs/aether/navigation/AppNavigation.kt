@@ -75,7 +75,6 @@ import com.foresightlabs.aether.ui.contacts.ContactsScreen
 import com.foresightlabs.aether.ui.about.AboutScreen
 import com.foresightlabs.aether.ui.calls.AetherCallScreen
 import com.foresightlabs.aether.ui.home.HomeScreen
-import com.foresightlabs.aether.ui.calls.OngoingCallBar
 import com.foresightlabs.aether.ui.conversation.ConversationScreen
 import com.foresightlabs.aether.ui.profile.ProfileScreen
 import com.foresightlabs.aether.ui.pulse.PulseScreen
@@ -862,9 +861,11 @@ fun AetherApp(
         } else {
             null
         }
-        val activeCall by (callsRepository?.activeCallState
-            ?: kotlinx.coroutines.flow.flowOf<com.foresightlabs.aether.domain.model.ActiveCall?>(null))
-            .collectAsStateWithLifecycle(initialValue = null)
+        // The ONE canonical call across both backends (Aether/LiveKit and
+        // Telegram Beta). Surfaces observe the hub, never a backend flow.
+        val activeCall by (application as? AetherApplication)?.callHub?.activeCall
+            ?.collectAsStateWithLifecycle(initialValue = null)
+            ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<com.foresightlabs.aether.domain.model.ActiveCall?>(null) }
         val navScope = rememberCoroutineScope()
 
         var remoteVideoFrame by remember { mutableStateOf<com.foresightlabs.aether.calls.media.DecodedVideoFrame?>(null) }
@@ -884,13 +885,13 @@ fun AetherApp(
             }
         }
 
-        if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED && activeCall != null) {
-            if (activeCall!!.isMinimized) {
-                OngoingCallBar(
-                    activeCall = activeCall!!,
-                    onExpand = { callsRepository?.setMinimized(false) }
-                )
-            } else {
+        // The active call renders as this full-screen surface or NOT AT ALL:
+        // there is deliberately no floating call bar/pill anywhere else in the
+        // app. Back from the call screen leaves the call running in the
+        // background (foreground-service notification persists); the owning
+        // conversation's animated call icon is the way back in.
+        if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED && activeCall != null && !activeCall!!.isMinimized) {
+            run {
                 AetherCallScreen(
                     activeCall = activeCall,
                     onAcceptCall = { callId ->
