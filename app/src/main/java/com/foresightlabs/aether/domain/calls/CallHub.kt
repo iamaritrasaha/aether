@@ -81,6 +81,43 @@ class CallHub(
         recomputePreemption()
     }
 
+    /**
+     * How a backend un-minimizes ITS OWN call (Telegram: repository
+     * setMinimized; Aether: its repository). Registered by app wiring, because
+     * the hub is backend-agnostic and must never reach into a backend
+     * directly.
+     */
+    private val resumeHandlers = mutableMapOf<CallBackend, () -> Unit>()
+
+    fun registerResumeHandler(backend: CallBackend, handler: () -> Unit) {
+        resumeHandlers[backend] = handler
+    }
+
+    /**
+     * Reopens the active call's full-screen surface (the animated call icon's
+     * action). Dispatches to whichever backend owns the current call; a no-op
+     * when no call is live or no handler registered.
+     */
+    fun resumeActiveCall() {
+        val call = activeCall.value ?: return
+        resumeHandlers[call.backend]?.invoke()
+    }
+
+    private val minimizeHandlers = mutableMapOf<CallBackend, () -> Unit>()
+
+    fun registerMinimizeHandler(backend: CallBackend, handler: () -> Unit) {
+        minimizeHandlers[backend] = handler
+    }
+
+    /**
+     * Back from the call screen: leaves the surface, keeps the call running.
+     * Dispatches to the owning backend; a no-op with no active call.
+     */
+    fun minimizeActiveCall() {
+        val call = activeCall.value ?: return
+        minimizeHandlers[call.backend]?.invoke()
+    }
+
     /** The one visible call, whichever backend owns it. */
     val activeCall: StateFlow<ActiveCall?> = combine(_telegramCall, _aetherCall) { telegram, aether ->
         resolveSingleActiveCall(telegram, aether)

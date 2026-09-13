@@ -62,7 +62,14 @@ class AetherApplication : Application(), ImageLoaderFactory {
         com.foresightlabs.aether.domain.calls.CallHub(
             telegramState = (callsRepository as DefaultCallsRepository).activeCallState,
             scope = applicationScope
-        )
+        ).also { hub ->
+            hub.registerResumeHandler(
+                com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA
+            ) { callsRepository.setMinimized(false) }
+            hub.registerMinimizeHandler(
+                com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA
+            ) { callsRepository.setMinimized(true) }
+        }
     }
 
     val liveLocationCoordinator: com.foresightlabs.aether.data.location.LiveLocationCoordinator by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {

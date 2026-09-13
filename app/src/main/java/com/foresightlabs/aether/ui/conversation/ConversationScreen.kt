@@ -248,6 +248,10 @@ fun ConversationScreen(
     resolveError: String? = null,
     onRetryResolve: () -> Unit = {},
     onStartVoiceCall: () -> Unit = {},
+    /** Reopens the minimized active call owned by THIS conversation (animated call icon's action). */
+    onResumeCall: () -> Unit = {},
+    /** True while THIS conversation owns the active call (chat-scoped). */
+    ownsActiveCall: Boolean = false,
     onStartVideoCall: () -> Unit = {},
     /** Null when calling is disabled, media transport is unavailable, or this chat is ineligible. */
     activeCall: com.foresightlabs.aether.domain.model.ActiveCall? = null,
@@ -383,14 +387,22 @@ fun ConversationScreen(
     }
     val isCallLive = callPresentationState != com.foresightlabs.aether.domain.calls.CallPresentationState.IDLE &&
         callPresentationState != com.foresightlabs.aether.domain.calls.CallPresentationState.ENDED
+    // True while THIS conversation's call is minimized (still running in the
+    // background): the header's call icon becomes the animated return control.
+    val resumeControl = isCallLive && activeCall?.isMinimized == true
     // Camera starts on for a video call and off for a voice call; keyed on the
     // call's id so a new call (video or voice) always starts from that default
     // rather than inheriting the previous call's toggle.
     var isCameraEnabled by remember(activeCall?.callId) { mutableStateOf(activeCall?.isVideo ?: false) }
     // The Curtain follows the call's real lifecycle rather than the reverse:
     // this conversation never decides a call exists, it only reflects one.
-    LaunchedEffect(isCallLive) {
-        curtainState = if (isCallLive) {
+    // The Curtain shows only while the full-screen call surface is up. After
+    // Back (the call is minimized -- still running, foreground-service
+    // notification persists) the conversation returns to its normal composer;
+    // the header's animated call icon is the way back in.
+    val callScreenDocked = isCallLive && activeCall?.isMinimized != true
+    LaunchedEffect(isCallLive, activeCall?.isMinimized) {
+        curtainState = if (callScreenDocked) {
             CurtainState.CALL
         } else if (curtainState == CurtainState.CALL) {
             CurtainState.COMPOSER
@@ -1462,12 +1474,21 @@ fun ConversationScreen(
             // No disabled/greyed state on purpose: an ineligible or
             // feature-flagged-off conversation gets no icon at all, not one
             // that looks tappable and silently does nothing.
+            // The active-call return control: while THIS conversation owns
+            // the (minimized) call, the ordinary call icon carries the
+            // animated perimeter and resumes the call instead of starting a
+            // new one. Ownership is exactly this chat's -- a different
+            // conversation's icons stay normal.
+            onResumeCall = onResumeCall,
+            ownsActiveCall = resumeControl,
             onCall = if (
                 com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED &&
-                !isCallLive &&
-                com.foresightlabs.aether.domain.calls.CallEligibility.isEligible(chat.conversationClass, isCallMediaAvailable)
+                (resumeControl || (
+                    !isCallLive &&
+                        com.foresightlabs.aether.domain.calls.CallEligibility.isEligible(chat.conversationClass, isCallMediaAvailable)
+                    ))
             ) {
-                onStartVoiceCall
+                if (resumeControl) onResumeCall else onStartVoiceCall
             } else {
                 null
             },
@@ -2092,6 +2113,10 @@ fun ConversationIdentityHeader(
     onOpenProfile: () -> Unit = {},
     /** Null hides the call action entirely -- see [com.foresightlabs.aether.domain.calls.CallEligibility]. */
     onCall: (() -> Unit)? = null,
+    /** Reopens the minimized active call owned by THIS conversation (the animated icon's action). */
+    onResumeCall: () -> Unit = {},
+    /** True while THIS conversation owns the active call: the call icon becomes the animated return control. */
+    ownsActiveCall: Boolean = false,
     /** Null hides the video call action entirely -- same eligibility rule as [onCall]. */
     onVideoCall: (() -> Unit)? = null,
     pinned: Message? = null,
@@ -2201,7 +2226,10 @@ fun ConversationIdentityHeader(
                         }
 
                         if (onCall != null) {
-                            ConversationCallButton(onClick = onCall)
+                            ConversationCallButton(
+                                onClick = onCall,
+                                ownsActiveCall = ownsActiveCall
+                            )
                         }
 
                         // Mac-like restrained optical search button

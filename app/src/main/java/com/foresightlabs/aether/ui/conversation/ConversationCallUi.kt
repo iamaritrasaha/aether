@@ -1,5 +1,6 @@
 package com.foresightlabs.aether.ui.conversation
 
+import com.foresightlabs.aether.ui.calls.activeCallPerimeter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,7 +48,9 @@ import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 @Composable
 fun ConversationCallButton(
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** True while THIS conversation owns the active call: the button becomes the animated return control. */
+    ownsActiveCall: Boolean = false
 ) {
     Box(
         modifier = modifier
@@ -57,13 +60,19 @@ fun ConversationCallButton(
                 indication = ripple(bounded = false, radius = 24.dp),
                 onClick = onClick
             )
-            .semantics { this.contentDescription = "Call" }
+            .semantics {
+                this.contentDescription =
+                    if (ownsActiveCall) "Return to active call" else "Call"
+            }
             .testTag("conversation_call_button"),
         contentAlignment = Alignment.Center
     ) {
         Box(
             modifier = Modifier
                 .size(40.dp)
+                .then(
+                    Modifier.activeCallPerimeter(ownsActiveCall)
+                )
                 .clip(CircleShape)
                 .background(Color(0x22FFFFFF))
                 .border(width = 0.5.dp, color = Color(0x18FFFFFF), shape = CircleShape),

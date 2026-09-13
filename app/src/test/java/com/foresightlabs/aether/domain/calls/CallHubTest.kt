@@ -135,4 +135,51 @@ class CallHubTest {
             ActiveCall(callId = 1, userId = 1L, user = null).backend
         )
     }
+
+    @Test
+    fun resumeDispatchesToTheOwningBackendOnly() {
+        val telegram = MutableStateFlow<ActiveCall?>(telegramCall())
+        val hub = CallHub(telegram, kotlinx.coroutines.CoroutineScope(dispatcher))
+        var telegramResumes = 0
+        var aetherResumes = 0
+        hub.registerResumeHandler(CallBackend.TELEGRAM_BETA) { telegramResumes++ }
+        hub.registerResumeHandler(CallBackend.AETHER) { aetherResumes++ }
+
+        hub.resumeActiveCall()
+        assertEquals(1, telegramResumes)
+        assertEquals(0, aetherResumes)
+
+        hub.setAetherCall(aetherCall())
+        hub.resumeActiveCall()
+        assertEquals(1, telegramResumes)
+        assertEquals(1, aetherResumes)
+    }
+
+    @Test
+    fun minimizeDispatchesToTheOwningBackendAndIsANoOpWithoutACall() {
+        val telegram = MutableStateFlow<ActiveCall?>(null)
+        val hub = CallHub(telegram, kotlinx.coroutines.CoroutineScope(dispatcher))
+        var minimizes = 0
+        hub.registerMinimizeHandler(CallBackend.TELEGRAM_BETA) { minimizes++ }
+
+        hub.minimizeActiveCall()
+        assertEquals(0, minimizes)
+
+        telegram.value = telegramCall()
+        hub.minimizeActiveCall()
+        assertEquals(1, minimizes)
+    }
+
+    @Test
+    fun chatScopedOwnershipContract() {
+        // The conversation header's ownership check is chat-scoped by the
+        // caller (activeCallForThisChat); the hub contract this relies on is
+        // that the visible activeCall carries the owning backend and the
+        // minimized flag untouched -- resume vs. initiate is derived there.
+        val call = telegramCall().copy(isMinimized = true)
+        val telegram = MutableStateFlow<ActiveCall?>(call)
+        val hub = CallHub(telegram, kotlinx.coroutines.CoroutineScope(dispatcher))
+        assertTrue(hub.activeCall.value!!.isMinimized)
+        assertEquals(CallBackend.TELEGRAM_BETA, hub.activeCall.value!!.backend)
+    }
 }

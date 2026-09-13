@@ -902,7 +902,7 @@ fun AetherApp(
                     },
                     onToggleMute = { callsRepository?.toggleMute() },
                     onToggleSpeaker = { callsRepository?.toggleSpeaker() },
-                    onMinimize = { callsRepository?.setMinimized(true) },
+                    onMinimize = { (application as? AetherApplication)?.callHub?.minimizeActiveCall() },
                     remoteVideoFrame = remoteVideoFrame,
                     localVideoFrame = localVideoFrame,
                     // Camera intent lives on ActiveCall itself (synced from the
@@ -1064,6 +1064,8 @@ private fun ConversationRoute(
             onStartVoiceCall = { startConversationCall(false) },
             onStartVideoCall = { startConversationCall(true) },
             activeCall = activeCallForThisChat,
+            onResumeCall = { (application as? AetherApplication)?.callHub?.resumeActiveCall() },
+            ownsActiveCall = activeCallForThisChat?.isMinimized == true,
             isCallMediaAvailable = viewModel.isCallMediaAvailable,
             onToggleCallMute = viewModel::toggleCallMute,
             onToggleCallSpeaker = viewModel::toggleCallSpeaker,
