@@ -117,7 +117,13 @@ class CallService : Service() {
             return START_NOT_STICKY
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
+        // START_NOT_STICKY, deliberately: a call is a live session, not
+        // restartable state. If the system kills the process mid-call, the
+        // native session and TDLib call state die with it; a sticky restart
+        // would re-post an active-call notification for a call that no longer
+        // exists. The repository re-promotes the service explicitly (fresh
+        // intent, fresh extras) whenever a call is actually live.
     }
 
     /** Opens Aether's main surface -- used when a notification action must be
