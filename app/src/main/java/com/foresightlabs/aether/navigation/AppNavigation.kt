@@ -1044,6 +1044,7 @@ private fun ConversationRoute(
             onSendDocument = { path, caption, reply -> viewModel.sendDocument(path, caption, reply?.id) },
             onSendPhotoAlbum = { paths, caption, reply -> viewModel.sendPhotoAlbum(paths, caption, reply?.id) },
             onSendMixedBatch = { items, caption, reply -> viewModel.sendSharedBatch(items, caption, reply?.id) },
+            onResolveMessage = { id -> viewModel.resolveReplyEditTarget(id) },
             onSendVoiceNote = { path, duration, wave, reply -> viewModel.sendVoiceNote(path, duration, wave, reply?.id) },
             onEditMessage = viewModel::editMessage, onAddReaction = viewModel::addReaction,
             onPinMessage = viewModel::pinMessage, onComposerChanged = viewModel::onComposerChanged,

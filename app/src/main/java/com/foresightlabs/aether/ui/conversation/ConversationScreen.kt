@@ -295,6 +295,8 @@ fun ConversationScreen(
     onJumpConsumed: () -> Unit = {},
     /** fileId, isRetry -- called when the media viewer opens on a file TDLib hasn't finished fetching. */
     onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
+    /** Exact re-resolution of a saved reply/edit target id (recreation support). */
+    onResolveMessage: suspend (String) -> com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome = { com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome.Unavailable },
     /** A message's content was actually opened (photo/video shown full-screen) -- see ConversationViewModel.openMessageContent. What a view-once photo/video is waiting on to begin self-destructing. */
     onOpenMessageContent: (String) -> Unit = {},
     messageMotionEvents: Map<String, MessageMotionEvent> = emptyMap(),
@@ -321,12 +323,38 @@ fun ConversationScreen(
 
     // Held as ids, not Message objects, and saveable: rotating mid-reply or
     // mid-edit must not orphan the composer state (an edit that silently
-    // lost its target also lost the text being edited). The Message objects
-    // re-resolve from the chat's loaded messages on restore.
+    // lost its target also lost the text being edited). Targets are
+    // re-resolved EXACTLY: from the materialized window when present,
+    // otherwise from TDLib via [onResolveMessage] -- a target that was
+    // deleted clears the operation, a transient failure keeps it.
     var replyingToMessageId by rememberSaveable { mutableStateOf<String?>(null) }
     var editingMessageId by rememberSaveable { mutableStateOf<String?>(null) }
-    val replyingToMessage = replyingToMessageId?.let { id -> messages.firstOrNull { it.id == id } }
-    val editingMessage = editingMessageId?.let { id -> messages.firstOrNull { it.id == id } }
+    var replyEditState by remember { mutableStateOf(ReplyEditState(outOfWindow = emptyMap(), replyId = null, editId = null)) }
+    LaunchedEffect(replyingToMessageId, editingMessageId, messages) {
+        var state = ReplyEditState(replyEditState.outOfWindow, replyingToMessageId, editingMessageId)
+        val materializedIds = messages.map { it.id }.toSet()
+        for (id in listOfNotNull(state.replyId, state.editId).distinct()) {
+            if (id in materializedIds || state.outOfWindow.containsKey(id)) continue
+            state = resolveReplyEditTarget(
+                state = state,
+                id = id,
+                materializedIds = materializedIds,
+                outcome = onResolveMessage(id)
+            )
+        }
+        // Write the settled ids back: a cleared (deleted) target must not
+        // linger in the saveable state, or every later run would re-resolve
+        // it and the send would silently go out without its reply.
+        replyEditState = state
+        if (replyingToMessageId != state.replyId) replyingToMessageId = state.replyId
+        if (editingMessageId != state.editId) editingMessageId = state.editId
+    }
+    val replyingToMessage = replyingToMessageId?.let { id ->
+        messages.firstOrNull { it.id == id } ?: replyEditState.outOfWindow[id]
+    }
+    val editingMessage = editingMessageId?.let { id ->
+        messages.firstOrNull { it.id == id } ?: replyEditState.outOfWindow[id]
+    }
     var selectedContextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var forwardingMessages by remember { mutableStateOf<List<Message>>(emptyList()) }
     var replyQuote by remember { mutableStateOf<ReplyQuote?>(null) }

@@ -482,6 +482,18 @@ class ConversationViewModel(
         }
     }
 
+    /**
+     * Exact re-resolution of a composer reply/edit target after recreation.
+     * See TelegramClient.resolveReplyEditTarget for the Missing-vs-
+     * Unavailable distinction this must preserve.
+     */
+    suspend fun resolveReplyEditTarget(messageId: String): ReplyEditTargetOutcome {
+        val id = messageId.toLongOrNull() ?: return ReplyEditTargetOutcome.Missing
+        val chatId = activeChatId
+        if (chatId == 0L) return ReplyEditTargetOutcome.Unavailable
+        return telegram.resolveReplyEditTarget(chatId, id)
+    }
+
     fun sendVideo(videoPath: String, caption: String = "", duration: Int = 0, replyToId: String? = null, viewOnce: Boolean = false) {
         if (mediaSendInFlight) return
         mediaSendInFlight = true

@@ -3662,6 +3662,35 @@ open class TelegramClient(private val application: Application) {
         }
     }
 
+    /**
+     * Exact single-message resolution for composer reply/edit targets.
+     *
+     * After Activity recreation the saved target id may sit outside the
+     * re-materialized message window; [TdApi.GetMessage] answers for any
+     * message the account can see, independent of the window. A
+     * MESSAGE_ID_INVALID error means the message was deleted (or never
+     * existed) and the composer operation must be cleared; any other failure
+     * (typically network) is [ReplyEditResolution.Unavailable] so the caller
+     * KEEPS the operation and can retry later instead of silently dropping a
+     * reply the user believes is attached.
+     */
+    suspend fun resolveReplyEditTarget(chatId: Long, messageId: Long): com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome {
+        if (chatId == 0L || messageId == 0L) return com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome.Missing
+        return when (val result = send(TdApi.GetMessage(chatId, messageId))) {
+            is TdApi.Message -> {
+                rawMessages[result.id] = result
+                com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome.Resolved(mapUiMessage(result))
+            }
+            is TdApi.Error ->
+                if (result.code == 400 && result.message.contains("MESSAGE_ID_INVALID")) {
+                    com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome.Missing
+                } else {
+                    com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome.Unavailable
+                }
+            else -> com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome.Unavailable
+        }
+    }
+
     private fun mapUiMessage(message: TdApi.Message): Message {
         rawMessages[message.id] = message
         val lastRead = chats[message.chatId]?.lastReadOutboxMessageId ?: 0L
