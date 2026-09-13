@@ -108,6 +108,30 @@ fun MediaViewer(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
+    // Pre-Android-10 saving goes through ACTION_CREATE_DOCUMENT: the user
+    // picks the destination (real Downloads, Drive, whatever they choose),
+    // no storage permission is involved, and the toast can never promise a
+    // location the file did not go to. Q+ keeps MediaStore.Downloads, which
+    // IS the public Downloads collection.
+    var pendingSaveSource by remember { mutableStateOf<java.io.File?>(null) }
+    val saveDocumentLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument(
+            mimeTypeFor(activeItem.url.substringAfterLast('/'), activeItem.isVideo)
+        )
+    ) { uri ->
+        val source = pendingSaveSource
+        pendingSaveSource = null
+        if (uri == null || source == null) return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                java.io.FileInputStream(source).use { input -> input.copyTo(out) }
+            }
+            android.widget.Toast.makeText(context, "Saved", android.widget.Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+            android.widget.Toast.makeText(context, "Failed to save media", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     androidx.activity.compose.BackHandler(enabled = isVisible) {
         onClose()
     }
@@ -461,7 +485,20 @@ fun MediaViewer(
                             modifier = Modifier
                                 .size(32.dp)
                                 .clip(CircleShape)
-                                .clickable { saveMediaToDownloads(context, activeItem) },
+                                .clickable {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        saveMediaToDownloads(context, activeItem)
+                    } else {
+                        val path = (if (activeItem.isVideo) activeItem.videoLocalPath else activeItem.url).removePrefix("file://")
+                        val source = java.io.File(path)
+                        if (!source.exists()) {
+                            android.widget.Toast.makeText(context, "Media file not available locally", android.widget.Toast.LENGTH_SHORT).show()
+                        } else {
+                            pendingSaveSource = source
+                            saveDocumentLauncher.launch(source.name)
+                        }
+                    }
+                },
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -568,7 +605,8 @@ private fun MediaViewerShell(
     }
 }
 
-private fun mimeTypeFor(fileName: String, isVideo: Boolean): String {
+internal fun mimeTypeFor(fileName: String, isVideo: Boolean): String {
+    // package-private for the MIME/name unit test; behaviour is pure.
     val extension = fileName.substringAfterLast('.', "").lowercase()
     val mapped = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
     return when {
@@ -632,10 +670,9 @@ private fun saveMediaToDownloads(context: Context, mediaItem: MediaItem) {
                 Toast.makeText(context, "Saved to Downloads", Toast.LENGTH_SHORT).show()
             }
         } else {
-            // Pre-Q: the public Downloads directory needs WRITE_EXTERNAL_STORAGE,
-            // which Aether does not hold -- the write failed with only a toast.
-            // The app-specific downloads dir needs no permission and the toast
-            // already tells the user exactly where the file went.
+            // Unreachable on the normal path (pre-Q routes through
+            // ACTION_CREATE_DOCUMENT above), kept as a fail-closed fallback
+            // into the app-specific dir rather than a broken no-op.
             val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                 ?: context.filesDir
             val destFile = File(downloadsDir, fileName)
