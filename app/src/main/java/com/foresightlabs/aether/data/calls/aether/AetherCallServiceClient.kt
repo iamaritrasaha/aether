@@ -60,7 +60,14 @@ class AetherCallServiceClient(private val baseUrlProvider: () -> String) {
                 connection.setRequestProperty("Content-Type", "application/json")
                 connection.outputStream.use { it.write(body.toString().toByteArray()) }
             }
-            val payload = connection.inputStream.use { stream -> stream.bufferedReader().readText() }
+            val code = connection.responseCode
+            val payload = if (code in 200..299) {
+                connection.inputStream.use { stream -> stream.bufferedReader().readText() }
+            } else {
+                // Error bodies (e.g. "recipient not registered") are surfaced
+                // as JSON rather than collapsed into "unreachable".
+                connection.errorStream?.use { stream -> stream.bufferedReader().readText() } ?: "{}"
+            }
             connection.disconnect()
             if (payload.isBlank()) JSONObject() else JSONObject(payload)
         } catch (t: Throwable) {
