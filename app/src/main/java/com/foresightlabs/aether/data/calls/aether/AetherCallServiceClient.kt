@@ -71,11 +71,11 @@ class AetherCallServiceClient(private val baseUrlProvider: () -> String) {
             connection.disconnect()
             if (payload.isBlank()) JSONObject() else JSONObject(payload)
         } catch (t: Throwable) {
-            // The dev service being down is an expected state (nobody runs it);
-            // surface as unavailability, never a crash.
-            if (Log.isLoggable(TAG, Log.DEBUG)) {
-                Log.d(TAG, "call service ${method.lowercase()} $path unavailable: ${t.javaClass.simpleName}")
-            }
+            // The dev service being down is an expected state (nobody runs
+            // it); surface as unavailability, never a crash. Visible at WARN:
+            // silent failure here once hid a whole evening of debugging (the
+            // cleartext-HTTP block produced zero log lines at DEBUG level).
+            Log.w(TAG, "call service ${method.lowercase()} $path unavailable: ${t.javaClass.simpleName}: ${t.message ?: ""}")
             null
         }
     }

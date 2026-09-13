@@ -1,5 +1,7 @@
 # Development LiveKit server config (LAN only). Run with:
 #   livekit-server --config call-service/livekit-dev.yaml
+# (run-dev.sh exports LIVEKIT_API_SECRET from .env; the config expands it —
+# the real key is never committed).
 port: 7880
 rtc:
   # UDP media port range for WebRTC. LAN-only dev: no TLS/TURN required when
@@ -9,6 +11,6 @@ rtc:
   use_external_ip: false
 keys:
   # Must match LIVEKIT_API_KEY / LIVEKIT_API_SECRET in call-service/.env.
-  devkey: VPqqifdoS1H9pKp8K54ubfrHOO5iViPsA0ZyMt3J1eFB
+  devkey: ${LIVEKIT_API_SECRET}
 # TURN stays disabled for same-LAN development; enable it when a device is
 # off-LAN (see README for the production note).
