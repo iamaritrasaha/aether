@@ -1,6 +1,8 @@
 package com.foresightlabs.aether.data.notifications
+import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.foresightlabs.aether.AetherApplication
@@ -9,10 +11,13 @@ import com.foresightlabs.aether.data.notifications.AetherNotificationManager
 import kotlinx.coroutines.runBlocking
 import org.drinkless.tdlib.TdApi
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 
 @RunWith(AndroidJUnit4::class)
 class AetherNotificationManagerTest {
@@ -380,5 +385,100 @@ class AetherNotificationManagerTest {
         assertEquals(true, ActiveConversationTracker.shouldSuppressNotification(1001L))
         // Different chat -> do NOT suppress
         assertEquals(false, ActiveConversationTracker.shouldSuppressNotification(1002L))
+    }
+
+    /** Posts one message notification for [chatId] and returns the posted Notification. */
+    private suspend fun postMessageNotification(chatId: Long, groupId: Int, messageId: Long, senderUserId: Long): Notification {
+        val message = TdApi.Message().apply {
+            id = messageId
+            senderId = TdApi.MessageSenderUser().apply { userId = senderUserId }
+            this.chatId = chatId
+            date = 1700000000
+            content = TdApi.MessageText().apply {
+                text = TdApi.FormattedText().apply { text = "msg $messageId" }
+            }
+        }
+        val notification = TdApi.Notification().apply {
+            id = 1
+            date = 1700000000
+            isSilent = false
+            type = TdApi.NotificationTypeNewMessage().apply {
+                this.message = message
+                this.showPreview = true
+            }
+        }
+        val update = TdApi.UpdateNotificationGroup().apply {
+            notificationGroupId = groupId
+            type = TdApi.NotificationGroupTypeMessages()
+            this.chatId = chatId
+            notificationSettingsChatId = chatId
+            notificationSoundId = 1L
+            totalCount = 1
+            addedNotifications = arrayOf(notification)
+            removedNotificationIds = intArrayOf()
+        }
+        notificationManager.onUpdateNotificationGroup(update)
+        val shadowNm = shadowOf(context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+        val tag = "aether_chat_$chatId"
+        return shadowNm.getActiveNotifications()
+            .firstOrNull { it.tag == tag }
+            ?.notification
+            ?: error("notification with tag $tag was not posted")
+    }
+
+    @Test
+    fun replyActionIntentCarriesTheMessageIdsToMarkRead() = runBlocking {
+        val posted = postMessageNotification(chatId = 1001L, groupId = 201, messageId = 999L, senderUserId = 12345L)
+        val replyAction = posted.actions.first { it.title == "Reply" }
+        val results = android.os.Bundle()
+        results.putCharSequence(AetherNotificationManager.KEY_TEXT_REPLY, "hi")
+        val filled = android.app.RemoteInput.addResultsToIntent(
+            arrayOf(android.app.RemoteInput.Builder(AetherNotificationManager.KEY_TEXT_REPLY).build()),
+            Intent(), results
+        )
+        // The receiver reads the reply input from the action's remote-input intent extras
+        // merged onto the action intent; here we assert the ids ride along at all.
+        val savedIntent = shadowOf(replyAction.actionIntent).savedIntent
+        val ids = savedIntent.getLongArrayExtra(AetherNotificationManager.EXTRA_MESSAGE_IDS)
+        assertNotNull("reply intent must carry EXTRA_MESSAGE_IDS (else replied-to messages stay unread)", ids)
+        assertTrue(ids!!.isNotEmpty())
+        assertEquals(999L, ids.first())
+    }
+
+    @Test
+    fun chatsWhoseHashCollidesGetDistinctPendingIntentRequestCodes() = runBlocking {
+        // 1001 and 101001 collide under the old abs(hashCode()) % 100_000 scheme;
+        // identical request codes with FLAG_UPDATE_CURRENT made the second chat's
+        // intents overwrite the first's (tap opened the wrong chat; replies were
+        // sent to the wrong chat). Chat 1001/user 12345 exist from setUp().
+        usersMap[54321L] = TdApi.User().apply {
+            id = 54321L
+            firstName = "Second"
+            lastName = "Contact"
+            type = TdApi.UserTypeRegular()
+        }
+        chatsMap[101001L] = TdApi.Chat().apply {
+            id = 101001L
+            type = TdApi.ChatTypePrivate().apply { userId = 54321L }
+            title = "Second Contact"
+        }
+
+        val first = postMessageNotification(chatId = 1001L, groupId = 301, messageId = 1L, senderUserId = 12345L)
+        val second = postMessageNotification(chatId = 101001L, groupId = 302, messageId = 2L, senderUserId = 54321L)
+
+        val firstTap = shadowOf(first.contentIntent)
+        val secondTap = shadowOf(second.contentIntent)
+        assertNotEquals(
+            "colliding hashes must not yield the same PendingIntent request code",
+            firstTap.requestCode, secondTap.requestCode
+        )
+        assertEquals(1001L, firstTap.savedIntent.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
+        assertEquals(101001L, secondTap.savedIntent.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
+
+        val firstReply = shadowOf(first.actions.first { it.title == "Reply" }.actionIntent)
+        val secondReply = shadowOf(second.actions.first { it.title == "Reply" }.actionIntent)
+        assertNotEquals(firstReply.requestCode, secondReply.requestCode)
+        assertEquals(1001L, firstReply.savedIntent.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
+        assertEquals(101001L, secondReply.savedIntent.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
     }
 }

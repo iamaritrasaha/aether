@@ -604,7 +604,15 @@ class AetherNotificationManager(
             messagingStyle.addMessage(item.text, timestampMs, person)
         }
 
-        val chatHashInt = abs(chatId.hashCode()) % 100000
+        // PendingIntent request codes must be unique per chat/group: with
+        // FLAG_UPDATE_CURRENT, two Intents that share a request code (and
+        // filterEquals) are the SAME PendingIntent token, its extras silently
+        // replaced -- a reply meant for chat A would be sent to chat B.
+        // The chat/group id's own low 32 bits are the identity; a modulus
+        // hash (the previous 100_000-bucket scheme) collided for real chat
+        // counts (~5% at 100 chats) because extras are never compared.
+        val chatRequestCode = chatId.toInt()
+        val groupRequestCode = group.groupId.toLong().toInt()
 
         // Tap intent -> Open ConversationScreen for this chatId
         val tapIntent = Intent(context, MainActivity::class.java).apply {
@@ -614,7 +622,7 @@ class AetherNotificationManager(
         }
         val tapPendingIntent = PendingIntent.getActivity(
             context,
-            chatHashInt * 10 + 1,
+            chatRequestCode * 10 + 1,
             tapIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -628,7 +636,7 @@ class AetherNotificationManager(
         }
         val deletePendingIntent = PendingIntent.getBroadcast(
             context,
-            (abs(group.groupId.hashCode()) % 100000) * 10 + 2,
+            groupRequestCode * 10 + 2,
             deleteIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -639,15 +647,22 @@ class AetherNotificationManager(
             .build()
 
         val latestMessageId = sortedItems.lastOrNull()?.messageId ?: 0L
+        // The ids this notification currently represents. The reply action
+        // needs them too: replying must mark the replied-to messages read in
+        // TDLib, or the unread badge persists and TDLib re-posts the
+        // notification on the next UpdateActiveNotifications (i.e. after
+        // every reconnect) for messages already answered.
+        val messageIds = sortedItems.map { it.messageId }.filter { it != 0L }.toLongArray()
         val replyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = ACTION_REPLY
             putExtra(EXTRA_CHAT_ID, chatId)
             putExtra(EXTRA_NOTIFICATION_GROUP_ID, group.groupId)
             putExtra(EXTRA_REPLY_TO_MESSAGE_ID, latestMessageId)
+            putExtra(EXTRA_MESSAGE_IDS, messageIds)
         }
         val replyPendingIntent = PendingIntent.getBroadcast(
             context,
-            chatHashInt * 10 + 3,
+            chatRequestCode * 10 + 3,
             replyIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
         )
@@ -661,7 +676,6 @@ class AetherNotificationManager(
             .build()
 
         // Mark as read action
-        val messageIds = sortedItems.map { it.messageId }.filter { it != 0L }.toLongArray()
         val readIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = ACTION_MARK_READ
             putExtra(EXTRA_CHAT_ID, chatId)
@@ -670,7 +684,7 @@ class AetherNotificationManager(
         }
         val readPendingIntent = PendingIntent.getBroadcast(
             context,
-            chatHashInt * 10 + 4,
+            chatRequestCode * 10 + 4,
             readIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
