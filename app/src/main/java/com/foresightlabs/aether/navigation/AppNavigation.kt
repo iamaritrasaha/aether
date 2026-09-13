@@ -1041,16 +1041,25 @@ private fun ConversationRoute(
         androidx.compose.runtime.mutableStateOf<CallChooserRequest?>(null)
     }
     val aetherRepo = (application as? AetherApplication)?.aetherCallsRepository
+    // Aether start pending its mic-permission gate: the chooser's request is
+    // snapshotted HERE, never re-read from chooserRequest inside the start
+    // coroutine -- the sheet's hide() also fires onDismissRequest (which drops
+    // chooserRequest), so a starter that read the shared state could see null
+    // and silently start nothing.
+    var pendingAetherRequest by remember {
+        androidx.compose.runtime.mutableStateOf<CallChooserRequest?>(null)
+    }
     val startAetherCall = com.foresightlabs.aether.ui.calls.rememberCallStarter { isVideo ->
-        routeScope.launch {
-            chooserRequest?.let { request ->
+        val request = pendingAetherRequest
+        pendingAetherRequest = null
+        if (request != null) {
+            routeScope.launch {
                 aetherRepo?.initiateCall(
                     target = request.target,
                     isVideo = isVideo,
                     callerName = request.calleeName
                 )
             }
-            chooserRequest = null
         }
     }
     val onCallIntent: (Boolean) -> Unit = { isVideo ->
@@ -1232,19 +1241,26 @@ private fun ConversationRoute(
             onOpenMessageContent = viewModel::openMessageContent
         )
 
-        // The backend chooser: small, only when BOTH systems can reach the
-        // recipient. Aether first (Recommended), Telegram clearly Beta.
+        // The backend chooser: small bottom sheet, only when BOTH systems can
+        // reach the recipient. Aether first (Recommended), Telegram clearly
+        // Beta. The sheet hides itself BEFORE invoking onChoose (its window
+        // must detach or it eats all input); hide() also fires onDismiss, so
+        // the choice is snapshotted before that can drop anything.
         chooserRequest?.let { request ->
-            com.foresightlabs.aether.ui.calls.CallChooserDialog(
+            com.foresightlabs.aether.ui.calls.CallChooserSheet(
                 calleeName = request.calleeName,
                 isVideo = request.isVideo,
                 onChoose = { backend ->
-                    when (backend) {
-                        com.foresightlabs.aether.domain.calls.CallBackend.AETHER ->
-                            startAetherCall(request.isVideo)
-                        com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA -> {
-                            chooserRequest = null
-                            startConversationCall(request.isVideo)
+                    val chosen = chooserRequest
+                    chooserRequest = null
+                    if (chosen != null) {
+                        when (backend) {
+                            com.foresightlabs.aether.domain.calls.CallBackend.AETHER -> {
+                                pendingAetherRequest = chosen
+                                startAetherCall(chosen.isVideo)
+                            }
+                            com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA ->
+                                startConversationCall(chosen.isVideo)
                         }
                     }
                 },
