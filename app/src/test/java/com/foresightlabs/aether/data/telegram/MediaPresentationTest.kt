@@ -196,9 +196,11 @@ class MediaPresentationTest {
 
     @Test
     fun theWaveformIsUnpackedAsFiveBitSamples() {
-        // Two bytes hold three whole 5-bit samples.
-        // 11111 00000 11111 0 -> 0xF8, 0x3E
-        val samples = TelegramMappers.decodeWaveform(byteArrayOf(0xF8.toByte(), 0x3E.toByte()))
+        // Two bytes hold three whole 5-bit samples, packed the way Telegram's
+        // own clients write them: least significant bit first.
+        // samples 31, 0, 31 -> bits 0-4 = 11111, 5-9 = 00000, 10-14 = 11111
+        // -> 0x1F, 0x7C
+        val samples = TelegramMappers.decodeWaveform(byteArrayOf(0x1F, 0x7C))
 
         assertEquals(3, samples.size)
         assertEquals(1f, samples[0], 0.0001f)

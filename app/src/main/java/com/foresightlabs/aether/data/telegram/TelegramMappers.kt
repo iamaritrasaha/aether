@@ -935,27 +935,14 @@ object TelegramMappers {
     /**
      * Unpacks TDLib's voice-note waveform.
      *
-     * Telegram stores it as 5-bit samples packed end to end, most significant bit
-     * first. Anything else drawn in a voice bubble would be decoration, not audio,
-     * so an absent waveform yields an empty list rather than invented amplitudes.
+     * Telegram stores it as 5-bit samples packed end to end, least significant
+     * bit first (the layout its own clients write); see
+     * [com.foresightlabs.aether.data.media.VoiceWaveform]. Anything else drawn in
+     * a voice bubble would be decoration, not audio, so an absent waveform
+     * yields an empty list rather than invented amplitudes.
      */
     fun decodeWaveform(packed: ByteArray?): List<Float> {
-        if (packed == null || packed.isEmpty()) return emptyList()
-        val bitCount = packed.size * 8
-        val sampleCount = bitCount / 5
-        val samples = ArrayList<Float>(sampleCount)
-        for (index in 0 until sampleCount) {
-            val bitOffset = index * 5
-            var value = 0
-            for (bit in 0 until 5) {
-                val absolute = bitOffset + bit
-                val byte = packed[absolute / 8].toInt() and 0xFF
-                val bitValue = (byte shr (7 - (absolute % 8))) and 1
-                value = (value shl 1) or bitValue
-            }
-            samples += value / 31f
-        }
-        return samples
+        return com.foresightlabs.aether.data.media.VoiceWaveform.decode(packed)
     }
 
     /** Coordinates at roughly street precision, which is all a static point needs. */
