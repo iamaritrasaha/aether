@@ -35,6 +35,9 @@ class TgCallsMediaEngine(
     private val _isMuted = MutableStateFlow(false)
     override val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
 
+    override val isCameraActive: StateFlow<Boolean> = delegate.isCameraActive
+    override val isFrontCamera: StateFlow<Boolean> = delegate.isFrontCamera
+
     override val videoFrames: SharedFlow<DecodedVideoFrame> = delegate.videoFrames
     override val outgoingSignalingData: SharedFlow<ByteArray> = delegate.outgoingSignalingData
 

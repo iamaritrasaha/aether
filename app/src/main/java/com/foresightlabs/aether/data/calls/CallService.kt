@@ -55,11 +55,28 @@ class CallService : Service() {
                 val incoming = IncomingCallNotifier(this)
                 incoming.cancel()
                 if (actionCallId == liveCallId && liveCallId != null) {
-                    CoroutineScope(Dispatchers.Default).launch {
-                        if (action == ACTION_ACCEPT_CALL) {
-                            repo.acceptCall(liveCallId)
-                        } else {
-                            repo.discardCall(liveCallId)
+                    if (action == ACTION_ACCEPT_CALL && ContextCompat.checkSelfPermission(this, CallPermissions.MICROPHONE) !=
+                    PackageManager.PERMISSION_GRANTED
+                ) {
+                        // Accepting without the microphone is not an option:
+                        // Android kills the process when the microphone-typed
+                        // foreground service starts ungranted (see
+                        // grantedServiceType). Declining on the user's behalf
+                        // would be equally wrong -- hand them the call screen,
+                        // whose Answer control runs the normal permission flow.
+                        CallDiagnostics.stage(
+                            intent?.getLongExtra(EXTRA_GENERATION, 0L) ?: 0L,
+                            CallStage.TDLIB_READY,
+                            "accept_from_notification blocked=no_record_audio callId=$liveCallId"
+                        )
+                        openMainActivity()
+                    } else {
+                        CoroutineScope(Dispatchers.Default).launch {
+                            if (action == ACTION_ACCEPT_CALL) {
+                                repo.acceptCall(liveCallId)
+                            } else {
+                                repo.discardCall(liveCallId)
+                            }
                         }
                     }
                 } else {
@@ -101,6 +118,20 @@ class CallService : Service() {
         }
 
         return START_STICKY
+    }
+
+    /** Opens Aether's main surface -- used when a notification action must be
+     * completed in-app (e.g. an Answer that first needs a runtime grant). */
+    private fun openMainActivity() {
+        val open = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        try {
+            startActivity(open)
+        } catch (t: Throwable) {
+            CallDiagnostics.failure(0L, CallStage.TEARDOWN, t)
+        }
     }
 
     private fun buildNotification(callerName: String, isConnected: Boolean, isVideo: Boolean): Notification {

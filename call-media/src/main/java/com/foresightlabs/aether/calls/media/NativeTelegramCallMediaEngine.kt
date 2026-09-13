@@ -501,6 +501,17 @@ class NativeTelegramCallMediaEngine {
             rendererEnabled = false
             rendererAttached = false
             CallDiagnostics.stage(activeGeneration, CallStage.RENDERER_DETACHED, "reason=$reason")
+            emitCameraState()
+        }
+
+        /**
+         * Reports the engine's actual camera state to the registered callback,
+         * so every place local capture starts, stops, fails or flips facing
+         * can keep UI state honest with one call instead of hand-rolled
+         * per-site logic. No-op when nothing is listening.
+         */
+        private fun emitCameraState() {
+            callback?.onCameraStateChanged(rendererEnabled, activeCameraIsFront)
         }
 
         private fun rotationDegrees(rotation: VideoRotation?): Int = when (rotation) {
@@ -607,6 +618,7 @@ class NativeTelegramCallMediaEngine {
             malformedFrameStreak = 0
             lastFrameAtMillis = 0L
             callback?.onConnectionStateChanged(MediaConnectionState.INITIALIZING.ordinal)
+            emitCameraState()
 
             var nativeSessionCreated = false
             try {
@@ -663,6 +675,7 @@ class NativeTelegramCallMediaEngine {
             activeCallId = null
             rendererEnabled = false
             rendererAttached = false
+            emitCameraState()
         }
 
         /**
@@ -796,6 +809,19 @@ class NativeTelegramCallMediaEngine {
                     } else {
                         devices?.let { selectCamera(it, front = activeCameraIsFront) }
                     }
+                    CallDiagnostics.stage(
+                        generation,
+                        CallStage.VIDEO_INITIALIZING,
+                        "camera_selected front=$activeCameraIsFront id=${chosen?.name ?: "none"}"
+                    )
+                    if (chosen == null) {
+                        // A video-capable session with no enumerable matching
+                        // camera (cameraless device, or metadata that resolves
+                        // to nothing): capture may not silently pretend a
+                        // camera exists -- the renderer stops and UI state
+                        // follows reality.
+                        disableRenderer("no_camera_device")
+                    }
                     chosen?.let {
                         VideoDescription(MediaSource.DEVICE, 1280, 720, 30, it.metadata, false)
                     }
@@ -923,35 +949,53 @@ class NativeTelegramCallMediaEngine {
         }
 
         /**
-         * Resolve facing from Android's authoritative camera characteristics.
-         * The ntgcalls device metadata is used as the CameraManager id; if that
-         * mapping is not valid, no camera is selected and the call remains audio.
+         * Resolve facing from ntgcalls' own camera metadata (see
+         * [CameraDeviceSelection] for why that is authoritative), with
+         * Android's CameraCharacteristics as the fallback/cross-check for a
+         * device whose metadata carries no facing. If nothing resolves, no
+         * camera is selected and the call remains audio.
          */
         private fun selectCamera(devices: MediaDevices, front: Boolean): DeviceInfo? {
+            val parsed = devices.camera.map { CameraDeviceSelection.parse(it) }
+            return CameraDeviceSelection.select(parsed, front, facingOf = ::lensFacingFromCameraManager)
+        }
+
+        /** Camera2-id -> facing, or null when the id is not a camera2 id. */
+        private fun lensFacingFromCameraManager(id: String): Boolean? {
             val manager = cameraManager ?: return null
-            val candidates = devices.camera.mapNotNull { device ->
-                val id = device.metadata
-                val facing = runCatching {
-                    manager.getCameraCharacteristics(id)
-                        .get(CameraCharacteristics.LENS_FACING)
-                }.getOrNull()
-                val wanted = if (front) CameraCharacteristics.LENS_FACING_FRONT
-                else CameraCharacteristics.LENS_FACING_BACK
-                if (facing == wanted) device else null
+            val facing = runCatching {
+                manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING)
+            }.getOrNull()
+            return when (facing) {
+                CameraCharacteristics.LENS_FACING_FRONT -> true
+                CameraCharacteristics.LENS_FACING_BACK -> false
+                else -> null
             }
-            // Camera IDs are stable platform identifiers; sorting makes the
-            // selection deterministic without inferring facing from list order.
-            return candidates.sortedBy { it.metadata }.firstOrNull()
         }
 
         fun setCameraEnabled(enabled: Boolean) {
             val ntg = engineInstance ?: return
             val callId = activeCallId ?: return
-            // A session that never had camera permission, or whose renderer gave
-            // up, cannot be talked into opening the camera from the UI.
-            if (enabled && !rendererEnabled) return
-            activeIsVideo = enabled
-            applyStreamSources(ntg, callId, cameraEnabled = enabled)
+            // A voice-typed session (video never negotiated) cannot be talked
+            // into adding a camera after the fact: turning it on requires the
+            // call itself to be video-capable. A video-typed session whose
+            // camera is off (no permission at start, renderer gave up, user
+            // toggle) may legitimately re-attempt -- setStreamSources is the
+            // same path switchCamera uses.
+            if (enabled && !activeIsVideo) return
+            if (!enabled && !rendererEnabled) return
+            if (!enabled) {
+                // Stopped optimistically: a rejected reconfiguration leaves the
+                // camera description out of CAPTURE anyway.
+                rendererEnabled = false
+                rendererAttached = false
+            }
+            val applied = applyStreamSources(ntg, callId, cameraEnabled = enabled)
+            if (applied) {
+                rendererEnabled = enabled
+                if (!enabled) rendererAttached = false
+            }
+            emitCameraState()
         }
 
         fun switchCamera() {
@@ -959,7 +1003,9 @@ class NativeTelegramCallMediaEngine {
             val callId = activeCallId ?: return
             if (!activeIsVideo || !rendererEnabled) return
             activeCameraIsFront = !activeCameraIsFront
-            applyStreamSources(ntg, callId, cameraEnabled = true)
+            val applied = applyStreamSources(ntg, callId, cameraEnabled = true)
+            if (!applied) activeCameraIsFront = !activeCameraIsFront
+            emitCameraState()
         }
 
         fun submitSignalingData(callId: Long, data: ByteArray) {
@@ -1005,6 +1051,7 @@ class NativeTelegramCallMediaEngine {
             activeCallId = null
             rendererEnabled = false
             rendererAttached = false
+            emitCameraState()
             mediaActivityMonitor.stop()
             CallDiagnostics.stage(generation, CallStage.TEARDOWN, "had_session=${callId != null}")
             if (ntg != null && callId != null) {

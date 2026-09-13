@@ -164,6 +164,22 @@ class DefaultCallsRepository(
             }
         }
 
+        // The engine's ACTUAL route/facing evidence reaches ActiveCall through
+        // one dedicated sync each: a Bluetooth headset connecting mid-call or
+        // the engine failing to find a camera must be visible in UI state
+        // even though the user never touched a control. Both writers are
+        // callId/terminal-state-guarded inside TelegramClient.
+        scope.launch {
+            mediaEngine.audioRoute.collect { route ->
+                guarded(CallStage.AUDIO_INITIALIZING) { telegram.updateCallAudioRoute(route) }
+            }
+        }
+        scope.launch {
+            mediaEngine.isFrontCamera.collect { isFront ->
+                guarded(CallStage.VIDEO_INITIALIZING) { telegram.updateCallFrontCamera(isFront) }
+            }
+        }
+
         // Both signalling directions TDLib and the media engine need to
         // exchange for the call to connect beyond the initial key/server
         // handshake -- see docs/architecture/messaging-calls.md.
@@ -330,6 +346,9 @@ class DefaultCallsRepository(
         if (rawCall.isVideo && !videoCaptureEnabled) {
             CallDiagnostics.stage(generation, CallStage.VIDEO_INITIALIZING, "skipped=no_camera_permission")
         }
+        // The ActiveCall model defaults camera intent on for a video call
+        // (see handleCallUpdate); a refused permission narrows it here.
+        telegram.setCallCameraIntent(videoCaptureEnabled)
 
         val callerName = activeCallState.value?.user?.name ?: "Telegram Contact"
         CallService.startService(
@@ -523,6 +542,11 @@ class DefaultCallsRepository(
         if (!mediaEngine.isMediaTransportAvailable) {
             return Result.failure(CallMediaUnavailableException(NO_MEDIA_TRANSPORT))
         }
+        // One canonical active call, made explicit: placing a call while one
+        // is live ends the existing one first -- exactly the semantics the
+        // one-native-session rule requires (two native sessions must never
+        // fight over global audio/video resources).
+        endAnyOtherCall(keepCallId = null)
         return telegram.createCall(userId, isVideo, negotiatedProtocol())
     }
 
@@ -531,6 +555,12 @@ class DefaultCallsRepository(
             telegram.discardCall(callId)
             return Result.failure(CallMediaUnavailableException(NO_MEDIA_TRANSPORT))
         }
+        // Same rule for the incoming side: answering one call while another
+        // is live ends the live one first. This also covers the busy-replace
+        // case where a second incoming call displaced the first in the UI
+        // model while the first's media session was still running.
+        endAnyOtherCall(keepCallId = callId)
+        stopForeignMediaSession(forCallId = callId)
         if (!acceptedCallIds.add(callId)) {
             // Already accepted -- a second tap, or a tap that landed while the
             // first was still suspended on TDLib. Neither should ask TDLib or
@@ -538,6 +568,47 @@ class DefaultCallsRepository(
             return Result.success(Unit)
         }
         return telegram.acceptCall(callId, negotiatedProtocol())
+    }
+
+    /**
+     * Ends any live call other than [keepCallId] (all calls when it is null):
+     * stops this call's media and service synchronously and asks TDLib to
+     * discard the call. A no-op when the current model call is already
+     * terminal. The discarded call's own terminal update, if it lands later,
+     * can no longer displace a live successor -- see the stale-terminal guard
+     * in TelegramClient's update handling.
+     */
+    private suspend fun endAnyOtherCall(keepCallId: Int?) {
+        val current = activeCallState.value ?: return
+        if (current.state == CallStateEnum.DISCARDED || current.state == CallStateEnum.ERROR) return
+        if (current.callId == keepCallId) return
+        discardCall(current.callId)
+        // The replaced call's terminal update may never reach the model (see
+        // the stale-terminal guard in TelegramClient), so the per-call guard
+        // sets are cleared here rather than relying on teardown-by-update.
+        acceptedCallIds.remove(current.callId)
+        discardedCallIds.remove(current.callId)
+        cameraBackgroundState.onCallEnded()
+    }
+
+    /**
+     * Stops a media session that belongs to a call other than [forCallId] --
+     * the busy-replace hazard: a second call can occupy the UI model while
+     * the first call's native session (tracked by [startedMediaCallId]) is
+     * still live. Leaving it up would make the new call's own media start be
+     * skipped as "already running", leaving it connected-in-signalling only.
+     */
+    private fun stopForeignMediaSession(forCallId: Int) {
+        val mediaCallId = startedMediaCallId ?: return
+        if (mediaCallId == forCallId) return
+        callGeneration.incrementAndGet()
+        mediaEngine.stop()
+        startedMediaCallId = null
+        CallDiagnostics.stage(
+            callGeneration.get(),
+            CallStage.TEARDOWN,
+            "media_session_replaced oldCallId=$mediaCallId newCallId=$forCallId"
+        )
     }
 
     override suspend fun discardCall(callId: Int): Result<Unit> {
@@ -552,9 +623,14 @@ class DefaultCallsRepository(
     }
 
     override fun toggleMute() {
-        val newMute = !mediaEngine.isMuted.value
+        // ActiveCall.isMuted is the UI-visible truth; deriving from it (rather
+        // than the engine's own flow) guarantees the toggle never disagrees
+        // with what the user sees. The engine is told the same value, and its
+        // process-wide state is reset on stop, so the two stay in step.
+        val currentMuted = activeCallState.value?.isMuted ?: mediaEngine.isMuted.value
+        val newMute = !currentMuted
         mediaEngine.setMicrophoneMuted(newMute)
-        telegram.toggleCallMute()
+        telegram.setCallMuted(newMute)
     }
 
     override fun setCameraEnabled(enabled: Boolean) {
@@ -562,6 +638,7 @@ class DefaultCallsRepository(
         // handleAppForegroundChange, which only ever restores this value,
         // never invents its own.
         cameraBackgroundState.onUserSetCameraEnabled(enabled)
+        telegram.setCallCameraIntent(enabled)
         mediaEngine.setCameraEnabled(enabled)
     }
 
@@ -570,7 +647,12 @@ class DefaultCallsRepository(
     }
 
     override fun toggleSpeaker() {
-        val newRoute = if (mediaEngine.audioRoute.value == AudioRoute.SPEAKER) AudioRoute.EARPIECE else AudioRoute.SPEAKER
+        // The UI-visible route is the base the toggle flips from, so the
+        // button never disagrees with itself after a Bluetooth/wired device
+        // changed the actual route behind our back (synced into ActiveCall
+        // by the engine-route collector above).
+        val currentRoute = activeCallState.value?.audioRoute ?: mediaEngine.audioRoute.value
+        val newRoute = if (currentRoute == AudioRoute.SPEAKER) AudioRoute.EARPIECE else AudioRoute.SPEAKER
         mediaEngine.setAudioOutput(newRoute)
         telegram.toggleCallSpeaker()
     }

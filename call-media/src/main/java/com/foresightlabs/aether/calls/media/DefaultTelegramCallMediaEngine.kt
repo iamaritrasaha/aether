@@ -23,6 +23,12 @@ interface TelegramCallMediaEngine {
     val signalBars: StateFlow<Int>
     val audioLevel: StateFlow<Float>
 
+    /** The engine's ACTUAL local-camera state (not the last user request). */
+    val isCameraActive: StateFlow<Boolean>
+
+    /** Facing of the camera the engine actually selected (front by default). */
+    val isFrontCamera: StateFlow<Boolean>
+
     /** Local/remote decoded video frames, for a video call's renderer to draw. */
     val videoFrames: SharedFlow<DecodedVideoFrame>
 
@@ -55,6 +61,12 @@ class DefaultTelegramCallMediaEngine(
 
     private val _isMuted = MutableStateFlow(false)
     override val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
+
+    private val _isCameraActive = MutableStateFlow(false)
+    override val isCameraActive: StateFlow<Boolean> = _isCameraActive.asStateFlow()
+
+    private val _isFrontCamera = MutableStateFlow(true)
+    override val isFrontCamera: StateFlow<Boolean> = _isFrontCamera.asStateFlow()
 
     private val _signalBars = MutableStateFlow(0)
     override val signalBars: StateFlow<Int> = _signalBars.asStateFlow()
@@ -158,6 +170,11 @@ class DefaultTelegramCallMediaEngine(
             override fun onVideoFrame(frame: DecodedVideoFrame) {
                 _videoFrames.tryEmit(frame)
             }
+
+            override fun onCameraStateChanged(active: Boolean, isFront: Boolean) {
+                _isCameraActive.value = active
+                _isFrontCamera.value = isFront
+            }
         })
     }
 
@@ -236,6 +253,11 @@ class DefaultTelegramCallMediaEngine(
         nativeEngine.stopCall()
         abandonAudioFocus()
         resetAudioHardware()
+        // A ended call leaves no state behind: a stale muted flag here would
+        // start the next call muted-at-hardware-level while its fresh UI
+        // showed unmuted (the engine object is process-wide).
+        _isMuted.value = false
+        _isCameraActive.value = false
         _state.value = MediaConnectionState.STOPPED
     }
 
@@ -255,6 +277,8 @@ class DefaultTelegramCallMediaEngine(
         nativeEngine.stopCall()
         abandonAudioFocus()
         resetAudioHardware()
+        _isMuted.value = false
+        _isCameraActive.value = false
         _state.value = MediaConnectionState.FAILED
     }
 

@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.BluetoothAudio
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
@@ -36,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -193,7 +196,12 @@ fun CallControl(
                     indication = ripple(bounded = false, radius = diameter / 2),
                     onClick = onClick
                 )
-                .semantics { contentDescription = label }
+                // `selected` gives assistive tech the on/off state a call
+                // toggle needs; the icon shape alone must never carry it.
+                .semantics {
+                    contentDescription = label
+                    selected = engaged
+                }
                 .testTag(testTag),
             contentAlignment = Alignment.Center
         ) {
@@ -250,12 +258,18 @@ fun CallControlRow(
                 testTag = "call_mute_button"
             )
             CallControl(
-                icon = if (audioRoute == AudioRoute.SPEAKER) {
-                    Icons.AutoMirrored.Filled.VolumeUp
-                } else {
-                    Icons.Default.Hearing
+                icon = when (audioRoute) {
+                    AudioRoute.SPEAKER -> Icons.AutoMirrored.Filled.VolumeUp
+                    AudioRoute.BLUETOOTH -> Icons.Default.BluetoothAudio
+                    AudioRoute.WIRED_HEADSET -> Icons.Default.Headset
+                    AudioRoute.EARPIECE -> Icons.Default.Hearing
                 },
-                label = if (audioRoute == AudioRoute.SPEAKER) "Speaker" else "Earpiece",
+                label = when (audioRoute) {
+                    AudioRoute.SPEAKER -> "Speaker"
+                    AudioRoute.BLUETOOTH -> "Bluetooth"
+                    AudioRoute.WIRED_HEADSET -> "Headset"
+                    AudioRoute.EARPIECE -> "Earpiece"
+                },
                 onClick = onToggleSpeaker,
                 engaged = audioRoute == AudioRoute.SPEAKER,
                 testTag = "call_speaker_button"
@@ -263,7 +277,7 @@ fun CallControlRow(
             if (isVideoCall) {
                 CallControl(
                     icon = if (isCameraEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                    label = "Camera",
+                    label = if (isCameraEnabled) "Camera on" else "Camera off",
                     onClick = onToggleCamera,
                     engaged = isCameraEnabled,
                     testTag = "call_camera_button"

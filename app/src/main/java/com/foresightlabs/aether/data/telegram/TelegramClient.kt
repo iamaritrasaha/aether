@@ -6,6 +6,7 @@ import androidx.core.content.edit
 import com.foresightlabs.aether.BuildConfig
 import com.foresightlabs.aether.calls.media.CallDiagnostics
 import com.foresightlabs.aether.calls.media.CallStage
+import com.foresightlabs.aether.domain.calls.AudioRoute
 import com.foresightlabs.aether.domain.calls.MediaConnectionState
 import com.foresightlabs.aether.domain.messages.MessageCapabilities
 import com.foresightlabs.aether.domain.messages.MessageMotionEvent
@@ -1532,18 +1533,16 @@ open class TelegramClient(private val application: Application) {
         return sendExpectOk(TdApi.SendCallSignalingData(callId, data))
     }
 
-    fun toggleCallMute() {
+    /** Sets the call's UI-visible mute flag to an explicit value. */
+    fun setCallMuted(muted: Boolean) {
         val current = _activeCallState.value ?: return
-        val updatedMute = !current.isMuted
-        _activeCallState.value = current.copy(isMuted = updatedMute)
-        updateAudioHardware(isMuted = updatedMute, isSpeakerOn = current.isSpeakerOn)
+        _activeCallState.value = current.copy(isMuted = muted)
     }
 
     fun toggleCallSpeaker() {
         val current = _activeCallState.value ?: return
         val updatedSpeaker = !current.isSpeakerOn
         _activeCallState.value = current.copy(isSpeakerOn = updatedSpeaker)
-        updateAudioHardware(isMuted = current.isMuted, isSpeakerOn = updatedSpeaker)
     }
 
     fun setCallMinimized(minimized: Boolean) {
@@ -1566,6 +1565,42 @@ open class TelegramClient(private val application: Application) {
     fun updateCallDuration(durationSec: Int) {
         val current = _activeCallState.value ?: return
         _activeCallState.value = current.copy(durationSec = durationSec)
+    }
+
+    /**
+     * The one path the media engine's ACTUAL audio route reaches
+     * [ActiveCall.audioRoute] -- including Bluetooth/wired changes Android
+     * made behind our back mid-call. Call-id-guarded like
+     * [updateCallMediaState]: a late route event for an already-replaced or
+     * terminated call must never mutate its successor. [isSpeakerOn] is kept
+     * in step so its existing consumers keep meaning "route is the speaker".
+     */
+    fun updateCallAudioRoute(route: AudioRoute) {
+        val current = _activeCallState.value ?: return
+        if (current.state == com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED || current.state == com.foresightlabs.aether.domain.model.CallStateEnum.ERROR) return
+        _activeCallState.value = current.copy(
+            audioRoute = route,
+            isSpeakerOn = route == AudioRoute.SPEAKER
+        )
+    }
+
+    /**
+     * Whether the user wants the local camera on for the active call. An
+     * intent, not evidence: actual camera state is tracked by the media
+     * engine (see [updateCallFrontCamera] for its facing counterpart) and
+     * [updateCallMediaState] for the transport itself.
+     */
+    fun setCallCameraIntent(enabled: Boolean) {
+        val current = _activeCallState.value ?: return
+        if (current.state == com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED || current.state == com.foresightlabs.aether.domain.model.CallStateEnum.ERROR) return
+        _activeCallState.value = current.copy(cameraIntentOn = enabled)
+    }
+
+    /** Facing of the camera the media engine actually selected. */
+    fun updateCallFrontCamera(isFront: Boolean) {
+        val current = _activeCallState.value ?: return
+        if (current.state == com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED || current.state == com.foresightlabs.aether.domain.model.CallStateEnum.ERROR) return
+        _activeCallState.value = current.copy(isFrontCamera = isFront)
     }
 
     /**
@@ -1645,19 +1680,31 @@ open class TelegramClient(private val application: Application) {
             else -> com.foresightlabs.aether.domain.model.CallStateEnum.PENDING to null
         }
 
-        if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.READY) {
-            updateAudioHardware(
-                isMuted = _activeCallState.value?.isMuted ?: false,
-                isSpeakerOn = _activeCallState.value?.isSpeakerOn ?: false
-            )
-        } else if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED ||
-            stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.ERROR
-        ) {
-            resetAudioHardware()
-        }
+        // Audio hardware (focus, communication mode, routing, mic mute) is
+        // owned exclusively by the media engine -- it applies state on media
+        // start and restores it on stop. Duplicating any of it here with the
+        // deprecated AudioManager flags raced the engine's own
+        // communication-device routing and clobbered Bluetooth/wired routes.
 
         val currentCall = _activeCallState.value
         val cachedUser = users[call.userId]?.let { TelegramMappers.mapUser(it) }
+
+        // Stale terminal updates never displace a live call: while answering
+        // (or placing) a second call, the first call's DISCARDED update can
+        // land after the successor already occupies this slot -- overwriting
+        // the model with the old call's terminal state would flash the ended
+        // call and trigger teardown for the wrong session. A terminal update
+        // for a call that is no longer the model call is informationally
+        // dead: its media was already torn down by whoever replaced it.
+        val staleTerminal = (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED ||
+            stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.ERROR) &&
+            currentCall != null && currentCall.callId != call.id &&
+            currentCall.state != com.foresightlabs.aether.domain.model.CallStateEnum.DISCARDED &&
+            currentCall.state != com.foresightlabs.aether.domain.model.CallStateEnum.ERROR
+        if (staleTerminal) {
+            CallDiagnostics.stage(0L, CallStage.TEARDOWN, "stale_call_update_ignored callId=${call.id} liveCallId=${currentCall.callId}")
+            return
+        }
 
         // Only the SAME call's prior state may be carried forward -- a
         // TDLib update for a new call landing at this callId (or a stale
@@ -1678,7 +1725,12 @@ open class TelegramClient(private val application: Application) {
             isSpeakerOn = sameCall?.isSpeakerOn ?: false,
             durationSec = if (stateEnum == com.foresightlabs.aether.domain.model.CallStateEnum.READY) (sameCall?.durationSec ?: 0) else 0,
             isMinimized = sameCall?.isMinimized ?: false,
-            errorMessage = errorMsg
+            errorMessage = errorMsg,
+            audioRoute = sameCall?.audioRoute ?: AudioRoute.EARPIECE,
+            // A video call begins with the camera intended on; the media
+            // layer narrows this to false when camera permission is missing.
+            cameraIntentOn = sameCall?.cameraIntentOn ?: call.isVideo,
+            isFrontCamera = sameCall?.isFrontCamera ?: true
         )
         _activeCallState.value = updated
 
@@ -1704,24 +1756,11 @@ open class TelegramClient(private val application: Application) {
     }
 
     @Suppress("DEPRECATION")
-    private fun resetAudioHardware() {
-        try {
-            val audioManager = application.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
-            audioManager?.mode = android.media.AudioManager.MODE_NORMAL
-            audioManager?.isMicrophoneMute = false
-            audioManager?.isSpeakerphoneOn = false
-        } catch (_: Exception) {}
-    }
-
-    @Suppress("DEPRECATION")
-    private fun updateAudioHardware(isMuted: Boolean, isSpeakerOn: Boolean) {
-        try {
-            val audioManager = application.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
-            audioManager?.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
-            audioManager?.isMicrophoneMute = isMuted
-            audioManager?.isSpeakerphoneOn = isSpeakerOn
-        } catch (_: Exception) {}
-    }
+    // (Audio-hardware methods deliberately absent: focus, communication mode,
+    // routing and mic mute are owned exclusively by the media engine. The
+    // deprecated AudioManager flags that used to be set here raced the
+    // engine's communication-device routing and clobbered Bluetooth/wired
+    // routes mid-call.)
 
 
 

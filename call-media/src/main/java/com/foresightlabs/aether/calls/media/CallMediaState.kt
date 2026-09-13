@@ -76,4 +76,14 @@ interface NativeCallEngineCallback {
 
     /** A decoded video frame is ready to render. */
     fun onVideoFrame(frame: DecodedVideoFrame)
+
+    /**
+     * The engine's ACTUAL local-camera state changed: [active] means capture
+     * is configured and the renderer would draw its frames, [isFront] is the
+     * selected camera's facing. Emitted for every transition -- camera on,
+     * off, switch, and every way capture can stop (init failure, malformed
+     * frames, teardown) -- so UI state can follow device reality rather than
+     * the last user request. Default no-op for callbacks that predate video.
+     */
+    fun onCameraStateChanged(active: Boolean, isFront: Boolean) {}
 }

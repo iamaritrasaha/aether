@@ -41,6 +41,8 @@ class DefaultCallsRepositoryMediaStateTest {
         override val state: StateFlow<MediaConnectionState> = _state
         override val audioRoute = MutableStateFlow(AudioRoute.EARPIECE)
         override val isMuted = MutableStateFlow(false)
+        override val isCameraActive = MutableStateFlow(false)
+        override val isFrontCamera = MutableStateFlow(true)
         override val videoFrames = MutableSharedFlow<DecodedVideoFrame>()
         override val outgoingSignalingData = MutableSharedFlow<ByteArray>()
 

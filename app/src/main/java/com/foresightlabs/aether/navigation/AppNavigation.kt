@@ -841,7 +841,6 @@ fun AetherApp(
 
         var remoteVideoFrame by remember { mutableStateOf<com.foresightlabs.aether.calls.media.DecodedVideoFrame?>(null) }
         var localVideoFrame by remember { mutableStateOf<com.foresightlabs.aether.calls.media.DecodedVideoFrame?>(null) }
-        var isCameraEnabled by remember(activeCall?.callId) { mutableStateOf(activeCall?.isVideo ?: false) }
         LaunchedEffect(callsRepository) {
             callsRepository?.videoFrames?.collect { frame ->
                 when (frame.origin) {
@@ -877,11 +876,11 @@ fun AetherApp(
                     onMinimize = { callsRepository?.setMinimized(true) },
                     remoteVideoFrame = remoteVideoFrame,
                     localVideoFrame = localVideoFrame,
-                    isCameraEnabled = isCameraEnabled,
-                    onToggleCamera = {
-                        isCameraEnabled = !isCameraEnabled
-                        callsRepository?.setCameraEnabled(isCameraEnabled)
-                    },
+                    // Camera intent lives on ActiveCall itself (synced from the
+                    // media engine and the user's toggles) -- never in screen-local
+                    // state, which used to drift from what the engine actually did.
+                    isCameraEnabled = activeCall!!.cameraIntentOn,
+                    onToggleCamera = { callsRepository?.setCameraEnabled(!activeCall!!.cameraIntentOn) },
                     onSwitchCamera = { callsRepository?.switchCamera() }
                 )
             }

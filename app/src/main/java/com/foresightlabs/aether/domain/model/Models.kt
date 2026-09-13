@@ -5,6 +5,7 @@ import com.foresightlabs.aether.domain.messaging.ConversationClass
 import com.foresightlabs.aether.domain.messaging.ConversationFacts
 import com.foresightlabs.aether.domain.messaging.classifyConversation
 import androidx.compose.ui.graphics.Color
+import com.foresightlabs.aether.domain.calls.AudioRoute
 import com.foresightlabs.aether.domain.calls.MediaConnectionState
 
 enum class ChatType {
@@ -437,7 +438,18 @@ data class ActiveCall(
     val isSpeakerOn: Boolean = false,
     val durationSec: Int = 0,
     val isMinimized: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    /**
+     * Android's ACTUAL communication-audio route, synced from the media
+     * engine -- including Bluetooth/wired changes made behind our back.
+     * [isSpeakerOn] is the legacy speaker-only flag, kept true exactly when
+     * [audioRoute] is [AudioRoute.SPEAKER].
+     */
+    val audioRoute: AudioRoute = AudioRoute.EARPIECE,
+    /** Whether the user wants the local camera on for this call. */
+    val cameraIntentOn: Boolean = false,
+    /** Facing of the camera the engine actually selected. */
+    val isFrontCamera: Boolean = true
 )
 
 enum class CallOutcome {

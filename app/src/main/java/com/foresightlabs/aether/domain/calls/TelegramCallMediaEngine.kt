@@ -54,6 +54,12 @@ interface TelegramCallMediaEngine {
     val audioRoute: StateFlow<AudioRoute>
     val isMuted: StateFlow<Boolean>
 
+    /** The engine's ACTUAL local-camera state (not the last user request). */
+    val isCameraActive: StateFlow<Boolean>
+
+    /** Facing of the camera the engine actually selected (front by default). */
+    val isFrontCamera: StateFlow<Boolean>
+
     /** Local/remote decoded video frames, for a video call's renderer to draw. */
     val videoFrames: SharedFlow<DecodedVideoFrame>
 

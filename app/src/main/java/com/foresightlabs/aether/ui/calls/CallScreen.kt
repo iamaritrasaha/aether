@@ -1,6 +1,9 @@
 package com.foresightlabs.aether.ui.calls
 
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,12 +25,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -41,14 +47,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.foresightlabs.aether.calls.media.CallDiagnostics
 import com.foresightlabs.aether.calls.media.CallStage
 import com.foresightlabs.aether.calls.media.DecodedVideoFrame
-import com.foresightlabs.aether.domain.calls.AudioRoute
+import com.foresightlabs.aether.domain.calls.CallPermissions
 import com.foresightlabs.aether.domain.calls.CallPresentationState
 import com.foresightlabs.aether.domain.calls.CallStatePresenter
 import com.foresightlabs.aether.domain.model.ActiveCall
@@ -103,6 +112,27 @@ fun AetherCallScreen(
     // A call is never accepted before the OS grants what it needs -- the same
     // rule that applies to placing one. See CallPermissionGate.
     val acceptWithPermission = rememberCallStarter { onAcceptCall(activeCall.callId) }
+
+    // Turning the camera ON mid-call requires CAMERA, asked at the tap (never
+    // earlier, never for a voice call -- the control row only offers the
+    // camera on a video call). Turning it OFF needs no permission, so an off
+    // toggle always passes straight through. A denial leaves the camera off
+    // without faking any call failure.
+    val context = LocalContext.current
+    val requestCameraThenToggle = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) onToggleCamera()
+    }
+    val cameraToggleWithPermission = {
+        val cameraGranted = ContextCompat.checkSelfPermission(context, CallPermissions.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (cameraGranted || activeCall.cameraIntentOn) {
+            onToggleCamera()
+        } else {
+            requestCameraThenToggle.launch(CallPermissions.CAMERA)
+        }
+    }
 
     // Closes the observable connect sequence: the last stage is only reached
     // once the UI itself is showing a connected call.
@@ -194,10 +224,13 @@ fun AetherCallScreen(
 
                 // A video call whose local preview is running shows it here,
                 // small and anchored -- never a floating panel over the scene.
+                // Front-camera preview is mirrored (what users expect from a
+                // mirror); the transmitted frame itself is untouched.
                 if (activeCall.isVideo && isCameraEnabled && localVideoFrame != null) {
                     DecodedVideoFrameImage(
                         frame = localVideoFrame,
                         contentScale = ContentScale.Crop,
+                        mirror = activeCall.isFrontCamera,
                         modifier = Modifier
                             .width(84.dp)
                             .height(112.dp)
@@ -205,6 +238,27 @@ fun AetherCallScreen(
                             .border(0.5.dp, AetherCallUi.ControlBorder, RoundedCornerShape(14.dp))
                             .testTag("local_video_preview")
                     )
+                } else if (activeCall.isVideo && isCameraEnabled && presentation == CallPresentationState.ACTIVE) {
+                    // Camera intended but no frame yet (starting, or native
+                    // capture still negotiating): a quiet placeholder, never a
+                    // frozen black panel.
+                    Box(
+                        modifier = Modifier
+                            .width(84.dp)
+                            .height(112.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(AetherCallUi.ControlFill)
+                            .border(0.5.dp, AetherCallUi.ControlBorder, RoundedCornerShape(14.dp))
+                            .testTag("local_video_placeholder"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Videocam,
+                            contentDescription = "Camera starting",
+                            tint = colors.textTertiary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
 
@@ -244,14 +298,16 @@ fun AetherCallScreen(
                     onDecline = { onDiscardCall(activeCall.callId) }
                 )
             } else {
+                // The route shown is ActiveCall's synced ACTUAL route (Bluetooth
+                // and wired devices included), not the last speaker toggle.
                 CallControlRow(
                     isMuted = activeCall.isMuted,
-                    audioRoute = if (activeCall.isSpeakerOn) AudioRoute.SPEAKER else AudioRoute.EARPIECE,
+                    audioRoute = activeCall.audioRoute,
                     isVideoCall = activeCall.isVideo,
                     isCameraEnabled = isCameraEnabled,
                     onToggleMute = onToggleMute,
                     onToggleSpeaker = onToggleSpeaker,
-                    onToggleCamera = onToggleCamera,
+                    onToggleCamera = cameraToggleWithPermission,
                     onSwitchCamera = onSwitchCamera,
                     onEndCall = { onDiscardCall(activeCall.callId) }
                 )
@@ -329,12 +385,21 @@ fun OngoingCallBar(
  * and bounded by the media engine; this still refuses to build a bitmap from a
  * buffer whose length disagrees with its dimensions rather than letting the
  * platform throw.
+ *
+ * A quarter-turned frame ([DecodedVideoFrame.rotationDegrees] 90/270) is drawn
+ * scaled to fit: rotating a box by 90° swaps its on-screen extents, so without
+ * the fit-scale the rotated bitmap's corners would fall outside its bounds.
+ *
+ * [mirror] flips the image horizontally -- used for the front-camera local
+ * preview, where people expect to see themselves as in a mirror. It is purely
+ * a display transform; the transmitted frame is never touched.
  */
 @Composable
 internal fun DecodedVideoFrameImage(
     frame: DecodedVideoFrame,
     contentScale: ContentScale,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    mirror: Boolean = false
 ) {
     // The ARGB->Bitmap copy is real work (a 640x480 frame moves ~1.2MB), so it
     // runs off the UI thread. Keying the producer on [frame] means a newer
@@ -357,10 +422,26 @@ internal fun DecodedVideoFrameImage(
     }
     val bitmap: ImageBitmap = imageBitmap ?: return
 
+    var boxSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    val quarterTurn = frame.rotationDegrees == 90 || frame.rotationDegrees == 270
+    val fitScale = if (quarterTurn && boxSize.width > 0 && boxSize.height > 0) {
+        val long = maxOf(boxSize.width, boxSize.height).toFloat()
+        val short = minOf(boxSize.width, boxSize.height).toFloat()
+        if (long > 0f) short / long else 1f
+    } else {
+        1f
+    }
+
     Image(
         bitmap = bitmap,
         contentDescription = null,
         contentScale = contentScale,
-        modifier = modifier.graphicsLayer { rotationZ = frame.rotationDegrees.toFloat() }
+        modifier = modifier
+            .onSizeChanged { boxSize = androidx.compose.ui.unit.IntSize(it.width, it.height) }
+            .graphicsLayer {
+                rotationZ = frame.rotationDegrees.toFloat()
+                scaleX = if (mirror) -fitScale else fitScale
+                scaleY = fitScale
+            }
     )
 }
