@@ -464,18 +464,19 @@ class ConversationViewModel(
         mediaSendInFlight = true
         viewModelScope.launch {
             try {
-                items.forEachIndexed { index, (path, kind) ->
-                    // Telegram captions a group from its first member; a lone
-                    // item keeps the caption either way.
-                    val itemCaption = if (index == 0) caption else ""
-                    val reply = replyToId?.takeIf { index == 0 }?.toLongOrNull()
-                    val result = when (kind) {
-                        SharedAttachmentKind.IMAGE -> telegram.sendPhoto(activeChatId, path, itemCaption, reply, forumTopicId, false)
-                        SharedAttachmentKind.VIDEO -> telegram.sendVideo(activeChatId, path, itemCaption, 0, 0, 0, reply, forumTopicId, false)
-                        SharedAttachmentKind.FILE -> telegram.sendDocument(activeChatId, path, itemCaption, reply)
-                    }
-                    result.exceptionOrNull()?.message?.let { _sendError.value = it }
-                }
+                sendShareBatch(
+                    items = items.map { (path, kind) -> ShareBatchItem(path, kind) },
+                    caption = caption,
+                    replyToMessageId = replyToId?.toLongOrNull(),
+                    send = { item, itemCaption, reply ->
+                        when (item.kind) {
+                            SharedAttachmentKind.IMAGE -> telegram.sendPhoto(activeChatId, item.path, itemCaption, reply, forumTopicId, false)
+                            SharedAttachmentKind.VIDEO -> telegram.sendVideo(activeChatId, item.path, itemCaption, 0, 0, 0, reply, forumTopicId, false)
+                            SharedAttachmentKind.FILE -> telegram.sendDocument(activeChatId, item.path, itemCaption, reply)
+                        }
+                    },
+                    onError = { _sendError.value = it }
+                )
             } finally {
                 mediaSendInFlight = false
             }
