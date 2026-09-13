@@ -381,4 +381,78 @@ class TelegramMappingTest {
     assertEquals(MessageType.IMAGE, photoPresentation.type)
     assertEquals(MessageType.VIDEO, videoPresentation.type)
   }
+
+  // --- the two-resolver contract and the playable-content indexing -----------
+
+  @Test
+  fun thumbnailAndContentFilesResolveThroughSeparateResolvers() {
+    // The thumbnail may auto-download (resolvePath); the content file must
+    // only ever be LOOKED UP (resolveContentPath) -- and each id must reach
+    // exactly one resolver, so the two can never cross-resolve.
+    val viaResolvePath = mutableListOf<Int>()
+    val viaResolveContentPath = mutableListOf<Int>()
+    val content = TdApi.MessageVideo().apply { video = tdVideo(thumbnailFileId = 11, videoFileId = 22) }
+
+    val presentation = TelegramMappers.mapPresentation(
+      content,
+      messageId = 1L,
+      resolvePath = { file -> file?.id?.let { viaResolvePath.add(it) }; null },
+      resolveContentPath = { file -> file?.id?.let { viaResolveContentPath.add(it) }; null }
+    )
+
+    assertEquals(listOf(11), viaResolvePath)
+    assertEquals(listOf(22), viaResolveContentPath)
+    val item = presentation.mediaItems.single()
+    assertEquals(11, item.fileId)
+    assertEquals(22, item.videoFileId)
+  }
+
+  @Test
+  fun voiceNoteIndexesItsPlayableContentFile() {
+    val content = TdApi.MessageVoiceNote().apply {
+      voiceNote = TdApi.VoiceNote().apply {
+        duration = 9
+        voice = tdFile(31, localPath = "/data/aether/voice31.ogg", downloaded = true)
+      }
+    }
+    val presentation = TelegramMappers.mapPresentation(content, messageId = 1L, resolvePath = { null })
+    val item = presentation.mediaItems.single()
+    assertEquals(31, item.fileId)
+    assertEquals("/data/aether/voice31.ogg", item.url)
+    assertTrue(item.hasLocalFile)
+  }
+
+  @Test
+  fun audioMessageIndexesItsAudioFileNotItsCover() {
+    // An album-cover thumbnail's id here (the old mapping) made the audio
+    // chip inert forever -- the bytes that can play were never requested.
+    val content = TdApi.MessageAudio().apply {
+      audio = TdApi.Audio().apply {
+        duration = 120
+        title = "Song"
+        audio = tdFile(41)
+        albumCoverThumbnail = TdApi.Thumbnail().apply { file = tdFile(45) }
+      }
+    }
+    val presentation = TelegramMappers.mapPresentation(content, messageId = 1L, resolvePath = { null })
+    val item = presentation.mediaItems.single()
+    assertEquals(41, item.fileId)
+    assertTrue("no local bytes yet: lookup-only resolution must not fake one", !item.hasLocalFile)
+  }
+
+  @Test
+  fun documentIndexesItsContentFile() {
+    val content = TdApi.MessageDocument().apply {
+      document = TdApi.Document().apply {
+        fileName = "report.pdf"
+        document = tdFile(51, localPath = "/data/aether/report.pdf", downloaded = true)
+      }
+    }
+    val presentation = TelegramMappers.mapPresentation(content, messageId = 1L, resolvePath = { null })
+    assertEquals(MessageType.FILE, presentation.type)
+    val item = presentation.mediaItems.single()
+    assertEquals(51, item.fileId)
+    assertEquals("/data/aether/report.pdf", item.url)
+    assertTrue(item.hasLocalFile)
+  }
 }
