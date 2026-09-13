@@ -889,7 +889,9 @@ fun AetherApp(
         // a real app surface is up (dev prototype has no push; data-layer
         // tests never reach composition, so no network churn under test).
         LaunchedEffect(callsRepository) {
-            (application as? AetherApplication)?.aetherCallsRepository?.startIncomingPolling()
+            if (com.foresightlabs.aether.AetherFeatureFlags.AETHER_CALLS_ENABLED) {
+                (application as? AetherApplication)?.aetherCallsRepository?.startIncomingPolling()
+            }
         }
 
         // The active call renders as this full-screen surface or NOT AT ALL:

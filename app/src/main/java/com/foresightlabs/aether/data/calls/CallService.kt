@@ -27,6 +27,14 @@ class CallService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Calling held (AetherFeatureFlags.CALLS_ENABLED): the service must be
+        // unreachable through ANY path -- UI, stale notification actions from a
+        // previous install, or a stray start intent. It stops instead of
+        // promising a foreground notification for a feature that cannot run.
+        if (!com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED) {
+            stopForegroundService()
+            return START_NOT_STICKY
+        }
         val action = intent?.action
         if (action == ACTION_STOP_CALL) {
             val app = application as? AetherApplication

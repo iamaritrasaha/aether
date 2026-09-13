@@ -724,6 +724,7 @@ class ConversationViewModel(
     }
 
     fun initiateAudioCall() {
+        if (!com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED) return
         val targetUserId = resolveCallTargetUserId()
         viewModelScope.launch {
             val result = calls.initiateCall(targetUserId, isVideo = false)
@@ -732,6 +733,7 @@ class ConversationViewModel(
     }
 
     fun initiateVideoCall() {
+        if (!com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED) return
         val targetUserId = resolveCallTargetUserId()
         viewModelScope.launch {
             val result = calls.initiateCall(targetUserId, isVideo = true)

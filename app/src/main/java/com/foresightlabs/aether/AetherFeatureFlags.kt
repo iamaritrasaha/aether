@@ -13,9 +13,33 @@ object AetherFeatureFlags {
 
     /**
      * Voice and video calling via TDLib signalling and a real Telegram-compatible
-     * media transport (ntgcalls; see docs/architecture/calling-native-stack.md).
+     * media transport (ntgcalls; see docs/architecture/calling-native-stack.md),
+     * plus the Aether Calls / LiveKit backend and the shared CallHub.
+     *
+     * This is a BUILD capability, not a hand-edited switch: development and
+     * internal builds compile it true, the Play release compiles it false
+     * (BuildConfig.CALLING_ENABLED; -PcallingEnabled forces it on for an
+     * installable release-like internal build). With calling held, no call
+     * entry point renders, no invite polling or LiveKit registration runs,
+     * TDLib call updates never ring, the call foreground service never starts,
+     * and the release manifest does not declare the call-only service or its
+     * permissions. The implementation stays intact for the experimental track.
      */
-    const val CALLS_ENABLED = true
+    val CALLS_ENABLED: Boolean = BuildConfig.CALLING_ENABLED
+
+    /**
+     * Aether Calls specifically (LiveKit rooms + the development call
+     * service). Gates the incoming-invite polling and LiveKit registration;
+     * never true when [CALLS_ENABLED] is false.
+     */
+    val AETHER_CALLS_ENABLED: Boolean = BuildConfig.AETHER_CALLS_ENABLED
+
+    /**
+     * Telegram Beta calling specifically (TDLib signalling + ntgcalls). Gates
+     * the reaction to TDLib call updates -- with it false an incoming Telegram
+     * call never rings, notifies, or starts the call service.
+     */
+    val TELEGRAM_CALLS_ENABLED: Boolean = BuildConfig.TELEGRAM_CALLS_ENABLED
 
     /**
      * Background continuous live location tracking and streaming.

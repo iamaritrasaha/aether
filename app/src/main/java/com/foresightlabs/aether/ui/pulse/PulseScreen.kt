@@ -294,12 +294,20 @@ fun PulseScreen(
                     contentDescription = "Pulse",
                     onClick = {}
                 ),
-                AetherNavItem(
-                    key = "calls",
-                    icon = Icons.Default.Call,
-                    contentDescription = "Calls",
-                    onClick = onNavigateToCalls
-                ),
+                // Calling held (AetherFeatureFlags.CALLS_ENABLED): the tab is
+                // omitted entirely -- never shown disabled or as a placeholder.
+                *(
+                    if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED)
+                        listOf(
+                            AetherNavItem(
+                                key = "calls",
+                                icon = Icons.Default.Call,
+                                contentDescription = "Calls",
+                                onClick = onNavigateToCalls
+                            )
+                        ).toTypedArray()
+                    else emptyArray()
+                    ),
                 AetherNavItem(
                     key = "settings",
                     icon = Icons.Default.Settings,

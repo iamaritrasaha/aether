@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Calling is compiled out of the Play release (BuildConfig.CALLING_ENABLED
+      is false — see AetherFeatureFlags.CALLS_ENABLED). The call-only
+      foreground service and its permissions are stripped from the release
+      manifest so the Play build never advertises them; internal/debug builds
+      keep the declarations. Nothing else in the app may start CallService
+      while calling is held (every start path is flag-gated, and the service
+      itself refuses to run).
+
+      Media permissions (RECORD_AUDIO, CAMERA) deliberately STAY: voice notes,
+      audio/documents, camera and media sending use them independently of
+      calling.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" tools:node="remove" />
+
+    <application>
+        <service
+            android:name="com.foresightlabs.aether.data.calls.CallService"
+            tools:node="remove" />
+    </application>
+</manifest>

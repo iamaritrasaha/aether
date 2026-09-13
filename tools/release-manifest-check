@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Release-manifest hygiene gate for the Play build.
+#
+#   tools/release-manifest-check [MERGED_RELEASE_MANIFEST]
+#
+# Defaults to the AGP merged release manifest. Fails (non-zero) when the
+# release build advertises call-only surface that is compiled out:
+#   - the call foreground service component
+#   - FOREGROUND_SERVICE / FOREGROUND_SERVICE_MICROPHONE permissions
+#   - cleartext traffic allowed
+#   - debuggable
+#
+# Run AFTER :app:processReleaseManifest (or :app:assembleRelease /
+# :app:bundleRelease). Part of the release gates; see docs release notes.
+
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MANIFEST="${1:-$REPO_DIR/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml}"
+
+if [ ! -f "$MANIFEST" ]; then
+    # Older AGP layout fallback.
+    ALT="$(find "$REPO_DIR/app/build/intermediates/merged_manifests" -name AndroidManifest.xml -path "*release*" 2>/dev/null | head -1 || true)"
+    if [ -n "$ALT" ]; then MANIFEST="$ALT"; else
+        echo "merged release manifest not found — build the release first:" >&2
+        echo "  ./gradlew :app:bundleRelease" >&2
+        exit 2
+    fi
+fi
+
+echo "checking: $MANIFEST"
+fail=0
+check_absent() { # pattern label
+    if grep -q "$1" "$MANIFEST"; then
+        echo "FAIL: $2" >&2
+        fail=1
+    else
+        echo "ok: $2 absent"
+    fi
+}
+check_absent 'com\.foresightlabs\.aether\.data\.calls\.CallService' "call foreground service component"
+check_absent 'android\.permission\.FOREGROUND_SERVICE"' "plain FOREGROUND_SERVICE permission"
+check_absent 'android\.permission\.FOREGROUND_SERVICE_MICROPHONE' "FOREGROUND_SERVICE_MICROPHONE permission"
+check_absent 'usesCleartextTraffic="true"' "cleartext traffic enabled"
+check_absent 'android:debuggable="true"' "debuggable flag"
+
+if [ "$fail" -ne 0 ]; then
+    echo "RELEASE MANIFEST CHECK FAILED" >&2
+    exit 1
+fi
+echo "RELEASE MANIFEST CHECK PASSED"

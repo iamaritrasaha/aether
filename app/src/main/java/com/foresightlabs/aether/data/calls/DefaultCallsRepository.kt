@@ -138,12 +138,17 @@ class DefaultCallsRepository(
         // handler. A call is exactly the moment a crash costs the most.
         scope.launch {
             telegram.activeCallState.collect { call ->
+                // Calling held (AetherFeatureFlags.TELEGRAM_CALLS_ENABLED): a
+                // TDLib call never rings, notifies, or starts media here. The
+                // app behaves as if the call did not exist.
+                if (!com.foresightlabs.aether.AetherFeatureFlags.TELEGRAM_CALLS_ENABLED) return@collect
                 guarded(CallStage.TDLIB_READY) { handleTdLibStateChange(call) }
             }
         }
 
         scope.launch {
             telegram.latestRawCallState.collect { rawCall ->
+                if (!com.foresightlabs.aether.AetherFeatureFlags.TELEGRAM_CALLS_ENABLED) return@collect
                 guarded(CallStage.TDLIB_READY) { handleRawCallUpdate(rawCall) }
             }
         }
