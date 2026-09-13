@@ -52,6 +52,28 @@ class AetherApplication : Application(), ImageLoaderFactory {
     }
 
     /**
+     * The Aether (LiveKit) call backend. Publishes into [callHub]; a call
+     * from here carries backend=AETHER and is the primary, stable path.
+     */
+    val aetherCallsRepository: com.foresightlabs.aether.data.calls.aether.AetherCallsRepository by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        com.foresightlabs.aether.data.calls.aether.AetherCallsRepository(
+            context = this,
+            hub = callHub,
+            serviceClient = com.foresightlabs.aether.data.calls.aether.AetherCallServiceClient(
+                com.foresightlabs.aether.BuildConfig.AETHER_CALL_SERVICE_URL
+            ),
+            scope = applicationScope,
+            selfIdentity = {
+                com.foresightlabs.aether.data.calls.aether.AetherInstallIdentity.toCallingIdentity(
+                    this,
+                    displayName = "Aether " + com.foresightlabs.aether.data.calls.aether.AetherInstallIdentity.aetherId(this).takeLast(4),
+                    telegramUserId = telegram.getMyUserId().takeIf { it > 0 }
+                )
+            }
+        )
+    }
+
+    /**
      * The one canonical active call across BOTH call backends
      * ([com.foresightlabs.aether.domain.calls.CallBackend]): a LiveKit call
      * and a Telegram call must never coexist -- they would fight over the
@@ -154,6 +176,12 @@ class AetherApplication : Application(), ImageLoaderFactory {
             override fun onActivityDestroyed(activity: android.app.Activity) {}
         })
         telegram.start()
+
+        // Aether Calls: poll the dev call service for incoming invites while
+        // the app runs (dev prototype has no push).
+        applicationScope.launch {
+            aetherCallsRepository.startIncomingPolling()
+        }
 
         // Cross-backend preemption: when the OTHER backend's newer call takes
         // the single call slot, the displaced backend tears its own call down.

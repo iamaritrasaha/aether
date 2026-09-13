@@ -154,6 +154,21 @@ fun CallIdentity(
             textAlign = TextAlign.Center,
             modifier = Modifier.testTag("call_state_text")
         )
+
+        // Small, quiet backend label. Once the user chose a backend this is
+        // the only trace: no warnings, no banners -- just which transport.
+        Text(
+            text = call.backend.label,
+            fontFamily = ManropeFontFamily,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Normal,
+            letterSpacing = 0.7.sp,
+            color = colors.textTertiary,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .testTag("call_backend_label")
+        )
     }
 }
 

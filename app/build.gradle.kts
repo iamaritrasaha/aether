@@ -61,6 +61,10 @@ android {
     // Hash is injected for TDLib initialization only. Never log or display it.
     buildConfigField("String", "TELEGRAM_API_HASH", "\"${telegramApiHash.replace("\"", "\\\"")}\"")
     buildConfigField("boolean", "HAS_TELEGRAM_CREDENTIALS", (telegramApiId.isNotEmpty() && telegramApiHash.isNotEmpty()).toString())
+        // Development Aether Call Service (see call-service/README.md). The
+        // LiveKit API secret NEVER lives here -- the app holds only this LAN
+        // URL and receives short-lived participant tokens from the service.
+        buildConfigField("String", "AETHER_CALL_SERVICE_URL", "\"${if (project.hasProperty("aetherCallServiceUrl")) project.property("aetherCallServiceUrl") else "http://192.168.0.30:8080"}\"")
     buildConfigField("String", "TDLIB_COMMIT", "\"89ebded9571b7bb589ec1bd05e585fffa4c580e2\"")
     buildConfigField("boolean", "HAS_FCM_CONFIG", hasFcmConfig.toString())
     manifestPlaceholders["aetherFcmEnabled"] = hasFcmConfig.toString()
@@ -119,6 +123,9 @@ android {
 dependencies {
   implementation(project(":tdlib"))
   implementation(project(":call-media"))
+
+  // Aether Calls: LiveKit-backed primary transport (Aether-to-Aether, E2EE media).
+  implementation(libs.livekit.android)
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.compose.material.icons.core)

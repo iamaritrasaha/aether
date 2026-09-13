@@ -19,6 +19,8 @@ dependencyResolutionManagement {
   repositories {
     google()
     mavenCentral()
+    // LiveKit Android depends on an audioswitch artifact published via JitPack.
+    maven("https://jitpack.io")
   }
 }
 

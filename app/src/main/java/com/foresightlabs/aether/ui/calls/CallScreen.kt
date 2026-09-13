@@ -91,7 +91,13 @@ fun AetherCallScreen(
     isCameraEnabled: Boolean = false,
     onToggleCamera: () -> Unit = {},
     onSwitchCamera: () -> Unit = {},
-    mediaHealthProvider: () -> com.foresightlabs.aether.calls.media.CallMediaHealth? = { null }
+    mediaHealthProvider: () -> com.foresightlabs.aether.calls.media.CallMediaHealth? = { null },
+    // Backend-supplied video surfaces: the AETHER (LiveKit) backend renders
+    // its own tracks (LiveKitVideoSurface); the TELEGRAM_BETA backend passes
+    // decoded frames (remoteVideoFrame/localVideoFrame below). One CallScreen,
+    // two transports, no duplicated screen.
+    remoteVideoContent: (@Composable () -> Unit)? = null,
+    localVideoContent: (@Composable () -> Unit)? = null
 ) {
     if (activeCall == null) return
 
@@ -115,7 +121,7 @@ fun AetherCallScreen(
     // before that the call keeps the Aether scene rather than turning black.
     val showsRemoteVideo = activeCall.isVideo &&
         presentation == CallPresentationState.ACTIVE &&
-        remoteVideoFrame != null
+        (remoteVideoFrame != null || remoteVideoContent != null)
 
     // A call is never accepted before the OS grants what it needs -- the same
     // rule that applies to placing one. See CallPermissionGate.
@@ -184,13 +190,17 @@ fun AetherCallScreen(
         }
 
         if (showsRemoteVideo) {
-            DecodedVideoFrameImage(
-                frame = remoteVideoFrame,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("remote_video_surface")
-            )
+            if (remoteVideoContent != null) {
+                remoteVideoContent()
+            } else if (remoteVideoFrame != null) {
+                DecodedVideoFrameImage(
+                    frame = remoteVideoFrame,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("remote_video_surface")
+                )
+            }
         }
 
         // A single restrained scrim: enough to seat the typography, never a
@@ -249,7 +259,18 @@ fun AetherCallScreen(
                 // small and anchored -- never a floating panel over the scene.
                 // Front-camera preview is mirrored (what users expect from a
                 // mirror); the transmitted frame itself is untouched.
-                if (activeCall.isVideo && isCameraEnabled && localVideoFrame != null) {
+                if (activeCall.isVideo && isCameraEnabled && localVideoContent != null) {
+                    Box(
+                        modifier = Modifier
+                            .width(84.dp)
+                            .height(112.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(0.5.dp, AetherCallUi.ControlBorder, RoundedCornerShape(14.dp))
+                            .testTag("local_video_preview")
+                    ) {
+                        localVideoContent()
+                    }
+                } else if (activeCall.isVideo && isCameraEnabled && localVideoFrame != null) {
                     DecodedVideoFrameImage(
                         frame = localVideoFrame,
                         contentScale = ContentScale.Crop,

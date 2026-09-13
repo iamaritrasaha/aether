@@ -892,26 +892,81 @@ fun AetherApp(
         // conversation's animated call icon is the way back in.
         if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED && activeCall != null && !activeCall!!.isMinimized) {
             run {
+                // ONE CallScreen, TWO backends: callbacks and video surfaces
+                // dispatch on the call's backend. The screen itself never
+                // learns which transport it is showing beyond a small label.
+                val call = activeCall!!
+                val aetherBackend = call.backend == com.foresightlabs.aether.domain.calls.CallBackend.AETHER
+                val aetherRepo = (application as? AetherApplication)?.aetherCallsRepository
                 AetherCallScreen(
-                    activeCall = activeCall,
+                    activeCall = call,
                     onAcceptCall = { callId ->
-                        navScope.launch { callsRepository?.acceptCall(callId) }
+                        navScope.launch {
+                            if (aetherBackend) aetherRepo?.acceptCall() else callsRepository?.acceptCall(callId)
+                        }
                     },
                     onDiscardCall = { callId ->
-                        navScope.launch { callsRepository?.discardCall(callId) }
+                        navScope.launch {
+                            if (aetherBackend) {
+                                if (call.state == com.foresightlabs.aether.domain.model.CallStateEnum.PENDING) {
+                                    aetherRepo?.declineCall()
+                                } else {
+                                    aetherRepo?.endCall()
+                                }
+                            } else {
+                                callsRepository?.discardCall(callId)
+                            }
+                        }
                     },
-                    onToggleMute = { callsRepository?.toggleMute() },
-                    onToggleSpeaker = { callsRepository?.toggleSpeaker() },
+                    onToggleMute = {
+                        if (aetherBackend) aetherRepo?.setMuted(!call.isMuted) else callsRepository?.toggleMute()
+                    },
+                    onToggleSpeaker = {
+                        if (aetherBackend) aetherRepo?.toggleSpeaker() else callsRepository?.toggleSpeaker()
+                    },
                     onMinimize = { (application as? AetherApplication)?.callHub?.minimizeActiveCall() },
-                    remoteVideoFrame = remoteVideoFrame,
-                    localVideoFrame = localVideoFrame,
+                    remoteVideoFrame = if (aetherBackend) null else remoteVideoFrame,
+                    localVideoFrame = if (aetherBackend) null else localVideoFrame,
                     // Camera intent lives on ActiveCall itself (synced from the
                     // media engine and the user's toggles) -- never in screen-local
                     // state, which used to drift from what the engine actually did.
-                    isCameraEnabled = activeCall!!.cameraIntentOn,
-                    onToggleCamera = { callsRepository?.setCameraEnabled(!activeCall!!.cameraIntentOn) },
-                    onSwitchCamera = { callsRepository?.switchCamera() },
-                    mediaHealthProvider = { callsRepository?.mediaHealth }
+                    isCameraEnabled = call.cameraIntentOn,
+                    onToggleCamera = {
+                        if (aetherBackend) aetherRepo?.setCameraEnabled(!call.cameraIntentOn)
+                        else callsRepository?.setCameraEnabled(!call.cameraIntentOn)
+                    },
+                    onSwitchCamera = {
+                        if (aetherBackend) aetherRepo?.switchCamera() else callsRepository?.switchCamera()
+                    },
+                    mediaHealthProvider = { callsRepository?.mediaHealth },
+                    remoteVideoContent = if (aetherBackend && call.isVideo) {
+                        {
+                            val track = aetherRepo?.remoteVideoTrack?.collectAsStateWithLifecycle()?.value
+                            if (track != null) {
+                                com.foresightlabs.aether.ui.calls.LiveKitVideoSurface(
+                                    trackProvider = { aetherRepo.remoteVideoTrack.value },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    localVideoContent = if (aetherBackend && call.isVideo) {
+                        {
+                            val track = aetherRepo?.localVideoTrack?.collectAsStateWithLifecycle()?.value
+                            val front = aetherRepo?.localFrontFacing?.collectAsStateWithLifecycle()?.value ?: true
+                            if (track != null) {
+                                com.foresightlabs.aether.ui.calls.LiveKitVideoSurface(
+                                    trackProvider = { aetherRepo.localVideoTrack.value },
+                                    modifier = Modifier.fillMaxSize(),
+                                    mirror = front
+                                )
+                            }
+                        }
+                    } else {
+                        null
+                    }
                 )
             }
         }
