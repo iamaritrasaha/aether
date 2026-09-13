@@ -25,7 +25,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -43,37 +42,30 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
-import kotlinx.coroutines.delay
 
 @Composable
 fun VoiceMessagePlayer(
     durationSec: Int,
     waveform: List<Float>,
     isOutgoing: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Real playback state from the screen's AudioPlaybackController: null
+    // when this note is not the active one. The previous implementation had
+    // no player behind it at all -- the button animated a timer in silence.
+    playback: AudioPlaybackController.Playback? = null,
+    isDownloading: Boolean = false,
+    onTogglePlay: () -> Unit = {},
+    onSeek: (Float) -> Unit = {},
+    onSpeedChange: (Float) -> Unit = {}
 ) {
     val colors = LocalAetherColors.current
-    var isPlaying by remember { mutableStateOf(false) }
-    var progress by remember { mutableFloatStateOf(0f) }
-    var playbackSpeed by remember { mutableStateOf("1.0x") }
 
     val safeDuration = durationSec.coerceAtLeast(1)
-
-    LaunchedEffect(isPlaying, progress) {
-        if (isPlaying) {
-            val stepTimeMs = 100L
-            val stepProgress = (stepTimeMs / (safeDuration * 1000f))
-            while (isPlaying && progress < 1.0f) {
-                delay(stepTimeMs)
-                progress = (progress + stepProgress).coerceAtMost(1.0f)
-                if (progress >= 1.0f) {
-                    isPlaying = false
-                    progress = 0f
-                    break
-                }
-            }
-        }
-    }
+    val isPlaying = playback?.isPlaying == true
+    val durationMs = playback?.durationMs?.takeIf { it > 0 }?.coerceAtLeast(1000) ?: (safeDuration * 1000L)
+    val positionMs = playback?.positionMs?.coerceIn(0, durationMs) ?: 0L
+    val progress = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+    val playbackSpeed = playback?.speed ?: 1f
 
     val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
     val playButtonBg = if (isOutgoing) contentColor.copy(alpha = 0.25f) else colors.accent
@@ -82,8 +74,13 @@ fun VoiceMessagePlayer(
     val activeWaveformColor = if (isOutgoing) contentColor else colors.accent
     val inactiveWaveformColor = contentColor.copy(alpha = 0.35f)
 
-    val currentSeconds = (progress * safeDuration).toInt()
-    val timeLabel = String.format("%d:%02d / %d:%02d", currentSeconds / 60, currentSeconds % 60, safeDuration / 60, safeDuration % 60)
+    val currentSeconds = (positionMs / 1000L).toInt()
+    val totalSeconds = (durationMs / 1000L).toInt()
+    val timeLabel = if (isDownloading && playback == null) {
+        "Downloading…"
+    } else {
+        String.format("%d:%02d / %d:%02d", currentSeconds / 60, currentSeconds % 60, totalSeconds / 60, totalSeconds % 60)
+    }
 
     val playScale by animateFloatAsState(
         targetValue = if (isPlaying) 0.95f else 1.0f,
@@ -104,9 +101,7 @@ fun VoiceMessagePlayer(
                 .scale(playScale)
                 .clip(CircleShape)
                 .background(playButtonBg)
-                .clickable {
-                    isPlaying = !isPlaying
-                }
+                .clickable { onTogglePlay() }
                 .testTag("voice_play_button"),
             contentAlignment = Alignment.Center
         ) {
@@ -131,7 +126,7 @@ fun VoiceMessagePlayer(
                     .pointerInput(waveform) {
                         detectTapGestures { offset ->
                             val clickedProgress = (offset.x / size.width).coerceIn(0f, 1f)
-                            progress = clickedProgress
+                            onSeek(clickedProgress)
                         }
                     }
             ) {
@@ -182,16 +177,17 @@ fun VoiceMessagePlayer(
                         .clip(RoundedCornerShape(10.dp))
                         .background(contentColor.copy(alpha = 0.14f))
                         .clickable {
-                            playbackSpeed = when (playbackSpeed) {
-                                "1.0x" -> "1.5x"
-                                "1.5x" -> "2.0x"
-                                else -> "1.0x"
+                            val next = when {
+                                playbackSpeed < 1.25f -> 1.5f
+                                playbackSpeed < 1.75f -> 2.0f
+                                else -> 1.0f
                             }
+                            onSpeedChange(next)
                         }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = playbackSpeed,
+                        text = String.format("%.1fx", playbackSpeed),
                         fontFamily = ManropeFontFamily,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,

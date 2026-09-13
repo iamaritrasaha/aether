@@ -40,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Headphones
@@ -134,6 +135,10 @@ fun MessageBubble(
     onMediaClick: (MediaItem) -> Unit,
     /** Opens a downloaded document (or starts its download); see [FileAttachmentContent]. */
     onOpenDocument: (MediaItem) -> Unit = {},
+    /** The conversation's one audio-playback spot (voice notes, audio messages). */
+    audioPlayback: AudioPlaybackController,
+    /** Requests a media file's download (voice/audio tap-to-download). */
+    onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
     onReactionClick: (Message, String) -> Unit,
     modifier: Modifier = Modifier,
     onEntityAction: (EntityAction) -> Unit = {},
@@ -572,18 +577,50 @@ fun MessageBubble(
                         // Message Content by Type
                         when (message.type) {
                             MessageType.VOICE -> {
+                                val voiceMedia = message.mediaItems.firstOrNull()
+                                val voiceKey = "voice:${voiceMedia?.id ?: message.id}"
                                 VoiceMessagePlayer(
                                     durationSec = message.voiceDurationSec,
                                     waveform = message.voiceWaveform,
-                                    isOutgoing = isOutgoing
+                                    isOutgoing = isOutgoing,
+                                    playback = audioPlayback.playback.value
+                                        ?.takeIf { it.key == voiceKey },
+                                    isDownloading = voiceMedia?.isDownloading == true,
+                                    onTogglePlay = {
+                                        audioPlayback.toggle(
+                                            voiceKey,
+                                            voiceMedia?.url,
+                                            voiceMedia?.fileId?.takeIf { it != 0 }
+                                                ?.let { id -> { onRequestMediaDownload(id, false) } }
+                                        )
+                                    },
+                                    onSeek = { fraction ->
+                                        voiceMedia?.let { audioPlayback.seekToFraction(voiceKey, fraction) }
+                                    },
+                                    onSpeedChange = { speed ->
+                                        voiceMedia?.let { audioPlayback.setSpeed(voiceKey, speed) }
+                                    }
                                 )
                             }
                             MessageType.AUDIO -> {
+                                val audioMedia = message.mediaItems.firstOrNull()
+                                val audioKey = "audio:${audioMedia?.id ?: message.id}"
                                 AudioAttachmentContent(
                                     title = message.fileName ?: message.text.ifBlank { "Audio" },
                                     fileSize = message.fileSize ?: "",
                                     durationSec = message.voiceDurationSec,
-                                    isOutgoing = isOutgoing
+                                    isOutgoing = isOutgoing,
+                                    isDownloading = audioMedia?.isDownloading == true,
+                                    playback = audioPlayback.playback.value
+                                        ?.takeIf { it.key == audioKey },
+                                    onTogglePlay = {
+                                        audioPlayback.toggle(
+                                            audioKey,
+                                            audioMedia?.url,
+                                            audioMedia?.fileId?.takeIf { it != 0 }
+                                                ?.let { id -> { onRequestMediaDownload(id, false) } }
+                                        )
+                                    }
                                 )
                             }
                             MessageType.FILE -> {
@@ -1478,10 +1515,14 @@ private fun AudioAttachmentContent(
     title: String,
     fileSize: String,
     durationSec: Int,
-    isOutgoing: Boolean
+    isOutgoing: Boolean,
+    isDownloading: Boolean = false,
+    playback: AudioPlaybackController.Playback? = null,
+    onTogglePlay: () -> Unit = {}
 ) {
     val colors = LocalAetherColors.current
     val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
+    val isPlaying = playback?.isPlaying == true
 
     Row(
         modifier = Modifier
@@ -1493,12 +1534,23 @@ private fun AudioAttachmentContent(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(if (isOutgoing) contentColor.copy(alpha = 0.20f) else colors.accent),
+                .background(if (isOutgoing) contentColor.copy(alpha = 0.20f) else colors.accent)
+                // The audio chip used to be inert decoration -- received audio
+                // could never be played. The icon slot is the play control.
+                .clickable(enabled = onTogglePlay != {}) { onTogglePlay() }
+                .testTag("audio_play_button"),
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = Icons.Default.Headphones,
-                contentDescription = "Audio",
+                imageVector = when {
+                    isDownloading && playback == null -> Icons.Default.Downloading
+                    isPlaying -> Icons.Default.Pause
+                    else -> Icons.Default.PlayArrow
+                },
+                contentDescription = when {
+                    isPlaying -> "Pause"
+                    else -> "Play"
+                },
                 tint = if (isOutgoing) contentColor else colors.surface,
                 modifier = Modifier.size(20.dp)
             )
@@ -1518,7 +1570,10 @@ private fun AudioAttachmentContent(
             )
             Spacer(modifier = Modifier.height(2.dp))
             val durationLabel = if (durationSec > 0) formatDuration(durationSec) else ""
-            val meta = listOfNotNull(durationLabel.takeIf { it.isNotBlank() }, fileSize.takeIf { it.isNotBlank() }).joinToString(" • ")
+            val meta = when {
+                isDownloading && playback == null -> "Downloading…"
+                else -> listOfNotNull(durationLabel.takeIf { it.isNotBlank() }, fileSize.takeIf { it.isNotBlank() }).joinToString(" • ")
+            }
             Text(
                 text = meta.ifBlank { "Audio" },
                 fontFamily = ManropeFontFamily,

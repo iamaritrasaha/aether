@@ -666,6 +666,12 @@ object TelegramMappers {
                     audio?.title?.takeIf { it.isNotBlank() }
                 ).joinToString(" — ").ifBlank { audio?.fileName ?: "Audio" }
                 val captionText = mapFormattedText(content.caption)
+                // The CONTENT file must be the indexed item: an album-cover
+                // thumbnail's id here made the audio chip inert forever -- the
+                // bytes that can play were never requested or resolved.
+                // Lookup-only path, like video: tapping requests the download.
+                val audioFile = audio?.audio
+                val audioPathNow = if (audioFile != null) resolveContentPath(audioFile).orEmpty() else ""
                 MediaPresentation(
                     text = captionText.text.ifBlank { name },
                     type = MessageType.AUDIO,
@@ -674,21 +680,54 @@ object TelegramMappers {
                     fileSize = formatFileSize(audio?.audio?.size ?: 0L),
                     fileExtension = "AUDIO",
                     voiceDurationSec = audio?.duration ?: 0,
-                    mediaItems = mediaItem(
-                        audio?.albumCoverThumbnail?.file ?: audio?.audio,
-                        name,
-                        audio?.albumCoverThumbnail?.width ?: 0,
-                        audio?.albumCoverThumbnail?.height ?: 0
-                    )
+                    mediaItems = if (audioFile != null) {
+                        listOf(
+                            MediaItem(
+                                id = "$messageId:${audioFile.id}",
+                                url = audioPathNow,
+                                caption = name,
+                                fileId = audioFile.id,
+                                hasLocalFile = audioPathNow.isNotBlank(),
+                                isDownloading = audioFile.local?.isDownloadingActive == true,
+                                downloadFailed = isDownloadFailed(audioFile.id),
+                                isUploading = audioFile.remote?.isUploadingActive == true
+                            )
+                        )
+                    } else {
+                        emptyList()
+                    }
                 )
             }
             is TdApi.MessageVoiceNote -> {
                 val voice = content.voiceNote
+                // The voice file must be indexed for the same reason as video
+                // and documents: the play button requests its download, the
+                // completed download re-maps the message, and only then can
+                // the note actually play. (There was no path here at all --
+                // the play button animated a timer with no audio behind it.)
+                val voiceFile = voice?.voice
+                val voicePathNow = if (voiceFile != null) resolveContentPath(voiceFile).orEmpty() else ""
+                val items = if (voiceFile != null) {
+                    listOf(
+                        MediaItem(
+                            id = "$messageId:${voiceFile.id}",
+                            url = voicePathNow,
+                            fileId = voiceFile.id,
+                            hasLocalFile = voicePathNow.isNotBlank(),
+                            isDownloading = voiceFile.local?.isDownloadingActive == true,
+                            downloadFailed = isDownloadFailed(voiceFile.id),
+                            isUploading = voiceFile.remote?.isUploadingActive == true
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
                 MediaPresentation(
                     text = content.caption?.text.orEmpty(),
                     type = MessageType.VOICE,
                     voiceDurationSec = voice?.duration ?: 0,
-                    voiceWaveform = decodeWaveform(voice?.waveform)
+                    voiceWaveform = decodeWaveform(voice?.waveform),
+                    mediaItems = items
                 )
             }
             is TdApi.MessageContact -> {

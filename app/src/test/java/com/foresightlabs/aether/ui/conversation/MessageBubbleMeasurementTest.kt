@@ -54,7 +54,10 @@ class MessageBubbleMeasurementTest {
                             onSwipeToReply = {},
                             onLongPress = {},
                             onMediaClick = {},
-                            onReactionClick = { _, _ -> }
+                            onReactionClick = { _, _ -> },
+                            audioPlayback = com.foresightlabs.aether.ui.conversation.AudioPlaybackController(
+                                androidx.test.core.app.ApplicationProvider.getApplicationContext()
+                            )
                         )
                     }
                 }

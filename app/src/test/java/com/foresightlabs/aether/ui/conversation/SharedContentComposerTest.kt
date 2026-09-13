@@ -181,8 +181,8 @@ class SharedContentComposerTest {
         val recorder = Recorder()
         recorder.send(PendingShare(emptyList()))
 
-        assertTrue(recorder.photos.isEmpty() && recorder.videos.isEmpty())
-        assertTrue(recorder.documents.isEmpty() && recorder.albums.isEmpty())
+        assertTrue(recorder.photos.isEmpty() && recorder.batches.isEmpty())
+        assertTrue(recorder.albums.isEmpty())
     }
 
     // --- helpers ------------------------------------------------------------

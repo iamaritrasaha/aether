@@ -284,7 +284,8 @@ class SelectionInteractionTest {
                     onMediaClick = {},
                     onReactionClick = { _, _ -> },
                     isSelected = true,
-                    isSelectionActive = true
+                    isSelectionActive = true,
+                audioPlayback = com.foresightlabs.aether.ui.conversation.AudioPlaybackController(androidx.test.core.app.ApplicationProvider.getApplicationContext())
                 )
             }
         }

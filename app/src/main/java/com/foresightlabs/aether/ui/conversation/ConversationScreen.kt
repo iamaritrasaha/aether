@@ -60,6 +60,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -488,6 +489,25 @@ fun ConversationScreen(
             if (audioRecorder.isRecording) {
                 audioRecorder.cancelRecording()
             }
+        }
+    }
+
+    // The conversation's single audio player: one voice note / audio message
+    // audible at a time, real position/duration driving the bubble UI,
+    // released when the conversation leaves composition.
+    val audioPlayback = remember { com.foresightlabs.aether.ui.conversation.AudioPlaybackController(context) }
+    androidx.compose.runtime.DisposableEffect(audioPlayback) {
+        onDispose { audioPlayback.release() }
+    }
+    // A note whose download was requested from its play button starts playing
+    // the moment the completed download re-maps the message and the path
+    // arrives in the bubble's media item.
+    val audioPendingPathArrival by audioPlayback.pendingDownloadKey.collectAsState()
+    LaunchedEffect(audioPendingPathArrival, messages) {
+        val key = audioPendingPathArrival ?: return@LaunchedEffect
+        val note = messages.firstNotNullOfOrNull { it.mediaItems.firstOrNull { m -> key == "voice:${m.id}" || key == "audio:${m.id}" } }
+        if (note != null && note.hasLocalFile) {
+            audioPlayback.onPathArrived(key, note.url)
         }
     }
 
@@ -1367,6 +1387,8 @@ fun ConversationScreen(
                         onOpenMessageContent(msg.id)
                     },
                     onOpenDocument = { media -> openDocument(media) },
+                    audioPlayback = audioPlayback,
+                    onRequestMediaDownload = onRequestMediaDownload,
                     onReactionClick = { targetMsg, emoji ->
                         onAddReaction(targetMsg, emoji)
                     },
