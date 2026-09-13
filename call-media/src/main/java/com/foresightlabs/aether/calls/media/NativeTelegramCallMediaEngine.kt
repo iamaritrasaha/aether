@@ -398,6 +398,8 @@ class NativeTelegramCallMediaEngine {
                     )
                     if (source.device == StreamDevice.MICROPHONE) {
                         mediaActivityMonitor.onRemoteMicState(source.state?.name)
+                    } else if (source.device == StreamDevice.CAMERA) {
+                        mediaActivityMonitor.onRemoteCameraState(source.state?.name)
                     }
                 }
                 ntg.onStreamEnd { callId, type, device ->
@@ -511,6 +513,7 @@ class NativeTelegramCallMediaEngine {
          * per-site logic. No-op when nothing is listening.
          */
         private fun emitCameraState() {
+            mediaActivityMonitor.onLocalCameraFacing(activeCameraIsFront)
             callback?.onCameraStateChanged(rendererEnabled, activeCameraIsFront)
         }
 

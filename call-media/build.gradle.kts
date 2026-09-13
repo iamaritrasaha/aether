@@ -57,6 +57,10 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // The engine's camera metadata is JSON ({"id":..., "is_front":...}); the
+    // JVM unit tests must parse it with the REAL org.json implementation --
+    // the Android SDK's stub throws "not mocked" outside Robolectric.
+    testImplementation("org.json:json:20240303")
 
     // On-device native smoke tests (connectedDebugAndroidTest): exercise the
     // real NTgCalls load/context/device/session seams on physical hardware.

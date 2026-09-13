@@ -1,6 +1,7 @@
 package com.foresightlabs.aether.calls.media
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -147,5 +148,48 @@ class MediaActivityMonitorTest {
         } finally {
             scheduler.shutdownNow()
         }
+    }
+
+    @Test
+    fun remoteCameraSourcePresentOnlyWhileActive() {
+        val m = monitor()
+        m.tick(CALL_ID, GENERATION, { sample(capture = 1, playback = 1) }, { true })
+
+        m.onRemoteCameraState("ACTIVE")
+        assertTrue(m.latestHealth!!.remoteVideoSourcePresent)
+
+        m.onRemoteCameraState("PAUSED")
+        assertFalse(m.latestHealth!!.remoteVideoSourcePresent)
+
+        m.onRemoteCameraState(null)
+        assertFalse(m.latestHealth!!.remoteVideoSourcePresent)
+    }
+
+    @Test
+    fun remoteCameraEvidenceSurvivesUntilNextSample() {
+        val m = monitor()
+        m.onRemoteCameraState("ACTIVE")
+        m.tick(CALL_ID, GENERATION, { sample(capture = 2, playback = 2) }, { true })
+        assertTrue("camera evidence must be carried into the next sample", m.latestHealth!!.remoteVideoSourcePresent)
+    }
+
+    @Test
+    fun remoteCameraEvidenceResetsOnNewSession() {
+        // Hour-long period: start() arms a real schedule, but it must never
+        // fire during this (or a later) test -- only the synchronous reset
+        // inside start() is under test.
+        val m = MediaActivityMonitor(periodMillis = 3_600_000L)
+        m.onRemoteCameraState("ACTIVE")
+        m.start(CALL_ID, GENERATION, { sample() }, { true })
+        assertNull(m.latestHealth)
+    }
+
+    @Test
+    fun localCameraFacingIsReportedInHealth() {
+        val m = monitor()
+        m.tick(CALL_ID, GENERATION, { sample(capture = 1) }, { true })
+        assertTrue(m.latestHealth!!.localCameraIsFront)
+        m.onLocalCameraFacing(false)
+        assertFalse(m.latestHealth!!.localCameraIsFront)
     }
 }

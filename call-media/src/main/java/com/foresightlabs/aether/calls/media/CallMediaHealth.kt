@@ -23,7 +23,19 @@ data class CallMediaHealth(
     val lastCaptureActivityMs: Long?,
     val lastPlaybackActivityMs: Long?,
     /** True once the remote peer's microphone stream was reported Active. */
-    val remoteMicActive: Boolean
+    val remoteMicActive: Boolean,
+
+    /**
+     * Remote video evidence, separately from audio: true once the peer's
+     * camera source was reported Active, false after Paused/Idling or before
+     * any camera event -- distinguishing a video call whose video has not
+     * started (or dropped) from one that never had video. Evidence only: it
+     * never promotes or demotes connection state by itself.
+     */
+    val remoteVideoSourcePresent: Boolean,
+
+    /** Facing of the local camera the engine actually selected (default front). */
+    val localCameraIsFront: Boolean
 ) {
     /**
      * Failure classification from counters alone (the letter classes used by

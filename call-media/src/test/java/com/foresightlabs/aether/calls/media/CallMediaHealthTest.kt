@@ -23,7 +23,9 @@ class CallMediaHealthTest {
         playbackSeconds = playback,
         lastCaptureActivityMs = null,
         lastPlaybackActivityMs = null,
-        remoteMicActive = remoteMic
+        remoteMicActive = remoteMic,
+        remoteVideoSourcePresent = false,
+        localCameraIsFront = true
     )
 
     @Test

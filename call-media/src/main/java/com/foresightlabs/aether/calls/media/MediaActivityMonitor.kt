@@ -62,6 +62,8 @@ internal class MediaActivityMonitor(
     private var lastCaptureActivityMs: Long? = null
     private var lastPlaybackActivityMs: Long? = null
     private var remoteMicActive: Boolean = false
+    private var remoteVideoActive: Boolean = false
+    private var localCameraIsFront: Boolean = true
 
     /** Latest evidence snapshot; null until the first usable sample. */
     @Volatile
@@ -75,6 +77,26 @@ internal class MediaActivityMonitor(
             latestHealth?.let { h ->
                 latestHealth = h.copy(remoteMicActive = true)
             }
+        }
+    }
+
+    /**
+     * Feeds remote CAMERA source evidence. Any non-ACTIVE status (Paused,
+     * Idling, or an unexpected/unknown value) counts as absent: the video
+     * is not currently flowing.
+     */
+    fun onRemoteCameraState(state: String?) {
+        remoteVideoActive = state == "ACTIVE"
+        latestHealth?.let { h ->
+            latestHealth = h.copy(remoteVideoSourcePresent = remoteVideoActive)
+        }
+    }
+
+    /** Facing of the local camera the engine actually selected. */
+    fun onLocalCameraFacing(isFront: Boolean) {
+        localCameraIsFront = isFront
+        latestHealth?.let { h ->
+            latestHealth = h.copy(localCameraIsFront = isFront)
         }
     }
 
@@ -103,6 +125,7 @@ internal class MediaActivityMonitor(
             lastCaptureActivityMs = null
             lastPlaybackActivityMs = null
             remoteMicActive = false
+            remoteVideoActive = false
             latestHealth = null
             future = scheduler.scheduleWithFixedDelay(
                 { scheduledTick() },
@@ -195,7 +218,9 @@ internal class MediaActivityMonitor(
                 playbackSeconds = sample.playbackSeconds,
                 lastCaptureActivityMs = lastCaptureActivityMs,
                 lastPlaybackActivityMs = lastPlaybackActivityMs,
-                remoteMicActive = remoteMicActive
+                remoteMicActive = remoteMicActive,
+                remoteVideoSourcePresent = remoteVideoActive,
+                localCameraIsFront = localCameraIsFront
             )
 
             // Emit when there is activity, on the first sample, and as a
