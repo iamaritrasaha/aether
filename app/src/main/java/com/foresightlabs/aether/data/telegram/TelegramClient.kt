@@ -418,18 +418,59 @@ open class TelegramClient(private val application: Application) {
         ?: chats[chatId]?.let { mapUiChat(it) }
 
     suspend fun ensureChatLoaded(chatId: Long): Chat? {
-        chats[chatId]?.let { return mapUiChat(it) }
+        chats[chatId]?.let {
+            // A private chat's title is composed from the user's name in
+            // TDLib's LOCAL database. If that row is stale (the person renamed
+            // themselves, or the local cache holds an old name), every surface
+            // would keep showing the wrong human indefinitely -- nothing else
+            // ever refreshes it. Opening the chat is the natural moment to ask
+            // the server for the current user; TDLib emits the update, the
+            // users map and the published titles heal from it.
+            refreshPrivateChatUser(it)
+            return mapUiChat(it)
+        }
 
         return when (val result = send(TdApi.GetChat(chatId))) {
             is TdApi.Chat -> {
                 chats[result.id] = result
                 requestChatPhoto(result)
+                refreshPrivateChatUser(result)
                 publishChats(immediate = true)
                 mapUiChat(result)
             }
             else -> null
         }
     }
+
+    /**
+     * Asks TDLib for the current [TdApi.User] behind a private chat and
+     * republishes when the cached row differs. Server truth; never invents a
+     * name -- an unreachable network simply leaves the cached title in place.
+     */
+    private suspend fun refreshPrivateChatUser(chat: TdApi.Chat) {
+        val userId = (chat.type as? TdApi.ChatTypePrivate)?.userId ?: return
+        when (val result = send(TdApi.GetUser(userId))) {
+            is TdApi.User -> {
+                val existing = users[userId]
+                if (existing?.firstName != result.firstName ||
+                    existing?.lastName != result.lastName ||
+                    existing?.usernames?.activeUsernames?.firstOrNull() !=
+                    result.usernames?.activeUsernames?.firstOrNull()
+                ) {
+                    users[userId] = result
+                    chat.title = privateChatTitle(result)
+                    publishChats(immediate = true)
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun privateChatTitle(user: TdApi.User): String =
+        listOf(user.firstName, user.lastName)
+            .filter { !it.isNullOrBlank() }
+            .joinToString(" ")
+            .ifBlank { "Deleted account" }
 
     suspend fun createPrivateChat(userId: Long): Result<Chat> {
         return when (val result = send(TdApi.CreatePrivateChat(userId, false))) {
