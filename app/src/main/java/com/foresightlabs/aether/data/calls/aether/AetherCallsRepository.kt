@@ -72,6 +72,20 @@ class AetherCallsRepository(
     private var incomingPollJob: Job? = null
     private var sid: Long = 0L
 
+    init {
+        // Cross-backend preemption: when the OTHER backend's newer call takes
+        // the single slot, THIS backend tears its own call down. It never
+        // reads the winner -- only the hub's named signal.
+        scope.launch {
+            hub.preemptedBackend.collect { preempted ->
+                if (preempted == CallBackend.AETHER && _activeCall.value != null) {
+                    AetherCallLog.stage(nextSid(), "preempted — ending our call")
+                    teardown("preempted_by_newer_backend")
+                }
+            }
+        }
+    }
+
     private fun nextSid(): Long = ++sid
 
     /** Whether the Aether calling path is configured (a reachable dev service URL). */
@@ -130,6 +144,14 @@ class AetherCallsRepository(
 
     @Volatile
     private var pendingInviteId: String? = null
+
+    /**
+     * Directory lookup: is this Telegram contact an Aether-calling user, and
+     * under which identity? Null = not registered (a completely normal
+     * state) or the dev service being unreachable (also normal).
+     */
+    suspend fun aetherIdentityFor(telegramUserId: Long): AetherCallingIdentity? =
+        serviceClient.lookupByTelegramUser(telegramUserId)
 
     /**
      * Places an Aether call to a Telegram contact RESOLVED to an Aether

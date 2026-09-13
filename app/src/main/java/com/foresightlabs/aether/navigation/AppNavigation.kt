@@ -1025,6 +1025,41 @@ private fun ConversationRoute(
     val startConversationCall = com.foresightlabs.aether.ui.calls.rememberCallStarter { isVideo ->
         if (isVideo) viewModel.initiateVideoCall() else viewModel.initiateAudioCall()
     }
+
+    // Backend chooser: when the recipient is ALSO an Aether-calling user,
+    // both systems can reach them and the user picks. No directory hit ->
+    // Telegram goes directly (an Aether-unavailable contact is normal).
+    val routeScope = rememberCoroutineScope()
+    var chooserRequest by remember {
+        androidx.compose.runtime.mutableStateOf<CallChooserRequest?>(null)
+    }
+    val aetherRepo = (application as? AetherApplication)?.aetherCallsRepository
+    val startAetherCall = com.foresightlabs.aether.ui.calls.rememberCallStarter { isVideo ->
+        routeScope.launch {
+            chooserRequest?.let { request ->
+                aetherRepo?.initiateCall(
+                    target = request.target,
+                    isVideo = isVideo,
+                    callerName = request.calleeName
+                )
+            }
+            chooserRequest = null
+        }
+    }
+    val onCallIntent: (Boolean) -> Unit = { isVideo ->
+        routeScope.launch {
+            val contactUserId = header?.directUser?.id?.toLongOrNull()
+            val target = if (contactUserId != null && contactUserId > 0) {
+                aetherRepo?.aetherIdentityFor(contactUserId)
+            } else {
+                null
+            }
+            when {
+                target == null -> startConversationCall(isVideo)
+                else -> chooserRequest = CallChooserRequest(header?.title ?: "contact", isVideo, target)
+            }
+        }
+    }
     val canSend by viewModel.composerEnabled.collectAsStateWithLifecycle()
     val messageCapabilities by viewModel.capabilities.collectAsStateWithLifecycle()
     val forwardTargets by viewModel.forwardTargets.collectAsStateWithLifecycle()
@@ -1116,8 +1151,8 @@ private fun ConversationRoute(
             onRequestCapabilities = viewModel::loadCapabilities,
             onRetryMessage = viewModel::retry, onVisibleMessages = viewModel::markVisible,
             isResolving = isResolving, resolveError = resolveError, onRetryResolve = viewModel::retryResolve,
-            onStartVoiceCall = { startConversationCall(false) },
-            onStartVideoCall = { startConversationCall(true) },
+            onStartVoiceCall = { onCallIntent(false) },
+            onStartVideoCall = { onCallIntent(true) },
             activeCall = activeCallForThisChat,
             onResumeCall = { (application as? AetherApplication)?.callHub?.resumeActiveCall() },
             ownsActiveCall = activeCallForThisChat?.isMinimized == true,
@@ -1189,6 +1224,26 @@ private fun ConversationRoute(
             onErrorConsumed = viewModel::consumeSendError,
             onOpenMessageContent = viewModel::openMessageContent
         )
+
+        // The backend chooser: small, only when BOTH systems can reach the
+        // recipient. Aether first (Recommended), Telegram clearly Beta.
+        chooserRequest?.let { request ->
+            com.foresightlabs.aether.ui.calls.CallChooserDialog(
+                calleeName = request.calleeName,
+                isVideo = request.isVideo,
+                onChoose = { backend ->
+                    when (backend) {
+                        com.foresightlabs.aether.domain.calls.CallBackend.AETHER ->
+                            startAetherCall(request.isVideo)
+                        com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA -> {
+                            chooserRequest = null
+                            startConversationCall(request.isVideo)
+                        }
+                    }
+                },
+                onDismiss = { chooserRequest = null }
+            )
+        }
     }
 }
 
@@ -1251,3 +1306,11 @@ private fun TelegramServiceNoticePrompt() {
         }
     )
 }
+
+
+/** A pending backend choice for a call the user is about to place. */
+data class CallChooserRequest(
+    val calleeName: String,
+    val isVideo: Boolean,
+    val target: com.foresightlabs.aether.data.calls.aether.AetherCallingIdentity
+)
