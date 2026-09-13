@@ -72,6 +72,10 @@ class AetherCallsRepository(
     private var incomingPollJob: Job? = null
     private var sid: Long = 0L
 
+    /** The dev service's per-call room id of the live session (endCall completes it). */
+    @Volatile
+    private var currentRoomId: String? = null
+
     init {
         // Cross-backend preemption: when the OTHER backend's newer call takes
         // the single slot, THIS backend tears its own call down. It never
@@ -168,9 +172,15 @@ class AetherCallsRepository(
      * Directory lookup: is this Telegram contact an Aether-calling user, and
      * under which identity? Null = not registered (a completely normal
      * state) or the dev service being unreachable (also normal).
+     *
+     * The service client is blocking HttpURLConnection: every call into it
+     * MUST leave the caller's dispatcher (UI scopes launch on Main -- a
+     * lookup on Main threw NetworkOnMainThreadException on a physical
+     * device, was swallowed as "unavailable", and the chooser silently fell
+     * back to Telegram).
      */
     suspend fun aetherIdentityFor(telegramUserId: Long): AetherCallingIdentity? =
-        serviceClient.lookupByTelegramUser(telegramUserId)
+        withContext(Dispatchers.IO) { serviceClient.lookupByTelegramUser(telegramUserId) }
 
     /**
      * Places an Aether call to a Telegram contact RESOLVED to an Aether
@@ -183,7 +193,7 @@ class AetherCallsRepository(
         }
         val self = selfIdentity()
             ?: return Result.failure(IllegalStateException("This installation is not registered for Aether Calls"))
-        val join = serviceClient.invite(self, target, isVideo)
+        val join = withContext(Dispatchers.IO) { serviceClient.invite(self, target, isVideo) }
             ?: return Result.failure(IllegalStateException("Aether call service is unreachable"))
         return startSession(join, outgoing = true, peerName = target.displayName, isVideo = isVideo, callerName = callerName)
     }
@@ -191,7 +201,7 @@ class AetherCallsRepository(
     suspend fun acceptCall(): Result<Unit> {
         val inviteId = pendingInviteId
             ?: return Result.failure(IllegalStateException("No incoming call to accept"))
-        val join = serviceClient.accept(inviteId)
+        val join = withContext(Dispatchers.IO) { serviceClient.accept(inviteId) }
             ?: return Result.failure(IllegalStateException("Aether call service is unreachable"))
         val call = _activeCall.value
         return startSession(
@@ -203,14 +213,16 @@ class AetherCallsRepository(
         )
     }
 
-    fun declineCall() {
-        pendingInviteId?.let { serviceClient.decline(it) }
+    suspend fun declineCall() {
+        pendingInviteId?.let { withContext(Dispatchers.IO) { serviceClient.decline(it) } }
         pendingInviteId = null
         teardown("declined")
     }
 
-    fun endCall() {
-        _activeCall.value?.let { serviceClient.complete("room-${it.callId}") }
+    suspend fun endCall() {
+        _activeCall.value?.let {
+            withContext(Dispatchers.IO) { serviceClient.complete(currentRoomId ?: "room-${it.callId}") }
+        }
         teardown("ended")
     }
 
@@ -222,7 +234,8 @@ class AetherCallsRepository(
         callerName: String
     ): Result<Unit> {
         val id = nextSid()
-        AetherCallLog.stage(id, "join room=${join.roomId.hashCode()} urlHost=${hostOf(join.url)} outgoing=$outgoing video=$isVideo")
+        AetherCallLog.stage(id, "join roomId=${join.roomId} urlHost=${hostOf(join.url)} outgoing=$outgoing video=$isVideo")
+        currentRoomId = join.roomId
         _activeCall.value = ActiveCall(
             callId = join.roomId.hashCode(),
             userId = 0L,
@@ -240,7 +253,10 @@ class AetherCallsRepository(
             isVideo = isVideo,
             state = CallStateEnum.EXCHANGING_KEYS,
             backend = CallBackend.AETHER
-        ).also { hub.setAetherCall(it) }
+        ).also {
+            hub.setAetherCall(it)
+            AetherCallLog.stage(id, "hub publish backend=AETHER callId=${it.callId}")
+        }
 
         return try {
             connectRoom(join, id)
@@ -257,6 +273,21 @@ class AetherCallsRepository(
         val newRoom = LiveKit.create(context, AetherCallE2EE.roomOptions(join.e2eeKeyBase64))
         room = newRoom
 
+        // Pre-flight boundary proof (sanitized): mic grant, E2EE on/off and --
+        // DEBUG builds only -- a truncated fingerprint of the DISTRIBUTED KEY
+        // STRING so caller/callee key agreement is provable without ever
+        // logging the key itself.
+        val micGranted = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        val e2eeFingerprint = join.e2eeKeyBase64
+            ?.takeIf { com.foresightlabs.aether.BuildConfig.DEBUG }
+            ?.let { " e2eeKeyFingerprint=${AetherCallE2EE.keyFingerprint(it)}" }
+            ?: ""
+        AetherCallLog.stage(
+            id,
+            "preflight micPermission=$micGranted e2eeEnabled=${join.e2eeKeyBase64 != null}$e2eeFingerprint"
+        )
+
         // Backend-tagged media-state mapping: LiveKit's room lifecycle maps
         // onto the shared MediaConnectionState model.
         scope.launch {
@@ -265,26 +296,56 @@ class AetherCallsRepository(
                     is RoomEvent.Connected -> onRoomConnected(id)
                     is RoomEvent.Reconnecting -> publishMedia(MediaConnectionState.RECONNECTING, id)
                     is RoomEvent.Reconnected -> publishMedia(MediaConnectionState.CONNECTED, id)
-                    is RoomEvent.Disconnected -> teardown("remote_disconnected")
+                    is RoomEvent.Disconnected -> {
+                        AetherCallLog.stage(
+                            id,
+                            "room event=Disconnected reason=${event.reason} error=${event.error?.javaClass?.simpleName ?: "none"}"
+                        )
+                        teardown("remote_disconnected")
+                    }
                     is RoomEvent.FailedToConnect -> {
                         AetherCallLog.failure(id, "failed_to_connect", event.error)
                         teardown("connect_failed")
                     }
+                    is RoomEvent.ParticipantConnected ->
+                        AetherCallLog.stage(id, "room event=ParticipantConnected identity=${event.participant.identity}")
+                    is RoomEvent.ParticipantDisconnected -> {
+                        AetherCallLog.stage(id, "room event=ParticipantDisconnected identity=${event.participant.identity}")
+                        // The peer left: end our side too.
+                        teardown("peer_left")
+                    }
+                    is RoomEvent.TrackPublished -> {
+                        AetherCallLog.stage(
+                            id,
+                            "room event=TrackPublished kind=${event.publication.kind} source=${event.publication.source} " +
+                                "participant=${event.participant.identity}"
+                        )
+                        if (event.publication.source == Track.Source.MICROPHONE) {
+                            AetherCallLog.stage(id, "remoteAudioPublished=true participant=${event.participant.identity}")
+                        }
+                    }
                     is RoomEvent.TrackSubscribed -> {
+                        if (event.track.kind == Track.Kind.AUDIO) {
+                            AetherCallLog.stage(
+                                id,
+                                "remoteAudioSubscribed=true remoteAudioTrackPresent=true " +
+                                    "remoteAudioEnabled=${event.track.enabled} trackSid=${event.track.sid} " +
+                                    "participant=${event.participant.identity}"
+                            )
+                        }
                         if (event.track is RemoteVideoTrack) {
                             _remoteVideoTrack.value = event.track as RemoteVideoTrack
                             AetherCallLog.stage(id, "remote_video_subscribed")
                         }
                     }
                     is RoomEvent.TrackUnsubscribed -> {
+                        if (event.track.kind == Track.Kind.AUDIO) {
+                            AetherCallLog.stage(id, "remoteAudioSubscribed=false trackSid=${event.track.sid}")
+                        }
                         if (event.track is RemoteVideoTrack) {
                             _remoteVideoTrack.value = null
                             AetherCallLog.stage(id, "remote_video_unsubscribed")
                         }
-                    }
-                    is RoomEvent.ParticipantDisconnected -> {
-                        // The peer left: end our side too.
-                        teardown("peer_left")
                     }
                     else -> Unit
                 }
@@ -299,14 +360,58 @@ class AetherCallsRepository(
         // Publish our tracks per the call kind.
         val local = newRoom.localParticipant
         local.setMicrophoneEnabled(true)
+        // Publication proof (Step 5 of the physical protocol): never assume
+        // setMicrophoneEnabled succeeded -- read the actual publication back.
+        val micPublication = local.getTrackPublication(Track.Source.MICROPHONE)
+        AetherCallLog.stage(
+            id,
+            "localAudioPublished=${micPublication != null} muted=${micPublication?.muted ?: "n/a"} " +
+                "trackSid=${micPublication?.sid ?: "none"}"
+        )
         if (_activeCall.value?.isVideo == true) {
             local.setCameraEnabled(true)
             _localVideoTrack.value = local.getOrCreateDefaultVideoTrack()
         }
-        _activeCall.value = _activeCall.value?.copy(mediaState = MediaConnectionState.CONNECTED, connectedAtMs = System.currentTimeMillis())
+        _activeCall.value = _activeCall.value?.copy(
+            state = CallStateEnum.READY,
+            mediaState = MediaConnectionState.CONNECTED,
+            connectedAtMs = System.currentTimeMillis()
+        )
         hub.setAetherCall(_activeCall.value)
-        AetherCallLog.stage(id, "media=CONNECTED")
+        AetherCallLog.stage(
+            id,
+            "media=CONNECTED roomName=${newRoom.name} identity=${local.identity} " +
+                "remoteAudioPublished=${hasRemoteAudio(newRoom)}"
+        )
+        logAudioRoute(id)
         startDurationTicker()
+    }
+
+    /** Whether any remote participant currently publishes a microphone track. */
+    private fun hasRemoteAudio(r: Room): Boolean = r.remoteParticipants.values.any { p ->
+        p.trackPublications.values.any { it.source == Track.Source.MICROPHONE }
+    }
+
+    /**
+     * Route-ownership snapshot (Step 9): what the AudioManager actually holds
+     * while Aether Calls owns the active call. Only this repository touches
+     * the communication route for backend=AETHER -- the Telegram engine's
+     * routing runs inside its own call flow, which the hub prevents from
+     * coexisting with this one.
+     */
+    private fun logAudioRoute(id: Long) {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
+        val commDevice = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            audioManager.communicationDevice?.type ?: -1
+        } else {
+            -1
+        }
+        @Suppress("DEPRECATION")
+        AetherCallLog.stage(
+            id,
+            "audioRoute mode=${audioManager.mode} commDeviceType=$commDevice " +
+                "speakerOn=${audioManager.isSpeakerphoneOn} micMute=${audioManager.isMicrophoneMute}"
+        )
     }
 
     private fun onRoomConnected(id: Long) {
@@ -316,7 +421,14 @@ class AetherCallsRepository(
 
     private fun publishMedia(state: MediaConnectionState, id: Long) {
         AetherCallLog.stage(id, "media=${state.name}")
-        _activeCall.value = _activeCall.value?.copy(mediaState = state)
+        _activeCall.value = _activeCall.value?.let { call ->
+            // Room CONNECTED is also signalling-complete for LiveKit (room
+            // join = keys + transport agreed): the presenter only ever shows
+            // ACTIVE/duration for READY+CONNECTED, so a call stuck on
+            // EXCHANGING_KEYS would sit on "Calling" forever while audio flows.
+            val signalling = if (state == MediaConnectionState.CONNECTED) CallStateEnum.READY else call.state
+            call.copy(state = signalling, mediaState = state)
+        }
         hub.setAetherCall(_activeCall.value)
         if (state == MediaConnectionState.CONNECTED) startDurationTicker()
     }
@@ -434,6 +546,7 @@ class AetherCallsRepository(
         _remoteVideoTrack.value = null
         _localVideoTrack.value = null
         pendingInviteId = null
+        currentRoomId = null
         try {
             room?.disconnect()
         } catch (t: Throwable) {
@@ -470,8 +583,12 @@ object AetherCallLog {
 
     fun failure(session: Long, stage: String, error: Throwable?) {
         val type = error?.javaClass?.name ?: "unknown"
+        // The message of connect/signalling failures is exactly the hint the
+        // physical protocol needs ("invalid API key", "room not found"...);
+        // these carry no tokens or keys.
+        val msg = error?.message?.take(160) ?: ""
         try {
-            android.util.Log.w(TAG, "backend=AETHER sid=$session FAILED at=$stage type=$type")
+            android.util.Log.w(TAG, "backend=AETHER sid=$session FAILED at=$stage type=$type msg=$msg")
         } catch (_: Throwable) {
         }
     }

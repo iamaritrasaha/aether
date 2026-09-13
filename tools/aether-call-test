@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# One-command AETHER (LiveKit) physical-call validation harness — BOTH devices.
+#
+#   tools/aether-call-test [CAPTURE_SECONDS]
+#
+# 1. picks both adb devices (SM-M145F phone = caller, SM-P610 tablet = callee)
+# 2. verifies Aether is installed and fresh on both
+# 3. clears both log buffers
+# 4. starts a DETACHED, tag-filtered, sanitized capture on each
+# 5. prints READY FOR AETHER CALL
+# 6. on exit (Ctrl-C or after CAPTURE_SECONDS): dumps each device's ring
+#    buffer (the source of truth — redirected logcat is block-buffered) into
+#    gitignored diagnostics/ and prints tools/aether-call-diagnostics.
+#
+# No secret content is captured: the tag filter carries only sanitized,
+# backend-tagged metadata (see AetherCallLog / server.js observability).
+
+set -uo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PACKAGE="com.foresightlabs.aether"
+TAGS="AetherCall AetherCallService AndroidRuntime CRASH"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+OUT_DIR="$REPO_DIR/diagnostics"
+mkdir -p "$OUT_DIR"
+
+PHONE_SERIAL="adb-R9ZX703KTJA-KtfROG._adb-tls-connect._tcp"
+TABLET_SERIAL="adb-R52R409P2AZ-frJ1mo._adb-tls-connect._tcp"
+
+list_serials() { adb devices | tail -n +2 | grep -E "device$" | sed 's/[[:space:]]*device$//'; }
+
+pick() {
+    for want in "$1" "${1%%.*}"; do
+        list_serials | grep -Fx "$want" >/dev/null 2>&1 && { echo "$want"; return 0; }
+    done
+    return 1
+}
+
+PHONE=$(pick "$PHONE_SERIAL" || true)
+TABLET=$(pick "$TABLET_SERIAL" || true)
+if [ -z "$PHONE" ] || [ -z "$TABLET" ]; then
+    echo "Need BOTH devices. Attached: $(list_serials | tr '\n' ' ')" >&2
+    [ -z "$PHONE" ] && echo "  phone SM-M145F missing" >&2
+    [ -z "$TABLET" ] && echo "  tablet SM-P610 missing" >&2
+    exit 1
+fi
+
+check_device() { # serial label
+    local serial="$1" label="$2"
+    adb -s "$serial" shell true >/dev/null 2>&1 || { echo "$label unreachable" >&2; exit 1; }
+    if ! adb -s "$serial" shell pm path "$PACKAGE" >/dev/null 2>&1; then
+        echo "Aether NOT installed on $label" >&2
+        exit 1
+    fi
+    local version updated
+    version=$(adb -s "$serial" shell dumpsys package "$PACKAGE" | grep -m1 versionName | tr -d '\r' | awk '{print $1}')
+    updated=$(adb -s "$serial" shell dumpsys package "$PACKAGE" | grep -m1 lastUpdateTime | tr -d '\r' | awk '{print $2}')
+    echo "$label: $serial ($version, installed $updated)"
+}
+check_device "$PHONE" "caller-phone SM-M145F"
+check_device "$TABLET" "callee-tablet SM-P610"
+
+PHONE_LOG="$OUT_DIR/aether-call-$STAMP-phone.log"
+TABLET_LOG="$OUT_DIR/aether-call-$STAMP-tablet.log"
+
+adb -s "$PHONE" logcat -c
+adb -s "$TABLET" logcat -c
+
+# Detached captures (session harness kills background adb logcat processes —
+# setsid keeps them alive); the final `logcat -d` dump remains the truth.
+setsid nohup stdbuf -oL adb -s "$PHONE" logcat -v time -s $TAGS > "$PHONE_LOG" 2>&1 < /dev/null &
+PHONE_PID=$!
+setsid nohup stdbuf -oL adb -s "$TABLET" logcat -v time -s $TAGS > "$TABLET_LOG" 2>&1 < /dev/null &
+TABLET_PID=$!
+sleep 2
+adb -s "$PHONE" shell log -t AetherCall "backend=AETHER sid=0 stage=capture_verification_probe device=phone"
+adb -s "$TABLET" shell log -t AetherCall "backend=AETHER sid=0 stage=capture_verification_probe device=tablet"
+sleep 1
+for f in "$PHONE_LOG" "$TABLET_LOG"; do
+    grep -q "capture_verification_probe" "$f" || echo "WARNING: probe not yet visible in $f (buffering — the -d dump still covers the window)" >&2
+done
+
+DURATION="${1:-0}"
+echo ""
+echo "Captures: $PHONE_LOG (pid $PHONE_PID)"
+echo "          $TABLET_LOG (pid $TABLET_PID)"
+echo "READY FOR AETHER CALL"
+if [ "$DURATION" -gt 0 ] 2>/dev/null; then
+    sleep "$DURATION"
+    kill "$PHONE_PID" "$TABLET_PID" 2>/dev/null
+else
+    echo "Place the call now. Ctrl-C to stop and summarize."
+    trap 'kill "$PHONE_PID" "$TABLET_PID" 2>/dev/null' INT TERM
+    wait "$PHONE_PID" 2>/dev/null || true
+fi
+
+# Ring-buffer dumps: complete and immediate (streamed files can lag).
+adb -s "$PHONE" logcat -d -v time -s $TAGS > "$PHONE_LOG.dump" 2>&1
+adb -s "$TABLET" logcat -d -v time -s $TAGS > "$TABLET_LOG.dump" 2>&1
+# The dump is the superset; summarize from it.
+mv "$PHONE_LOG.dump" "$PHONE_LOG"
+mv "$TABLET_LOG.dump" "$TABLET_LOG"
+
+echo ""
+"$REPO_DIR/tools/aether-call-diagnostics" "$PHONE_LOG" "$TABLET_LOG" /tmp/call-service.log

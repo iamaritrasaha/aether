@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# Aether (LiveKit) physical-call diagnostics summary.
+#
+#   tools/aether-call-diagnostics <caller-device.log> <callee-device.log> [call-service.log]
+#
+# Consumes the sanitized tag-filtered captures (tag: AetherCall, lines carry
+# backend=AETHER) written by tools/aether-call-test and the dev call-service
+# log, and prints the physical-protocol checklist:
+#
+#   CALL SERVICE   invite created / accepted
+#   ROOM           caller connected, callee connected, same room yes/no
+#   PARTICIPANTS   caller identity, callee identity
+#   LOCAL AUDIO    published yes/no, muted
+#   REMOTE AUDIO   subscribed yes/no
+#   E2EE           enabled, fingerprints match yes/no (never the key itself)
+#   ROUTE          actual communication device
+#   DISCONNECT     reason
+#
+# All inputs are optional; missing evidence prints as "(none)".
+
+set -uo pipefail
+
+CALLER_LOG="${1:-}"
+CALLEE_LOG="${2:-}"
+SERVER_LOG="${3:-}"
+
+section() { echo ""; echo "=== $1 ==="; }
+last() { grep -oE "$1" "$2" 2>/dev/null | tail -1 || true; }
+
+describe_log() {
+    local file="$1"
+    [ -n "$file" ] && [ -f "$file" ] || { echo "(no log)"; return; }
+    echo "$file ($(grep -c '' "$file" 2>/dev/null || echo 0) lines)"
+}
+
+for f in "$CALLER_LOG" "$CALLEE_LOG" "$SERVER_LOG"; do
+    [ -z "$f" ] || [ -f "$f" ] || { echo "log not found: $f" >&2; exit 1; }
+done
+
+echo "============ AETHER CALL DIAGNOSTICS ============"
+echo "caller log: $(describe_log "$CALLER_LOG")"
+echo "callee log: $(describe_log "$CALLEE_LOG")"
+echo "service log: $(describe_log "$SERVER_LOG")"
+
+# --- CALL SERVICE ----------------------------------------------------------
+section "CALL SERVICE"
+if [ -n "$SERVER_LOG" ] && [ -f "$SERVER_LOG" ]; then
+    INVITE=$(grep -oE "invite inviteId=[^ ]+ from=[^ ]+ to=[^ ]+ isVideo=[a-z]+ roomName=[^ ]+ e2eeKeyFingerprint=[0-9a-f]+" "$SERVER_LOG" | tail -1)
+    ACCEPT=$(grep -oE "accept inviteId=[^ ]+ identity=[^ ]+ roomName=[^ ]+ e2eeKeyFingerprint=[0-9a-f]+" "$SERVER_LOG" | tail -1)
+    LOOKUPS=$(grep -oE "lookup telegramUserId=[0-9]+ -> .*" "$SERVER_LOG" | tail -2)
+    COMPLETES=$(grep -oE "complete roomId=[^ ]+ knownRoom=[a-z]+" "$SERVER_LOG" | tail -1)
+    echo "invite created: ${INVITE:-(none)}"
+    echo "accepted:       ${ACCEPT:-(none)}"
+    echo "lookups:        ${LOOKUPS:-(none)}"
+    echo "completed:      ${COMPLETES:-(none)}"
+else
+    echo "(no service log)"
+fi
+
+# --- ROOM + PARTICIPANTS ---------------------------------------------------
+section "ROOM"
+for side in CALLER CALLEE; do
+    LOG="$CALLER_LOG"; [ "$side" = CALLEE ] && LOG="$CALLEE_LOG"
+    if [ -n "$LOG" ] && [ -f "$LOG" ]; then
+        JOIN=$(last "roomId=[0-9a-f]+ urlHost=[^ ]+ outgoing=[a-z]+ video=[a-z]+" "$LOG")
+        CONN=$(last "room event=Connected" "$LOG")
+        ROOMNAME=$(last "media=CONNECTED roomName=[^ ]+ identity=[^ ]+" "$LOG")
+        echo "$side join:      ${JOIN:-(none)}"
+        echo "$side connected: ${CONN:-(none)}"
+        echo "$side media:     ${ROOMNAME:-(none)}"
+    else
+        echo "$side: (no log)"
+    fi
+done
+
+section "PARTICIPANTS"
+for side in CALLER CALLEE; do
+    LOG="$CALLER_LOG"; [ "$side" = CALLEE ] && LOG="$CALLEE_LOG"
+    [ -n "$LOG" ] && [ -f "$LOG" ] || { echo "$side identity: (no log)"; continue; }
+    SELF=$(last "identity=[^ ]+" "$LOG")
+    PEER=$(last "ParticipantConnected identity=[^ ]+" "$LOG")
+    echo "$side self: ${SELF:-(none)}"
+    echo "$side peer: ${PEER:-(none)}"
+done
+
+# --- LOCAL AUDIO -----------------------------------------------------------
+section "LOCAL AUDIO"
+for side in CALLER CALLEE; do
+    LOG="$CALLER_LOG"; [ "$side" = CALLEE ] && LOG="$CALLEE_LOG"
+    [ -n "$LOG" ] && [ -f "$LOG" ] || { echo "$side: (no log)"; continue; }
+    PUB=$(last "localAudioPublished=[a-z]+ muted=[a-z/]+ trackSid=[^ ]+" "$LOG")
+    PERM=$(last "micPermission=[a-z]+" "$LOG")
+    echo "$side mic:  ${PUB:-(none)}  (${PERM:-(no preflight)})"
+done
+
+# --- REMOTE AUDIO ----------------------------------------------------------
+section "REMOTE AUDIO"
+for side in CALLER CALLEE; do
+    LOG="$CALLER_LOG"; [ "$side" = CALLEE ] && LOG="$CALLEE_LOG"
+    [ -n "$LOG" ] && [ -f "$LOG" ] || { echo "$side: (no log)"; continue; }
+    SUB=$(last "remoteAudioSubscribed=true remoteAudioTrackPresent=true remoteAudioEnabled=[a-z]+ trackSid=[^ ]+ participant=[^ ]+" "$LOG")
+    PUBR=$(last "remoteAudioPublished=true participant=[^ ]+" "$LOG")
+    echo "$side subscribed: ${SUB:-(none)}"
+    echo "$side published: ${PUBR:-(none)}"
+done
+
+# --- E2EE ------------------------------------------------------------------
+section "E2EE"
+FPR_CALLER=""
+FPR_CALLEE=""
+FPR_SERVER=""
+if [ -n "$CALLER_LOG" ] && [ -f "$CALLER_LOG" ]; then
+    FPR_CALLER=$(last "e2eeKeyFingerprint=[0-9a-f]+" "$CALLER_LOG" | cut -d= -f2)
+fi
+if [ -n "$CALLEE_LOG" ] && [ -f "$CALLEE_LOG" ]; then
+    FPR_CALLEE=$(last "e2eeKeyFingerprint=[0-9a-f]+" "$CALLEE_LOG" | cut -d= -f2)
+fi
+if [ -n "$SERVER_LOG" ] && [ -f "$SERVER_LOG" ]; then
+    FPR_SERVER=$(grep -oE "e2eeKeyFingerprint=[0-9a-f]+" "$SERVER_LOG" | tail -1 | cut -d= -f2)
+fi
+echo "caller fingerprint: ${FPR_CALLER:-(none — release build or no call)}"
+echo "callee fingerprint: ${FPR_CALLEE:-(none — release build or no call)}"
+echo "server fingerprint: ${FPR_SERVER:-(none)}"
+if [ -n "$FPR_CALLER" ] && [ -n "$FPR_CALLEE" ]; then
+    [ "$FPR_CALLER" = "$FPR_CALLEE" ] && echo "MATCH: yes" || echo "MATCH: NO — E2EE key mismatch, media will fail"
+elif [ -n "$FPR_SERVER" ] && [ -n "$FPR_CALLER$FPR_CALLEE" ]; then
+    echo "MATCH: only server fingerprint present (see above)"
+else
+    echo "MATCH: (insufficient evidence)"
+fi
+
+# --- ROUTE -----------------------------------------------------------------
+section "ROUTE"
+for side in CALLER CALLEE; do
+    LOG="$CALLER_LOG"; [ "$side" = CALLEE ] && LOG="$CALLEE_LOG"
+    [ -n "$LOG" ] && [ -f "$LOG" ] || continue
+    echo "$side: $(last "audioRoute mode=[0-9]+ commDeviceType=[0-9-]+ speakerOn=[a-z]+ micMute=[a-z]+" "$LOG" || echo "(none)")"
+done
+
+# --- FAILURES / DISCONNECT -------------------------------------------------
+section "FAILURES"
+for side in CALLER CALLEE; do
+    LOG="$CALLER_LOG"; [ "$side" = CALLEE ] && LOG="$CALLEE_LOG"
+    [ -n "$LOG" ] && [ -f "$LOG" ] || continue
+    echo "$side FAILED lines:"
+    grep -oE "FAILED at=[^ ]+ type=[^ ]+" "$LOG" | sort | uniq -c | sed 's/^/  /' || echo "  (none)"
+done
+
+section "DISCONNECT"
+for side in CALLER CALLEE; do
+    LOG="$CALLER_LOG"; [ "$side" = CALLEE ] && LOG="$CALLEE_LOG"
+    [ -n "$LOG" ] && [ -f "$LOG" ] || continue
+    DISC=$(last "room event=Disconnected reason=[^ ]+ error=[^ ]+" "$LOG")
+    TEARDOWN=$(last "teardown reason=[a-z_]+" "$LOG")
+    echo "$side event: ${DISC:-(none)}"
+    echo "$side teardown: ${TEARDOWN:-(none)}"
+done
+
+echo ""
+echo "============ END AETHER CALL DIAGNOSTICS ============"

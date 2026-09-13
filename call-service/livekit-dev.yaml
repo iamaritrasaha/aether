@@ -1,7 +1,9 @@
-# Development LiveKit server config (LAN only). Run with:
-#   livekit-server --config call-service/livekit-dev.yaml
-# (run-dev.sh exports LIVEKIT_API_SECRET from .env; the config expands it —
-# the real key is never committed).
+# Development LiveKit server config TEMPLATE (LAN only). Started via run-dev.sh,
+# which renders the API secret from .env into livekit-dev.rendered.yaml
+# (gitignored) and runs the server with it: livekit-server v1.13.6 does NOT
+# expand ${VAR} placeholders in config values (a literal "${...}" became the
+# secret, so every join failed with a signature mismatch / "secret too short").
+# (run-dev.sh exports LIVEKIT_API_SECRET from .env; the secret is never committed).
 port: 7880
 rtc:
   # UDP media port range for WebRTC. LAN-only dev: no TLS/TURN required when
@@ -11,6 +13,11 @@ rtc:
   use_external_ip: false
 keys:
   # Must match LIVEKIT_API_KEY / LIVEKIT_API_SECRET in call-service/.env.
+  # Rendered by run-dev.sh — do NOT start the server with this template file.
   devkey: ${LIVEKIT_API_SECRET}
 # TURN stays disabled for same-LAN development; enable it when a device is
 # off-LAN (see README for the production note).
+logging:
+  # Dev observability: room creation, participant joins and track events are
+  # logged at DEBUG level (physical protocol Step 12).
+  level: debug

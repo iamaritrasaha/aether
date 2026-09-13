@@ -48,6 +48,12 @@ const rooms = new Map();
 const randomId = (prefix) => `${prefix}-${crypto.randomBytes(6).toString("hex")}`;
 const randomKey = () => crypto.randomBytes(32).toString("base64");
 
+// Observability: SAFE METADATA ONLY (ids, room names, aetherIds, key
+// FINGERPRINTS). Never log tokens, JWTs, the e2ee key itself, or media.
+const log = (msg) => console.log(`${new Date().toISOString()} ${msg}`);
+const fingerprint = (keyBase64) =>
+  crypto.createHash("sha256").update(keyBase64, "utf8").digest("hex").slice(0, 8);
+
 async function mintToken(identity, roomName, minutes = 10) {
   const token = new AccessToken(API_KEY, API_SECRET, { identity, ttl: `${minutes}m` });
   token.addGrant({
@@ -74,12 +80,17 @@ async function joinPayload(roomId, roomName, identity, e2eeKey) {
 app.post("/register", (req, res) => {
   const { aetherId, displayName, telegramUserId } = req.body || {};
   if (!aetherId) return res.status(400).json({ error: "aetherId required" });
+  const known = directory.get(aetherId);
   directory.set(aetherId, {
     aetherId,
     displayName: displayName || aetherId,
     telegramUserId: telegramUserId != null ? Number(telegramUserId) : null,
     lastSeen: Date.now(),
   });
+  // The polling loop re-registers every few seconds; log only real changes.
+  if (!known || known.telegramUserId !== (telegramUserId != null ? Number(telegramUserId) : null)) {
+    log(`register aetherId=${aetherId} telegramUserId=${telegramUserId ?? "-"}`);
+  }
   res.json({ ok: true });
 });
 
@@ -95,12 +106,14 @@ app.get("/lookup", (req, res) => {
   }
   for (const entry of directory.values()) {
     if (entry.telegramUserId === telegramUserId) {
+      log(`lookup telegramUserId=${telegramUserId} -> ${entry.aetherId}`);
       return res.json({
         aetherId: entry.aetherId,
         displayName: entry.displayName,
       });
     }
   }
+  log(`lookup telegramUserId=${telegramUserId} -> null (not registered)`);
   res.json({ aetherId: null });
 });
 
@@ -129,6 +142,10 @@ app.post("/call/invite", async (req, res) => {
   };
   invites.set(inviteId, invite);
   rooms.set(roomId, { roomId, roomName, state: "ringing" });
+
+  log(
+    `invite inviteId=${inviteId} from=${from} to=${to} isVideo=${!!isVideo} roomName=${roomName} e2eeKeyFingerprint=${fingerprint(e2eeKey)}`
+  );
 
   const fromEntry = directory.get(from) || { aetherId: from, displayName: from };
   res.json({
@@ -167,6 +184,9 @@ app.post("/call/accept", async (req, res) => {
   if (invite.state !== "ringing") return res.status(409).json({ error: `invite is ${invite.state}` });
   invite.state = "accepted";
   rooms.get(invite.roomId).state = "active";
+  log(
+    `accept inviteId=${invite.inviteId} identity=${invite.to} roomName=${invite.roomName} e2eeKeyFingerprint=${fingerprint(invite.e2eeKey)}`
+  );
   res.json({ join: await joinPayload(invite.roomId, invite.roomName, invite.to, invite.e2eeKey) });
 });
 
@@ -174,12 +194,14 @@ app.post("/call/decline", (req, res) => {
   const invite = invites.get(req.body?.inviteId);
   if (!invite) return res.status(404).json({ error: "unknown invite" });
   invite.state = "declined";
+  log(`decline inviteId=${req.body.inviteId} roomName=${invite.roomName}`);
   res.json({ ok: true });
 });
 
 app.post("/call/complete", (req, res) => {
   const room = rooms.get(req.body?.roomId);
   if (room) room.state = "ended";
+  log(`complete roomId=${req.body?.roomId ?? "-"} knownRoom=${room != null}`);
   res.json({ ok: true });
 });
 

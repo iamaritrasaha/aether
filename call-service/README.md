@@ -27,8 +27,11 @@ TLS, push) is intentionally out of scope here; see
 3. Keys:
    ```bash
    bin/livekit-server generate-keys
-   # put the API Key    -> .env  LIVEKIT_API_KEY      (and livekit-dev.yaml keys.<name>)
-   # put the API Secret -> .env  LIVEKIT_API_SECRET   (and livekit-dev.yaml keys.<name> value)
+   # put the API Key    -> .env  LIVEKIT_API_KEY      (must equal the key name in
+   #                                                livekit-dev.yaml: keys.<name>, e.g. devkey)
+   # put the API Secret -> .env  LIVEKIT_API_SECRET   (run-dev.sh renders it into the
+   #                                                server config at start; v1.13.6 does
+   #                                                NOT expand ${...} in config values)
    cp .env.example .env   # then edit LIVEKIT_URL + the two key fields
    ```
 4. Set `LIVEKIT_URL` in `.env` to this machine's LAN address

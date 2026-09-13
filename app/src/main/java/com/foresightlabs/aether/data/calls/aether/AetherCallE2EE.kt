@@ -25,4 +25,15 @@ object AetherCallE2EE {
     /** Room options with the dev E2EE applied, kept in one place for clarity. */
     fun roomOptions(keyBase64: String?): RoomOptions =
         keyBase64?.let { RoomOptions(e2eeOptions = devOptions(it)) } ?: RoomOptions()
+
+    /**
+     * SAFE fingerprint of the distributed key string (first 8 hex chars of
+     * its SHA-256) for caller/callee key-agreement checks in DEBUG builds.
+     * Never log the key itself; this is a comparison handle only.
+     */
+    fun keyFingerprint(keyBase64: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(keyBase64.toByteArray(Charsets.UTF_8))
+        return digest.take(4).joinToString("") { "%02x".format(it) }
+    }
 }
