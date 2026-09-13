@@ -102,9 +102,9 @@ observed at, never assumed to still hold after later changes until re-run.
 | Video send | yes | yes | no | no | `InputMessageVideo` |
 | Album send | yes | yes | no | no | one `SendMessageAlbum`, capped at 10 |
 | Album render | yes | yes | no | no | grouped cluster, 2/3/4-up layouts |
-| Document send & render | yes | yes | no | no | SAF; real name, size, extension |
-| Voice note record & send | yes | yes | no | no | contextual `RECORD_AUDIO` |
-| Voice note render | yes | yes | no | no | real duration, unpacked 5-bit waveform |
+| Document receive & open | yes | yes | no | **yes (device, synthetic)** | Since `ff18944` a received document's CONTENT file is mapped and indexed (lookup-only, refreshed on download completion); the chip is tappable: open via FileProvider `content://` + `ACTION_VIEW` + `FLAG_GRANT_READ`, or request the download first. `DocumentOpenDeviceTest` (SM-P610): FileProvider URI readable, MIME derivation correct per extension, ACTION_VIEW resolution never throws, unresolvable MIME degrades gracefully. No real Telegram document existed on the test account to consume -- real-media pass remains a one-tap manual check. |
+| Voice note record & send | yes | yes | no | no | contextual `RECORD_AUDIO` (record mic on-device was deliberately NOT exercised autonomously: it captures room audio) |
+| Voice note / audio playback | yes | yes | no | **yes (device, synthetic)** | Since `2949f66`+`26e422d` voice notes and audio messages actually play: content file mapped+indexed (audio indexes the audio, never the cover), tap-to-download-then-autoplay, one screen-scoped ExoPlayer (AudioPlaybackController), real position/speed, error/failure states, released on leaving. `AudioPlaybackDeviceTest` (SM-P610): a real WAV prepared and played on the device's real audio stack -- position advances, replace/release clean; **the publish-deadlock bug (UI could never show playing) was caught by this test's Robolectric twin and fixed**. Audibility needs human ears: HUMAN AUDIBILITY UNVERIFIED. No real voice note existed on the test account to consume. |
 | Audio file send & render | yes | yes | no | no | `MessageType.AUDIO`, performer, title, duration, cover |
 | Static sticker render | yes | yes | no | no | WebP and emoji fallback |
 | Static sticker send | yes | yes | no | no | `InputMessageSticker` |
