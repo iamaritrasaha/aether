@@ -481,4 +481,51 @@ class AetherNotificationManagerTest {
         assertEquals(1001L, firstReply.savedIntent.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
         assertEquals(101001L, secondReply.savedIntent.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
     }
+
+    @Test
+    fun chatIdsCollidingInIntSpaceStillGetDistinctPendingIntentIdentities() {
+        // Android request codes are Int-sized, so no request-code scheme can be
+        // fully unique for Long chat ids. These two ids have IDENTICAL low 32
+        // bits (identical request codes under any Int-derived scheme); the
+        // Intent's data URI is what keeps their PendingIntents distinct.
+        val hugeChatId = 1001L + (1L shl 32) // 4_294_968_297
+        assertTrue(hugeChatId.toInt() == 1001L.toInt())
+
+        usersMap[54321L] = TdApi.User().apply {
+            id = 54321L
+            firstName = "Wide"
+            lastName = "Id"
+            type = TdApi.UserTypeRegular()
+        }
+        chatsMap[hugeChatId] = TdApi.Chat().apply {
+            id = hugeChatId
+            type = TdApi.ChatTypePrivate().apply { userId = 54321L }
+            title = "Wide Id"
+        }
+
+        runBlocking {
+            val first = postMessageNotification(chatId = 1001L, groupId = 401, messageId = 1L, senderUserId = 12345L)
+            val second = postMessageNotification(chatId = hugeChatId, groupId = 402, messageId = 2L, senderUserId = 54321L)
+
+            // Tap intents: distinct data URIs (the actual PI identity), each
+            // still carrying its own chat id.
+            val firstTap = shadowOf(first.contentIntent).savedIntent
+            val secondTap = shadowOf(second.contentIntent).savedIntent
+            assertEquals(1001L, firstTap.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
+            assertEquals(hugeChatId, secondTap.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
+            assertNotEquals(firstTap.data, secondTap.data)
+            assertEquals(
+                notificationManager.chatIdentityUri(1001L),
+                firstTap.data
+            )
+
+            // Reply intents: the wrong-recipient hazard. Distinct identities
+            // mean the second chat's reply never overwrites the first's.
+            val firstReply = shadowOf(first.actions.first { it.title == "Reply" }.actionIntent).savedIntent
+            val secondReply = shadowOf(second.actions.first { it.title == "Reply" }.actionIntent).savedIntent
+            assertEquals(1001L, firstReply.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
+            assertEquals(hugeChatId, secondReply.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L))
+            assertNotEquals(firstReply.data, secondReply.data)
+        }
+    }
 }

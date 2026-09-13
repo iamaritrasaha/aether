@@ -608,15 +608,23 @@ class AetherNotificationManager(
         // FLAG_UPDATE_CURRENT, two Intents that share a request code (and
         // filterEquals) are the SAME PendingIntent token, its extras silently
         // replaced -- a reply meant for chat A would be sent to chat B.
-        // The chat/group id's own low 32 bits are the identity; a modulus
-        // hash (the previous 100_000-bucket scheme) collided for real chat
-        // counts (~5% at 100 chats) because extras are never compared.
+        //
+        // Identity is carried by the Intent itself, not by the request code:
+        // PendingIntent records are keyed by (requestCode, filterEquals), and
+        // filterEquals INCLUDES the data URI. Every per-chat intent carries
+        // `aether://chat/<chatId>` (per-group, `aether://group/<groupId>`),
+        // so two different chats can never share a PendingIntent identity
+        // even if their request codes -- Int-sized, as Android limits them --
+        // happen to collide. The request code stays as secondary identity.
         val chatRequestCode = chatId.toInt()
         val groupRequestCode = group.groupId.toLong().toInt()
+        val chatIdentity = chatIdentityUri(chatId)
+        val groupIdentity = groupIdentityUri(group.groupId)
 
         // Tap intent -> Open ConversationScreen for this chatId
         val tapIntent = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
+            data = chatIdentity
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_CHAT_ID, chatId)
         }
@@ -631,6 +639,7 @@ class AetherNotificationManager(
         val maxNotificationId = sortedItems.maxOfOrNull { it.notificationId } ?: 0
         val deleteIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = ACTION_DISMISS
+            data = groupIdentity
             putExtra(EXTRA_NOTIFICATION_GROUP_ID, group.groupId)
             putExtra(EXTRA_MAX_NOTIFICATION_ID, maxNotificationId)
         }
@@ -655,6 +664,7 @@ class AetherNotificationManager(
         val messageIds = sortedItems.map { it.messageId }.filter { it != 0L }.toLongArray()
         val replyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = ACTION_REPLY
+            data = chatIdentity
             putExtra(EXTRA_CHAT_ID, chatId)
             putExtra(EXTRA_NOTIFICATION_GROUP_ID, group.groupId)
             putExtra(EXTRA_REPLY_TO_MESSAGE_ID, latestMessageId)
@@ -678,6 +688,7 @@ class AetherNotificationManager(
         // Mark as read action
         val readIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = ACTION_MARK_READ
+            data = chatIdentity
             putExtra(EXTRA_CHAT_ID, chatId)
             putExtra(EXTRA_NOTIFICATION_GROUP_ID, group.groupId)
             putExtra(EXTRA_MESSAGE_IDS, messageIds)
@@ -819,6 +830,17 @@ class AetherNotificationManager(
             .build()
 
     private fun notificationTag(chatId: Long): String = "aether_chat_$chatId"
+
+    /**
+     * The chat's identity as Intent data -- what PendingIntent filterEquals
+     * actually compares. A custom scheme with the raw chat id: no host
+     * resolution happens (all these intents name their component explicitly),
+     * the URI exists purely so that two different chats can never produce
+     * filterEquals-equal, and therefore identity-shared, PendingIntents.
+     */
+    internal fun chatIdentityUri(chatId: Long) = android.net.Uri.parse("aether://chat/$chatId")
+
+    internal fun groupIdentityUri(groupId: Int) = android.net.Uri.parse("aether://group/$groupId")
 
     private fun useLegacyGrouping(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.R
 
