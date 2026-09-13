@@ -444,15 +444,22 @@ class NativeTelegramCallMediaEngine {
             device: StreamDevice,
             frames: List<io.github.pytgcalls.models.Frame>
         ) {
-            // A voice call never enters this path: rendererEnabled is false for
-            // the whole session, so no camera frame is ever converted or held.
-            if (!rendererEnabled) return
-            if (callId != activeCallId) return
-            if (device != StreamDevice.CAMERA) return
-            if (frames.isEmpty()) return
-
             val now = System.currentTimeMillis()
-            if (now - lastFrameAtMillis < MIN_FRAME_INTERVAL_MILLIS) return
+            // One pure guard for every admission rule -- including the
+            // stale-generation rule: a batch from a call that is no longer
+            // active can never render into the new one (see FrameBatchGuard).
+            if (!FrameBatchGuard.shouldProcess(
+                    rendererEnabled = rendererEnabled,
+                    callIdMatchesActive = callId == activeCallId,
+                    isCameraDevice = device == StreamDevice.CAMERA,
+                    frameCount = frames.size,
+                    nowMs = now,
+                    lastFrameAtMs = lastFrameAtMillis,
+                    minIntervalMs = MIN_FRAME_INTERVAL_MILLIS
+                )
+            ) {
+                return
+            }
             lastFrameAtMillis = now
 
             val origin = if (mode == StreamMode.CAPTURE) VideoFrameOrigin.LOCAL else VideoFrameOrigin.REMOTE
