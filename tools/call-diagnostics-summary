@@ -58,4 +58,58 @@ echo "-- ICE/DTLS hints from WebRTC logs --"
 grep -iE "AetherCallNative.*(ice|dtls|srtp|writable)" "$LOG" | sed 's/^[0-9:. -]*//' | sort -u | head -10 || echo "  (none)"
 
 echo ""
+echo "-- Approximate connected duration per generation (first CONNECTED -> teardown) --"
+python3 - "$LOG" <<-'PYEOF' || true
+import re, sys
+lines = [l for l in open(sys.argv[1], errors="replace") if "AetherCall" in l]
+stamp = re.compile(r"(\d{2}):(\d{2}):(\d{2})\.(\d+)")
+gen = re.compile(r"gen=(\d+)")
+def seconds(l):
+    m = stamp.match(l)
+    if not m: return None
+    h, mi, s, ms = m.groups()
+    return int(h)*3600 + int(mi)*60 + int(s) + int(ms)/1000.0
+first_connected, last_event, gens = {}, {}, set()
+for l in lines:
+    g = gen.search(l)
+    if not g: continue
+    g = int(g.group(1)); gens.add(g)
+    t = seconds(l)
+    if t is None: continue
+    if "stage=MEDIA_CONNECTED" in l or "media=CONNECTED" in l:
+        first_connected.setdefault(g, t)
+    if "stage=TEARDOWN" in l or "stage=SERVICE_STOPPED" in l or "stage=FAILED" in l:
+        last_event[g] = t
+for g in sorted(gens):
+    a, b = first_connected.get(g), last_event.get(g)
+    if a is not None:
+        dur = f"{(b-a):.1f}s" if b is not None and b >= a else "open-ended in log"
+        print(f"  gen={g}: connected ~{dur} (from {a:.0f}s)")
+    else:
+        print(f"  gen={g}: never reached MEDIA_CONNECTED")
+PYEOF
+
+echo ""
+echo "-- A-F flow classification evidence --"
+CAP_GROWTH=$(grep -cE "capture=[0-9]+s\(\+[0-9]+s\)" "$LOG" || true)
+PBK_GROWTH=$(grep -cE "playback=[0-9]+s\(\+[0-9]+s\)" "$LOG" || true)
+OUT_RTP=$(grep -oE "outgoing RTP count=[0-9]+" "$LOG" | tail -1 | grep -oE "[0-9]+" || echo 0)
+IN_RTP=$(grep -oE "incoming RTP ok=[0-9]+" "$LOG" | tail -1 | grep -oE "[0-9]+" || echo 0)
+echo "  capture growth samples: $CAP_GROWTH | playback growth samples: $PBK_GROWTH"
+echo "  last outgoing RTP: $OUT_RTP | last incoming RTP ok: $IN_RTP"
+if [ "$CAP_GROWTH" -gt 0 ] && [ "$PBK_GROWTH" -gt 0 ] && [ "$OUT_RTP" -gt 0 ] && [ "$IN_RTP" -gt 0 ]; then
+    echo "  => A: all counters advance; pipeline alive. Silence reported = routing (E)."
+elif [ "$CAP_GROWTH" -gt 0 ] && [ "$OUT_RTP" = "0" ]; then
+    echo "  => B: capture advances, outgoing RTP 0 -- send path."
+elif [ "$OUT_RTP" -gt 0 ] && [ "$IN_RTP" = "0" ]; then
+    echo "  => C: outgoing RTP advances, incoming 0 -- negotiation/receive/crypto."
+elif [ "$IN_RTP" -gt 0 ] && [ "$PBK_GROWTH" = "0" ]; then
+    echo "  => D: incoming RTP advances, playback 0 -- decoder/playback path."
+elif [ "$PBK_GROWTH" -gt 0 ] && [ "$CAP_GROWTH" = "0" ]; then
+    echo "  => F: capture 0 -- mic path."
+else
+    echo "  => insufficient evidence for a single class; correlate sections above."
+fi
+
+echo ""
 echo "=== end summary ==="
