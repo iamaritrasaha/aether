@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -84,7 +85,9 @@ fun MessageContextMenu(
     onReactionSelected: (String) -> Unit,
     onAction: (MessageAction) -> Unit,
     canReact: Boolean = true,
-    allowSelect: Boolean = true
+    allowSelect: Boolean = true,
+    /** Whether THIS message is already bookmarked on this device -- relabels the action. */
+    isBookmarked: Boolean = false
 ) {
     if (message == null || !isVisible) return
 
@@ -187,7 +190,7 @@ fun MessageContextMenu(
                         }
                         AetherGlassMenuItem(
                             icon = iconFor(action),
-                            title = titleFor(action),
+                            title = if (action == MessageAction.BOOKMARK && isBookmarked) "Remove bookmark" else titleFor(action),
                             isDestructive = action == MessageAction.DELETE_FOR_ME || action == MessageAction.DELETE_FOR_EVERYONE,
                             testTag = "message_action_${action.name.lowercase()}",
                             onClick = {
@@ -215,6 +218,7 @@ private fun titleFor(action: MessageAction): String = when (action) {
     MessageAction.COPY_LINK -> "Copy link"
     MessageAction.INFO -> "Message info"
     MessageAction.SELECT -> "Select"
+    MessageAction.BOOKMARK -> "Bookmark"
     MessageAction.DELETE_FOR_ME -> "Delete for me"
     MessageAction.DELETE_FOR_EVERYONE -> "Delete for everyone"
 }
@@ -231,5 +235,6 @@ private fun iconFor(action: MessageAction): ImageVector = when (action) {
     MessageAction.COPY_LINK -> Icons.Default.Link
     MessageAction.INFO -> Icons.Default.Info
     MessageAction.SELECT -> Icons.Default.CheckCircle
+    MessageAction.BOOKMARK -> Icons.Default.Bookmark
     MessageAction.DELETE_FOR_ME, MessageAction.DELETE_FOR_EVERYONE -> Icons.Default.Delete
 }

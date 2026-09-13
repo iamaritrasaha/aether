@@ -155,11 +155,16 @@ fun MessageBubble(
     onReplyPreviewClick: (chatId: Long, messageId: Long) -> Unit = { _, _ -> },
     motionEvent: MessageMotionEvent? = null,
     reducedMotion: Boolean = false,
-    maxAvailableWidth: Dp? = null
+    maxAvailableWidth: Dp? = null,
+    /** Where this message sits in a same-sender run; absent means it stands alone. */
+    senderRunPosition: com.foresightlabs.aether.domain.messages.MessageGrouping.SenderRunPosition? = null,
+    /** Group chats label the speaker once per run; 1:1 conversations never do. */
+    showSenderName: Boolean = false
 ) {
     val coroutineScope = rememberCoroutineScope()
     val colors = LocalAetherColors.current
     val haptic = LocalHapticFeedback.current
+    val platformView = androidx.compose.ui.platform.LocalView.current
     val viewConfiguration = LocalViewConfiguration.current
     val density = LocalDensity.current
     val offsetX = remember { Animatable(0f) }
@@ -195,21 +200,37 @@ fun MessageBubble(
         }
     }
 
+    // Reading rhythm: inside a same-sender run the bubbles pinch together on
+    // the sender's side (the tail stays on the last one), and a run opens with
+    // clearer air than the tight spacing inside it. A message that stands
+    // alone is shaped and padded exactly as before.
+    val isFirstOfRun = senderRunPosition?.isFirstOfRun ?: true
+    val isLastOfRun = senderRunPosition?.isLastOfRun ?: true
+    val inRun = !(isFirstOfRun && isLastOfRun)
+    val joinCorner = 6.dp
+    val senderTop = if (inRun && !isFirstOfRun) joinCorner else 15.dp
+    val senderBottom = when {
+        inRun && isLastOfRun -> 5.dp
+        inRun -> joinCorner
+        else -> 5.dp
+    }
     val bubbleShape = if (isOutgoing) {
         RoundedCornerShape(
             topStart = 15.dp,
-            topEnd = 15.dp,
+            topEnd = senderTop,
             bottomStart = 15.dp,
-            bottomEnd = 5.dp
+            bottomEnd = senderBottom
         )
     } else {
         RoundedCornerShape(
-            topStart = 15.dp,
+            topStart = senderTop,
             topEnd = 15.dp,
-            bottomStart = 5.dp,
+            bottomStart = senderBottom,
             bottomEnd = 15.dp
         )
     }
+    val runPaddingTop = if (isFirstOfRun) 4.dp else 1.dp
+    val runPaddingBottom = if (isLastOfRun) 4.dp else 1.dp
 
     if (message.type == MessageType.CALL) {
         val isMissed = "Missed" in message.text || "Declined" in message.text || "Cancelled" in message.text || "Failed" in message.text
@@ -311,7 +332,7 @@ fun MessageBubble(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 1.dp)
+            .padding(start = 14.dp, end = 14.dp, top = runPaddingTop, bottom = runPaddingBottom)
             .graphicsLayer {
                 alpha = selectionAlpha * entranceProgress.value
                 if (motionEvent?.type == com.foresightlabs.aether.domain.messages.MessageMotionEventType.DELETED) {
@@ -443,6 +464,9 @@ fun MessageBubble(
                                 var dragLocked = false
                                 var totalDx = 0f
                                 var totalDy = 0f
+                                // One tick, the moment the drag passes the reply
+                                // threshold -- confirmation, not decoration.
+                                var thresholdHapticFired = false
 
                                 val longPressJob = coroutineScope.launch {
                                     delay(viewConfiguration.longPressTimeoutMillis)
@@ -534,6 +558,12 @@ fun MessageBubble(
                                             change.consume()
                                             val newOffset = (offsetX.value + delta.x).coerceIn(-240f, 0f)
                                             coroutineScope.launch { offsetX.snapTo(newOffset) }
+                                            if (!thresholdHapticFired && newOffset <= replyThreshold) {
+                                                thresholdHapticFired = true
+                                                platformView.performHapticFeedback(
+                                                    android.view.HapticFeedbackConstants.VIRTUAL_KEY
+                                                )
+                                            }
                                         }
                                     }
                                 } finally {
@@ -551,6 +581,24 @@ fun MessageBubble(
                         .testTag("message_bubble_${message.id}")
                 ) {
                     Column {
+                        // Group-chat orientation: the speaker's name once per run.
+                        // Your own messages never carry it -- Telegram doesn't
+                        // label the account that's reading the screen.
+                        if (showSenderName && isFirstOfRun && !isOutgoing &&
+                            message.forwardedFrom == null && message.senderName.isNotBlank()
+                        ) {
+                            Text(
+                                text = message.senderName,
+                                fontFamily = ManropeFontFamily,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.accent,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(bottom = 2.dp)
+                            )
+                        }
+
                         // Forwarded header if present
                         if (message.forwardedFrom != null) {
                             Text(

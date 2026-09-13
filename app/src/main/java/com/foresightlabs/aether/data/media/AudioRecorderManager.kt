@@ -78,6 +78,20 @@ class AudioRecorderManager(private val context: Context) {
         cleanUp()
     }
 
+    /**
+     * Loudest sample since the previous call, normalized to 0..1 -- the UI's
+     * level feedback. Poll this on a fixed cadence while recording; between
+     * polls [MediaRecorder.getMaxAmplitude] reports the peak, so nothing is
+     * missed, and any stored audio never leaves this object's file.
+     */
+    fun amplitudeFraction(): Float {
+        val recorder = mediaRecorder ?: return 0f
+        if (!isRecording) return 0f
+        return runCatching {
+            (recorder.maxAmplitude / 32767f).coerceIn(0f, 1f)
+        }.getOrDefault(0f)
+    }
+
     private fun cleanUp() {
         try {
             mediaRecorder?.stop()

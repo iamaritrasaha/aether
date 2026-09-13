@@ -141,7 +141,6 @@ class AetherUiPolishPassTest {
                         replyingTo = null,
                         onDismissReply = {},
                         onSendMessage = { _, _ -> },
-                        onVoiceNoteRecorded = {}
                     )
                 }
             }
@@ -329,7 +328,6 @@ class AetherUiPolishPassTest {
                         onSelectLocation = { locationSelected = true },
                         onSelectVenue = { venueSelected = true },
                         onSelectContact = { contactSelected = true },
-                        onVoiceNoteRecorded = {}
                     )
                 }
             }

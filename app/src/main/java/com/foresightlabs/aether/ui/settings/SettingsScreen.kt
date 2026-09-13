@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
@@ -71,6 +72,7 @@ fun SettingsScreen(
     onNavigateToAppearance: () -> Unit,
     onNavigateToAbout: () -> Unit = {},
     onNavigateToAppLock: () -> Unit = {},
+    onNavigateToBookmarks: () -> Unit = {},
     onRequestLogout: () -> Unit,
     onConfirmLogout: () -> Unit,
     onDismissLogout: () -> Unit,
@@ -175,6 +177,14 @@ fun SettingsScreen(
                             subtitle = "Atmospheric palettes, accents, typography",
                             onClick = onNavigateToAppearance,
                             testTag = "settings_appearance_item"
+                        )
+                        HorizontalDivider(color = colors.divider, thickness = 0.5.dp, modifier = Modifier.padding(start = 56.dp))
+                        SettingsRowItem(
+                            icon = Icons.Default.Bookmark,
+                            title = "Bookmarks",
+                            subtitle = "Messages you saved in Aether — stored only on this device",
+                            onClick = onNavigateToBookmarks,
+                            testTag = "settings_bookmarks_item"
                         )
                     }
                 }

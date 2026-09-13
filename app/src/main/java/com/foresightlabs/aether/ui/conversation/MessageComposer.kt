@@ -18,6 +18,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,9 +41,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Forward
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -73,6 +77,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.onFocusChanged
@@ -628,7 +634,8 @@ fun MessageComposer(
     onSelectVenue: () -> Unit = {},
     onSelectContact: () -> Unit = {},
     onInputFocus: () -> Unit = {},
-    onVoiceNoteRecorded: () -> Unit = {},
+    // Voice recording is now a press-and-hold interaction -- see the
+    // onVoiceRecord* callbacks; there is no tap-to-toggle recording anymore.
     onOpenVideoNote: () -> Unit = {},
     installedStickerSets: List<StickerSetInfo> = emptyList(),
     recentStickers: List<StickerItem> = emptyList(),
@@ -671,6 +678,24 @@ fun MessageComposer(
     pendingShare: PendingShare? = null,
     onCancelPendingShare: () -> Unit = {},
     onSendPendingShare: () -> Unit = {},
+    // --- Voice recording: hold the mic to record -----------------------------
+    // The composer renders the state and fires gesture events; the recorder
+    // itself, its thresholds and its permissions live with the screen.
+    isRecordingVoice: Boolean = false,
+    voiceRecordElapsedSec: Int = 0,
+    /** Loudest sample since the last poll, 0..1 -- the dot breathes with it. */
+    voiceRecordLevel: Float = 0f,
+    /** How far toward the cancel threshold the finger has dragged left, 0..1. */
+    voiceRecordDragFraction: Float = 0f,
+    /** How far toward the lock threshold the finger has dragged up, 0..1. */
+    voiceRecordLockFraction: Float = 0f,
+    /** True once the recording has been locked hands-free. */
+    voiceRecordLocked: Boolean = false,
+    onVoiceRecordPress: () -> Unit = {},
+    onVoiceRecordDrag: (dx: Float, dy: Float) -> Unit = { _, _ -> },
+    onVoiceRecordRelease: () -> Unit = {},
+    onVoiceRecordSend: () -> Unit = {},
+    onVoiceRecordCancelTap: () -> Unit = {},
     /**
      * Text to put in the composer, from a share or another hand-off. Applied
      * once per distinct value, so recomposition never retypes it.
@@ -1106,7 +1131,9 @@ fun MessageComposer(
                                 )
                             }
 
-                            // Text Input Area
+                            // Text Input Area -- or, while the mic is held,
+                            // the recording chrome in the very same slot, so
+                            // the composer never jumps when recording begins.
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
@@ -1114,6 +1141,16 @@ fun MessageComposer(
                                     .align(Alignment.CenterVertically),
                                 contentAlignment = Alignment.TopStart
                             ) {
+                                if (isRecordingVoice) {
+                                    VoiceRecordingIndicator(
+                                        elapsedSec = voiceRecordElapsedSec,
+                                        level = voiceRecordLevel,
+                                        locked = voiceRecordLocked,
+                                        dragFraction = voiceRecordDragFraction,
+                                        lockFraction = voiceRecordLockFraction,
+                                        onCancel = onVoiceRecordCancelTap
+                                    )
+                                } else {
                                 if (text.isEmpty()) {
                                     Text(
                                         text = "Your Message…",
@@ -1182,6 +1219,7 @@ fun MessageComposer(
                                         }
                                         .testTag("message_input_field")
                                 )
+                                }
                             }
 
                             Box(
@@ -1281,27 +1319,88 @@ fun MessageComposer(
                                     else -> {
                                         // Voice Note / Video Note Action Button
                                         var isVideoNoteMode by remember { mutableStateOf(false) }
-                                        Box(
-                                            modifier = Modifier
-                                                .size(48.dp)
-                                                .clip(CircleShape)
-                                                .background(Color(0x14FFFFFF))
-                                                .clickable(enabled = enabled) {
-                                                    if (isVideoNoteMode) {
-                                                        onOpenVideoNote()
-                                                    } else {
-                                                        onVoiceNoteRecorded()
+                                        // The gesture below outlives recompositions
+                                        // (its keys never change mid-hold), so it must
+                                        // call the LATEST callbacks -- a captured one
+                                        // would send with a stale reply target.
+                                        val currentRecordPress by androidx.compose.runtime.rememberUpdatedState(onVoiceRecordPress)
+                                        val currentRecordDrag by androidx.compose.runtime.rememberUpdatedState(onVoiceRecordDrag)
+                                        val currentRecordRelease by androidx.compose.runtime.rememberUpdatedState(onVoiceRecordRelease)
+                                        val currentOpenVideoNote by androidx.compose.runtime.rememberUpdatedState(onOpenVideoNote)
+                                        if (isRecordingVoice && voiceRecordLocked) {
+                                            // Hands-free recording: the mic spot
+                                            // becomes the send button.
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(48.dp)
+                                                    .clip(CircleShape)
+                                                    .background(AetherAccent.actionBrush)
+                                                    .clickable(enabled = enabled) { onVoiceRecordSend() }
+                                                    .testTag("voice_send_button"),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Filled.Send,
+                                                    contentDescription = "Send voice note",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(22.dp)
+                                                )
+                                            }
+                                        } else {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(48.dp)
+                                                    .clip(CircleShape)
+                                                    .background(
+                                                        if (isRecordingVoice) Color(0x2FFF4444)
+                                                        else Color(0x14FFFFFF)
+                                                    )
+                                                    // One gesture owner: press starts
+                                                    // the recording, holding keeps it,
+                                                    // dragging left arms cancel, up
+                                                    // locks, and release decides.
+                                                    .pointerInput(enabled, isVideoNoteMode) {
+                                                        awaitEachGesture {
+                                                            val down = awaitFirstDown(requireUnconsumed = false)
+                                                            down.consume()
+                                                            if (!isVideoNoteMode && enabled) {
+                                                                currentRecordPress()
+                                                            }
+                                                            while (true) {
+                                                                val event = awaitPointerEvent()
+                                                                val change = event.changes
+                                                                    .firstOrNull { it.id == down.id } ?: break
+                                                                if (!change.pressed) {
+                                                                    change.consume()
+                                                                    if (enabled) {
+                                                                        if (isVideoNoteMode) {
+                                                                            currentOpenVideoNote()
+                                                                        } else {
+                                                                            currentRecordRelease()
+                                                                        }
+                                                                    }
+                                                                    break
+                                                                }
+                                                                if (!isVideoNoteMode && enabled) {
+                                                                    val delta = change.position - change.previousPosition
+                                                                    if (delta != Offset.Zero) {
+                                                                        currentRecordDrag(delta.x, delta.y)
+                                                                    }
+                                                                }
+                                                                change.consume()
+                                                            }
+                                                        }
                                                     }
-                                                }
-                                                .testTag(if (isVideoNoteMode) "video_note_button" else "voice_record_button"),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = if (isVideoNoteMode) Icons.Default.Videocam else Icons.Default.Mic,
-                                                contentDescription = if (isVideoNoteMode) "Record Video Message" else "Record Voice Note",
-                                                tint = control,
-                                                modifier = Modifier.size(20.dp)
-                                            )
+                                                    .testTag(if (isVideoNoteMode) "video_note_button" else "voice_record_button"),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (isVideoNoteMode) Icons.Default.Videocam else Icons.Default.Mic,
+                                                    contentDescription = if (isVideoNoteMode) "Record Video Message" else "Hold to record voice note",
+                                                    tint = if (isRecordingVoice) Color(0xFFFF6B6B) else control,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1649,5 +1748,114 @@ private fun SelectionDockActionButton(
             tint = tint,
             modifier = Modifier.size(19.dp)
         )
+    }
+}
+
+/**
+ * The recording chrome that replaces the text field while the mic is held --
+ * same slot, same height, so the composer's geometry never changes.
+ *
+ * Before lock: a red dot breathing with the input level, the elapsed time, and
+ * the slide hints. Left drag ([dragFraction]) walks the hint toward the
+ * release-to-cancel state; up drag ([lockFraction]) brightens and lifts the
+ * lock glyph (the lock itself is the screen's decision). Locked: a discard
+ * button joins the timer and the hint goes quiet -- hands-free means the
+ * gesture is over.
+ */
+@Composable
+private fun VoiceRecordingIndicator(
+    elapsedSec: Int,
+    level: Float,
+    locked: Boolean,
+    dragFraction: Float,
+    lockFraction: Float,
+    onCancel: () -> Unit
+) {
+    val colors = LocalAetherColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = ComposerRowHeight),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (locked) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .border(1.dp, colors.textSecondary.copy(alpha = 0.4f), CircleShape)
+                    .clickable { onCancel() }
+                    .testTag("voice_discard_button")
+                    .semantics { contentDescription = "Discard recording" },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = null,
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+        }
+
+        val dotSize = 9.dp + (6.dp * level.coerceIn(0f, 1f))
+        Box(
+            modifier = Modifier
+                .size(dotSize)
+                .clip(CircleShape)
+                .background(Color(0xFFFF453A))
+                .testTag("voice_record_level_dot")
+        )
+
+        Text(
+            text = "%d:%02d".format(elapsedSec / 60, elapsedSec % 60),
+            fontFamily = ManropeFontFamily,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color(0xFFF2F2F5)
+        )
+
+        if (!locked) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.35f + 0.6f * dragFraction.coerceIn(0f, 1f)),
+                modifier = Modifier
+                    .size(18.dp)
+                    .graphicsLayer {
+                        translationX = -10f * dragFraction.coerceIn(0f, 1f)
+                    }
+            )
+            Text(
+                text = if (dragFraction >= 0.99f) "Release to cancel" else "Slide left to cancel · up to lock",
+                fontFamily = ManropeFontFamily,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFFF2F2F5).copy(alpha = 0.75f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            val lockProgress = lockFraction.coerceIn(0f, 1f)
+            Icon(
+                imageVector = Icons.Default.Lock,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.35f + 0.65f * lockProgress),
+                modifier = Modifier
+                    .size(15.dp)
+                    .graphicsLayer { translationY = -8f * lockProgress }
+                    .testTag("voice_record_lock_hint")
+            )
+        } else {
+            Text(
+                text = "Recording…",
+                fontFamily = ManropeFontFamily,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFFF2F2F5).copy(alpha = 0.75f),
+                maxLines = 1
+            )
+        }
     }
 }

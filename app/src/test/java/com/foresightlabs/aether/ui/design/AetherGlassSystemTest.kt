@@ -97,7 +97,6 @@ class AetherGlassSystemTest {
                     Box(modifier = Modifier.fillMaxSize()) {
                         MessageComposer(
                             onSendMessage = { _, _ -> },
-                            onVoiceNoteRecorded = {},
                             replyingTo = null,
                             onDismissReply = {}
                         )

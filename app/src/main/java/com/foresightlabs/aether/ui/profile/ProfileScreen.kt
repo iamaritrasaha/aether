@@ -129,6 +129,8 @@ fun ProfileScreen(
     onStartVideoCall: () -> Unit = {},
     onChatAction: (Chat, ChatAction) -> Unit = { _, _ -> },
     onLoadSharedMedia: suspend (Long, TelegramClient.SharedMediaCategory, Long) -> TelegramClient.SharedMediaPage = { _, _, _ -> TelegramClient.SharedMediaPage(emptyList(), 0L, 0) },
+    /** Opens this conversation at a specific message (shared-content tap-through). */
+    onOpenMessageInConversation: (chatId: Long, messageId: Long) -> Unit = { _, _ -> },
     onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
     canCallAudio: Boolean = false,
     canCallVideo: Boolean = false,
@@ -654,7 +656,12 @@ fun ProfileScreen(
                                             SharedFileRow(
                                                 fileName = msg.fileName.orEmpty().ifBlank { "Document" },
                                                 fileSize = msg.fileSize.orEmpty().ifBlank { "File" },
-                                                timestamp = msg.timestamp
+                                                timestamp = msg.timestamp,
+                                                onClick = {
+                                                    msg.id.toLongOrNull()?.let { messageId ->
+                                                        onOpenMessageInConversation(chatIdLong, messageId)
+                                                    }
+                                                }
                                             )
                                         }
                                     }
@@ -704,7 +711,12 @@ fun ProfileScreen(
                                         voiceItems.forEach { msg ->
                                             SharedVoiceRow(
                                                 durationSec = msg.voiceDurationSec,
-                                                timestamp = msg.timestamp
+                                                timestamp = msg.timestamp,
+                                                onClick = {
+                                                    msg.id.toLongOrNull()?.let { messageId ->
+                                                        onOpenMessageInConversation(chatIdLong, messageId)
+                                                    }
+                                                }
                                             )
                                         }
                                     }

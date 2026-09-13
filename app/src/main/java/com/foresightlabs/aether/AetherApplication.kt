@@ -112,6 +112,11 @@ class AetherApplication : Application(), ImageLoaderFactory {
         AppLockRepository.getInstance(this)
     }
 
+    /** Aether-local message bookmarks; see [com.foresightlabs.aether.data.local.BookmarkStore]. */
+    val bookmarkStore: com.foresightlabs.aether.data.local.BookmarkStore by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        com.foresightlabs.aether.data.local.BookmarkStore(this)
+    }
+
     /**
      * Created (not just lazily read) in [onCreate] so [AppLockCoordinator.attachTo]
      * registers before any Activity can start -- a lock-enabled process must

@@ -219,6 +219,9 @@ object TelegramMappers {
             blockableUserId = (chat.type as? TdApi.ChatTypePrivate)?.userId,
             isBlocked = chat.blockList is TdApi.BlockListMain,
             lastMessageId = last?.id ?: 0L,
+            lastReadInboxMessageId = chat.lastReadInboxMessageId,
+            draftReplyMessageId =
+                (chat.draftMessage?.replyTo as? TdApi.InputMessageReplyToMessage)?.messageId ?: 0L,
             isForum = isForum
         )
     }

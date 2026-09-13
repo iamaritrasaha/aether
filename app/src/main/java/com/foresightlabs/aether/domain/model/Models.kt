@@ -316,6 +316,18 @@ data class Chat(
     /** Id of the newest message, for marking the chat read. */
     val lastMessageId: Long = 0L,
     /**
+     * Telegram's inbox read boundary for this chat: every incoming message with
+     * a greater id is unread. The conversation's New-messages divider hangs
+     * from the value captured when the screen opens.
+     */
+    val lastReadInboxMessageId: Long = 0L,
+    /**
+     * The message the stored draft replies to, when it replies to one. An
+     * edit-in-progress is deliberately NOT carried here: editing is restored
+     * only inside the conversation that started it, never from a server draft.
+     */
+    val draftReplyMessageId: Long = 0L,
+    /**
      * Whether this is a forum supergroup.
      *
      * A forum opens as a list of topics rather than as one conversation; its

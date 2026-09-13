@@ -93,9 +93,10 @@ class MessageActionPolicyTest {
             message(isOutgoing = true),
             MessageCapabilities.Unknown
         )
-        assertTrue(
+        assertEquals(
             "isOutgoing must not stand in for a server capability: $actions",
-            actions.isEmpty()
+            listOf(MessageAction.BOOKMARK), // BOOKMARK is a client affordance, always offered
+            actions
         )
     }
 
@@ -105,13 +106,15 @@ class MessageActionPolicyTest {
             message(isOutgoing = false),
             MessageCapabilities(canBeEdited = true)
         )
-        assertEquals(listOf(MessageAction.EDIT), actions)
+        assertEquals(listOf(MessageAction.EDIT, MessageAction.BOOKMARK), actions)
     }
 
     @Test
-    fun beforePropertiesArriveNothingIsOffered() {
+    fun beforePropertiesArriveOnlyClientAffordancesAreOffered() {
+        // No server capability may be assumed before Telegram answers; the one
+        // client affordance (BOOKMARK) is deliberately always available.
         assertEquals(
-            emptyList<MessageAction>(),
+            listOf(MessageAction.BOOKMARK),
             MessageActionPolicy.actionsFor(message(), MessageCapabilities.Unknown)
         )
     }
@@ -124,7 +127,7 @@ class MessageActionPolicyTest {
             message(),
             MessageCapabilities(canBeDeletedOnlyForSelf = true)
         )
-        assertEquals(listOf(MessageAction.DELETE_FOR_ME), selfOnly)
+        assertEquals(listOf(MessageAction.BOOKMARK, MessageAction.DELETE_FOR_ME), selfOnly)
 
         val both = MessageActionPolicy.actionsFor(message(), everything)
         assertTrue(MessageAction.DELETE_FOR_ME in both)
@@ -137,7 +140,7 @@ class MessageActionPolicyTest {
             message(),
             MessageCapabilities(canBeDeletedForAllUsers = true)
         )
-        assertEquals(listOf(MessageAction.DELETE_FOR_EVERYONE), actions)
+        assertEquals(listOf(MessageAction.BOOKMARK, MessageAction.DELETE_FOR_EVERYONE), actions)
     }
 
     // --- pin/unpin are the same capability, different labels -----------------
@@ -148,7 +151,7 @@ class MessageActionPolicyTest {
             message(isPinned = true),
             MessageCapabilities(canBePinned = true)
         )
-        assertEquals(listOf(MessageAction.UNPIN), actions)
+        assertEquals(listOf(MessageAction.UNPIN, MessageAction.BOOKMARK), actions)
     }
 
     // --- content-shaped actions ----------------------------------------------

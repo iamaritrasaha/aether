@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
@@ -106,6 +107,8 @@ import com.foresightlabs.aether.ui.common.ChatRow
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import com.foresightlabs.aether.domain.messages.ConversationEntry
+import com.foresightlabs.aether.domain.messages.ConversationRow
+import com.foresightlabs.aether.domain.messages.ConversationRows
 import com.foresightlabs.aether.domain.messages.MessageGrouping
 import com.foresightlabs.aether.ui.conversation.AlbumBubble
 import com.foresightlabs.aether.ui.conversation.ContactShareSheet
@@ -141,6 +144,7 @@ import com.foresightlabs.aether.domain.search.ConversationSearchState
 import com.foresightlabs.aether.ui.design.AetherSearchPill
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -225,10 +229,25 @@ fun ConversationScreen(
     /** A mixed share (photo/video/file), sent as one guarded sequential batch. */
     onSendMixedBatch: (List<Pair<String, com.foresightlabs.aether.domain.sharing.SharedAttachmentKind>>, String, Message?) -> Unit = { _, _, _ -> },
     onSendVoiceNote: (String, Int, ByteArray, Message?) -> Unit = { _, _, _, _ -> },
+    /** Tells Telegram this account started/ended a voice recording (chat action). */
+    onVoiceRecordingStarted: () -> Unit = {},
+    onVoiceRecordingEnded: () -> Unit = {},
     onEditMessage: (Message, String) -> Unit = { _, _ -> },
     onAddReaction: (Message, String) -> Unit = { _, _ -> },
     onPinMessage: (Message) -> Unit = {},
+    /** Adds/removes this message's Aether-local bookmark; see [com.foresightlabs.aether.data.local.BookmarkStore]. */
+    onToggleBookmark: (Message) -> Unit = {},
+    /** Message ids of THIS chat bookmarked on this device, for truthful menu labels. */
+    bookmarkedMessageIds: Set<String> = emptySet(),
     onComposerChanged: (String) -> Unit,
+    /**
+     * The server draft for this chat, offered once per open; null when there
+     * is nothing to restore. A fresh share always outranks it -- see the
+     * prefill selection below.
+     */
+    restoredDraft: RestoredDraft? = null,
+    /** The composer's reply changed, so the draft leaves WITH its reply context. */
+    onReplyDraftChanged: (String?) -> Unit = {},
     linkPreview: ComposerLinkPreviewState = ComposerLinkPreviewState.Empty,
     onDismissLinkPreview: () -> Unit = {},
     onLoadOlder: () -> Unit,
@@ -291,6 +310,14 @@ fun ConversationScreen(
     onCopyMessageLink: (Message) -> Unit = {},
     /** Pinned messages Telegram reports for this chat, beyond those loaded. */
     pinnedFromServer: List<Message> = emptyList(),
+    /**
+     * Inbox read boundary captured at open (0 = chat was fully read): incoming
+     * messages above it were unread when the conversation opened. Drives the
+     * New-messages divider -- see [ConversationRow.UnreadBoundary].
+     */
+    unreadBoundaryId: Long = 0L,
+    /** One-shot: ids whose jump could not land (deleted original, offline). */
+    jumpFailures: kotlinx.coroutines.flow.Flow<String> = kotlinx.coroutines.flow.emptyFlow(),
     onJumpToMessage: (String) -> Unit = {},
     onReplyPreviewClick: (chatId: Long, messageId: Long) -> Unit = { _, _ -> },
     onUnpinMessage: (Message) -> Unit = {},
@@ -368,6 +395,57 @@ fun ConversationScreen(
     var deleteConfirmMessages by remember { mutableStateOf<List<Message>?>(null) }
     // Grouping is derived once per message-list change, not per frame.
     val entries = remember(messages) { MessageGrouping.group(messages) }
+    // The laid-out rows: entries with calendar-day boundaries interleaved. Every
+    // index computation below reads rows, never raw entries -- the list that
+    // LazyColumn sees is this one.
+    val zone = remember { java.util.TimeZone.getDefault() }
+    val rows = remember(entries) { ConversationRows.withDayDividers(entries, zone) }
+    // Same-sender runs drive the grouped bubble treatment. Group chats also
+    // label the speaker once per run -- 1:1 conversations have no one to
+    // disambiguate.
+    val senderRunPositions = remember(entries) { MessageGrouping.senderRuns(entries, zone) }
+    val showSenderNames = chat?.type == ChatType.GROUP
+
+    // --- New-messages divider -----------------------------------------------
+    // The newest incoming message the reader has actually had on screen (fed by
+    // the visibility collector below). While it has not reached the open-time
+    // unread boundary, the boundary row stays; once it has -- or the reader
+    // jumps to latest -- the divider retires for the session.
+    var lastSeenIncomingId by remember { mutableStateOf(0L) }
+    val boundaryEntryKey = remember(rows, unreadBoundaryId, lastSeenIncomingId) {
+        if (unreadBoundaryId == 0L || lastSeenIncomingId >= unreadBoundaryId) {
+            null
+        } else {
+            rows.firstOrNull { row ->
+                row is ConversationRow.Entry &&
+                    (row.entry.anchor.id.toLongOrNull() ?: 0L) > unreadBoundaryId &&
+                    !row.entry.anchor.isOutgoing
+            }?.key
+        }
+    }
+    val displayRows = remember(rows, boundaryEntryKey) {
+        ConversationRows.withUnreadBoundary(rows, boundaryEntryKey)
+    }
+    val unreadBadgeCount = remember(messages, lastSeenIncomingId) {
+        messages.count { message ->
+            !message.isOutgoing &&
+                (message.id.toLongOrNull() ?: 0L) > lastSeenIncomingId
+        }.coerceAtMost(99)
+    }
+    // Row index -> the messages that row represents, for read receipts and
+    // media prefetch, which work in messages rather than rows.
+    val rowMessages = remember(displayRows) {
+        displayRows.map { row ->
+            when (row) {
+                is ConversationRow.DayDivider -> emptyList()
+                is ConversationRow.UnreadBoundary -> emptyList()
+                is ConversationRow.Entry -> when (val entry = row.entry) {
+                    is ConversationEntry.Single -> listOf(entry.message)
+                    is ConversationEntry.Album -> entry.messages
+                }
+            }
+        }
+    }
     val selectedMessages = remember(messages, selectedIds) {
         messages.filter { it.id in selectedIds }
     }
@@ -419,28 +497,87 @@ fun ConversationScreen(
     val isSelecting = selectedIds.isNotEmpty()
     var showJumpToLatest by remember { mutableStateOf(false) }
 
+    // --- Reply-jump return anchor -------------------------------------------
+    // Tapping a reply preview stashes the exact reading position (first visible
+    // row KEY + its pixel offset) BEFORE the jump scrolls away. Keyed, not
+    // indexed: an out-of-window jump prepends a whole history window, which
+    // shifts every index the reader was at. When the jump actually lands, the
+    // stash becomes the return anchor and a compact Return control appears;
+    // using it, a manual scroll, leaving the conversation, or a timeout all
+    // retire it. Repeated reply taps keep the FIRST position -- the promise is
+    // the reader's original place, not the last hop. Held in memory only:
+    // after recreation the list restores itself, and a stale anchor would
+    // point somewhere the reader never chose.
+    var stashedReturnAnchor by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    var returnAnchor by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    // True while THIS screen scrolls the list (a jump, a return): those are
+    // not the reader reorienting, so they must not retire the anchor.
+    var isProgrammaticScroll by remember { mutableStateOf(false) }
+
+    // A jump that cannot land (deleted original, offline) is reported once,
+    // and its half-armed return anchor is dropped with it.
+    LaunchedEffect(jumpFailures) {
+        jumpFailures.collect {
+            stashedReturnAnchor = null
+            Toast.makeText(context, "That message is no longer available", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // Brings a jump target into view and marks it, then hands the request back so a
     // repeat tap on the same result scrolls again.
-    LaunchedEffect(jumpTarget, entries) {
+    LaunchedEffect(jumpTarget, displayRows) {
         val target = jumpTarget ?: return@LaunchedEffect
         // Index within the list as it is actually laid out: album members collapse
-        // into one row, and the date divider precedes them at index 0.
-        val entryIndex = entries.indexOfFirst { entry ->
-            when (entry) {
+        // into one row, and day dividers interleave between entries.
+        val index = displayRows.indexOfFirst { row ->
+            row is ConversationRow.Entry && when (val entry = row.entry) {
                 is ConversationEntry.Single -> entry.message.id == target
                 is ConversationEntry.Album -> entry.messages.any { it.id == target }
             }
         }
-        if (entryIndex < 0) return@LaunchedEffect
-        val index = entryIndex + 1
+        if (index < 0) return@LaunchedEffect
         highlightedMessageId = target
         // Leave the target in the upper-middle of the conversation rather than
         // placing it flush beneath the fixed frosted header.
         val comfortableOffset = -(listState.layoutInfo.viewportSize.height / 4).coerceAtLeast(96)
-        runCatching { listState.animateScrollToItem(index, comfortableOffset) }
+        isProgrammaticScroll = true
+        try {
+            runCatching {
+                if (reducedMotion) listState.scrollToItem(index, comfortableOffset)
+                else listState.animateScrollToItem(index, comfortableOffset)
+            }
+        } finally {
+            isProgrammaticScroll = false
+        }
+        // A jump that actually landed from a reply tap is reversible: promote
+        // the stashed reading position into the live return anchor.
+        stashedReturnAnchor?.let { stashed ->
+            returnAnchor = stashed
+            stashedReturnAnchor = null
+        }
         onJumpConsumed()
         delay(1_600)
         if (highlightedMessageId == target) highlightedMessageId = null
+    }
+
+    // The return control is a moment, not furniture. It leaves on its own.
+    LaunchedEffect(returnAnchor) {
+        if (returnAnchor != null) {
+            delay(12_000)
+            returnAnchor = null
+        }
+    }
+    // A deliberate scroll says the reader has reoriented themselves; the anchor
+    // no longer describes where they were. The return scroll itself is exempt.
+    LaunchedEffect(returnAnchor != null) {
+        if (returnAnchor == null) return@LaunchedEffect
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling && !isProgrammaticScroll) returnAnchor = null
+        }
+    }
+    LaunchedEffect(chat?.id) {
+        stashedReturnAnchor = null
+        returnAnchor = null
     }
     var isContextMenuVisible by remember { mutableStateOf(false) }
 
@@ -493,6 +630,30 @@ fun ConversationScreen(
     ) { mutableStateOf<PendingShare?>(null) }
     var sharedDraft by rememberSaveable { mutableStateOf<String?>(null) }
 
+    // Draft restoration. The server draft is handed to the composer once per
+    // open and only when no fresh share is waiting -- a share outranks an old
+    // draft, and once handed off, the draft must never resurrect itself after
+    // the user clears or sends the text. Held in memory: the composer's own
+    // saveable seed markers make re-offering after recreation harmless.
+    var draftHandedOff by remember { mutableStateOf(false) }
+    val composerPrefill = when {
+        sharedDraft != null -> sharedDraft
+        !draftHandedOff -> restoredDraft?.text
+        else -> null
+    }
+    LaunchedEffect(composerPrefill, restoredDraft?.replyMessageId) {
+        if (composerPrefill != null && sharedDraft == null && !draftHandedOff) {
+            draftHandedOff = true
+            val draft = restoredDraft
+            if (draft != null && replyingToMessageId == null && draft.replyMessageId != 0L) {
+                replyingToMessageId = draft.replyMessageId.toString()
+            }
+        }
+    }
+    LaunchedEffect(replyingToMessageId) {
+        onReplyDraftChanged(replyingToMessageId)
+    }
+
     var cameraTempFile by remember { mutableStateOf<File?>(null) }
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
@@ -530,6 +691,114 @@ fun ConversationScreen(
                 audioRecorder.cancelRecording()
             }
         }
+    }
+
+    // --- Hold-to-record state machine ----------------------------------------
+    // Press starts, holding keeps it, dragging left arms cancel, dragging up
+    // locks hands-free, release decides. The composer renders the state; all
+    // recorder truth lives here.
+    var voiceRecordLocked by remember { mutableStateOf(false) }
+    var voiceRecordCancelDragPx by remember { mutableStateOf(0f) }
+    var voiceRecordLockDragPx by remember { mutableStateOf(0f) }
+    var voiceRecordStartedAtMs by remember { mutableStateOf(0L) }
+    var voiceRecordElapsedSec by remember { mutableStateOf(0) }
+    var voiceRecordAmplitude by remember { mutableStateOf(0f) }
+    // Every polled input level of the current recording, packed into the
+    // note's waveform on send. Not state: nothing renders from it.
+    val voiceRecordLevels = remember { ArrayList<Float>() }
+    val voiceCancelThresholdPx = with(density) { 148.dp.toPx() }
+    val voiceLockThresholdPx = with(density) { 120.dp.toPx() }
+
+    fun beginRecording() {
+        if (audioRecorder.startRecording()) {
+            isRecordingAudio = true
+            voiceRecordLocked = false
+            voiceRecordCancelDragPx = 0f
+            voiceRecordLockDragPx = 0f
+            voiceRecordStartedAtMs = android.os.SystemClock.elapsedRealtime()
+            voiceRecordElapsedSec = 0
+            voiceRecordAmplitude = 0f
+            voiceRecordLevels.clear()
+            onVoiceRecordingStarted()
+        } else {
+            Toast.makeText(context, "Couldn't start the microphone", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun endRecording(send: Boolean) {
+        if (!isRecordingAudio) return
+        isRecordingAudio = false
+        voiceRecordLocked = false
+        voiceRecordCancelDragPx = 0f
+        voiceRecordLockDragPx = 0f
+        onVoiceRecordingEnded()
+        if (send) {
+            val recordResult = audioRecorder.stopRecording()
+            if (recordResult != null) {
+                val waveform = com.foresightlabs.aether.data.media.VoiceWaveform.encode(voiceRecordLevels.toList())
+                onSendVoiceNote(recordResult.filePath, recordResult.durationSec, waveform, replyingToMessage)
+                replyingToMessageId = null
+            } else {
+                // MediaRecorder produces nothing for a near-instant capture;
+                // say so rather than let the note silently vanish.
+                Toast.makeText(context, "Recording too short to send", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            audioRecorder.cancelRecording()
+        }
+        voiceRecordLevels.clear()
+    }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            // The finger that asked is gone by now (the system dialog took the
+            // release), so starting here would leave an unheld, unlocked
+            // recording with no gesture left to end it. Recording is always a
+            // fresh hold.
+            Toast.makeText(context, "Microphone ready — hold the mic to record", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Microphone permission is required for voice notes", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun startVoiceRecording() {
+        keyboardController?.hide()
+        focusManager.clearFocus()
+        curtainState = CurtainState.COMPOSER
+        val hasMicPermission = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hasMicPermission) beginRecording() else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    // The timer and level poll drive the composer's recording chrome. The peak
+    // between polls is never lost -- amplitudeFraction reads the recorder's
+    // running maximum.
+    LaunchedEffect(isRecordingAudio) {
+        if (!isRecordingAudio) return@LaunchedEffect
+        while (true) {
+            voiceRecordElapsedSec =
+                ((android.os.SystemClock.elapsedRealtime() - voiceRecordStartedAtMs) / 1000L).toInt()
+            val level = audioRecorder.amplitudeFraction()
+            voiceRecordAmplitude = level
+            voiceRecordLevels.add(level)
+            delay(100)
+        }
+    }
+
+    // Recording must not survive the app being backgrounded or an audio focus
+    // grab (an incoming call): the half-made note is discarded, the mic freed.
+    val voiceLifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(voiceLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE && isRecordingAudio) {
+                endRecording(send = false)
+            }
+        }
+        voiceLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { voiceLifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // The conversation's single audio player: one voice note / audio message
@@ -578,19 +847,6 @@ fun ConversationScreen(
             }
         } else if (media.fileId != 0) {
             onRequestMediaDownload(media.fileId, false)
-        }
-    }
-
-    val micPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            if (audioRecorder.startRecording()) {
-                isRecordingAudio = true
-                Toast.makeText(context, "Recording voice message… Tap mic again to send", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            Toast.makeText(context, "Microphone permission is required for voice notes", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -703,14 +959,17 @@ fun ConversationScreen(
 
     var hasSettledInitialPosition by remember { mutableStateOf(false) }
     val latestMessageId = messages.lastOrNull()?.id
-    LaunchedEffect(entries.size, latestMessageId) {
-        if (entries.isEmpty()) return@LaunchedEffect
-        val lastIndex = entries.size
+    LaunchedEffect(displayRows.size, latestMessageId) {
+        if (displayRows.isEmpty()) return@LaunchedEffect
+        val lastIndex = displayRows.lastIndex
         if (!hasSettledInitialPosition) {
             listState.scrollToItem(lastIndex)
             hasSettledInitialPosition = true
             return@LaunchedEffect
         }
+        // A jump in flight owns the scroll: a window loaded around an old
+        // message must not be answered by a settle back to latest.
+        if (jumpTarget != null) return@LaunchedEffect
         val visible = listState.layoutInfo.visibleItemsInfo
         val nearLatest = visible.any { it.index >= lastIndex - 2 }
         if (nearLatest) {
@@ -735,9 +994,14 @@ fun ConversationScreen(
             .collect { (index, totalItems) ->
                 if (index <= 1 && messages.size >= 15) onLoadOlder()
                 if (totalItems > 0 && index >= totalItems - 3) showJumpToLatest = false
-                val visibleMsgs = listState.layoutInfo.visibleItemsInfo.mapNotNull { info ->
-                    messages.getOrNull(info.index - 1)
-                }
+                val visibleMsgs = listState.layoutInfo.visibleItemsInfo
+                    .flatMap { info -> rowMessages.getOrNull(info.index).orEmpty() }
+                // The reader has now seen everything incoming in the viewport;
+                // reaching the open-time boundary retires the New-messages row.
+                val newestSeenIncoming = visibleMsgs.maxOfOrNull { message ->
+                    if (!message.isOutgoing) message.id.toLongOrNull() ?: 0L else 0L
+                } ?: 0L
+                if (newestSeenIncoming > lastSeenIncomingId) lastSeenIncomingId = newestSeenIncoming
                 val visibleIds = visibleMsgs.map { it.id }
                 if (visibleIds.isNotEmpty()) onVisibleMessages(visibleIds)
 
@@ -1082,7 +1346,7 @@ fun ConversationScreen(
                             isSearching = searchState.isActive,
                             hasJumpTarget = highlightedMessageId != null || jumpTarget != null
                         )
-                        val lastIndex = entries.size
+                        val lastIndex = displayRows.lastIndex
                         val alreadyNearLatest = lastIndex > 0 &&
                             listState.layoutInfo.visibleItemsInfo.any { it.index >= lastIndex - 2 }
                         if (shouldSettleOnComposerActivity(contextAllows, composerSessionSettled, alreadyNearLatest)) {
@@ -1109,27 +1373,42 @@ fun ConversationScreen(
                 onSendSticker = onSendSticker,
                 savedAnimations = savedAnimations,
                 onSendAnimation = onSendAnimation,
-                onVoiceNoteRecorded = {
-                    curtainState = CurtainState.COMPOSER
-                    if (isRecordingAudio) {
-                        val recordResult = audioRecorder.stopRecording()
-                        isRecordingAudio = false
-                        if (recordResult != null) {
-                            onSendVoiceNote(recordResult.filePath, recordResult.durationSec, ByteArray(0), replyingToMessage)
-                            replyingToMessageId = null
-                        }
-                    } else {
-                        val hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-                        if (hasMicPermission) {
-                            if (audioRecorder.startRecording()) {
-                                isRecordingAudio = true
-                                Toast.makeText(context, "Recording voice message… Tap mic again to send", Toast.LENGTH_SHORT).show()
-                            }
-                        } else {
-                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                isRecordingVoice = isRecordingAudio,
+                voiceRecordElapsedSec = voiceRecordElapsedSec,
+                voiceRecordLevel = voiceRecordAmplitude,
+                voiceRecordDragFraction = if (voiceCancelThresholdPx > 0f) voiceRecordCancelDragPx / voiceCancelThresholdPx else 0f,
+                voiceRecordLockFraction = if (voiceLockThresholdPx > 0f) voiceRecordLockDragPx / voiceLockThresholdPx else 0f,
+                voiceRecordLocked = voiceRecordLocked,
+                onVoiceRecordPress = { startVoiceRecording() },
+                onVoiceRecordDrag = { dx, dy ->
+                    if (!voiceRecordLocked && isRecordingAudio) {
+                        voiceRecordCancelDragPx =
+                            (voiceRecordCancelDragPx - dx).coerceIn(0f, voiceCancelThresholdPx)
+                        voiceRecordLockDragPx = (voiceRecordLockDragPx - dy).coerceAtLeast(0f)
+                        if (voiceRecordLockDragPx >= voiceLockThresholdPx) {
+                            voiceRecordLocked = true
+                            voiceRecordCancelDragPx = 0f
+                            localView.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                         }
                     }
                 },
+                onVoiceRecordRelease = {
+                    if (isRecordingAudio && !voiceRecordLocked) {
+                        // A stab of the mic is a mis-tap, not a message: under
+                        // a moment of hold the recording is discarded, exactly
+                        // like releasing inside the cancel zone.
+                        val heldMs = android.os.SystemClock.elapsedRealtime() - voiceRecordStartedAtMs
+                        val pastCancel = voiceRecordCancelDragPx >= voiceCancelThresholdPx
+                        endRecording(send = !pastCancel && heldMs >= 600)
+                    }
+                    // Locked recordings ignore release: the finger leaving is
+                    // what hands-free means. Send/discards are explicit taps.
+                },
+                onVoiceRecordSend = {
+                    localView.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+                    endRecording(send = true)
+                },
+                onVoiceRecordCancelTap = { endRecording(send = false) },
                 onOpenVideoNote = {
                     curtainState = CurtainState.COMPOSER
                     showVideoNoteRecorder = true
@@ -1204,7 +1483,7 @@ fun ConversationScreen(
                     curtainState = CurtainState.COMPOSER
                 },
                 pendingShare = pendingShare,
-                prefillText = sharedDraft,
+                prefillText = composerPrefill,
                 onCancelPendingShare = {
                     pendingShare = null
                     curtainState = CurtainState.COMPOSER
@@ -1342,39 +1621,31 @@ fun ConversationScreen(
         ) {
 
 
-            // Date Divider Header
-            item(key = "date_divider", contentType = "date_divider") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(AetherEmber.Shapes.Pill)
-                            .background(Color(0x35000000))
-                            .border(0.5.dp, Color(0x28FFFFFF), AetherEmber.Shapes.Pill)
-                            .padding(horizontal = 16.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "Today",
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xF5FFFFFF)
-                        )
+            // Calendar-day boundaries, the New-messages row, and the message
+            // rows beneath them. These are rows, not fixed headers: the labels
+            // reflect where the reader actually is, wherever the window starts.
+            items(displayRows, key = { it.key }, contentType = { row ->
+                when (row) {
+                    is ConversationRow.DayDivider -> "day_divider"
+                    is ConversationRow.UnreadBoundary -> "unread_boundary"
+                    is ConversationRow.Entry -> when (row.entry) {
+                        is ConversationEntry.Single -> "single_message"
+                        is ConversationEntry.Album -> "album"
                     }
                 }
-            }
-
-            // Message Bubbles, with grouped media collapsed into one cluster.
-            items(entries, key = { it.key }, contentType = { entry ->
-                when (entry) {
-                    is ConversationEntry.Single -> "single_message"
-                    is ConversationEntry.Album -> "album"
+            }) { row ->
+                if (row is ConversationRow.DayDivider) {
+                    val nowSeconds = remember { (System.currentTimeMillis() / 1000).toInt() }
+                    ConversationDayDivider(
+                        label = ConversationRows.dayLabel(row.dateSeconds, nowSeconds, zone)
+                    )
+                    return@items
                 }
-            }) { entry ->
+                if (row is ConversationRow.UnreadBoundary) {
+                    ConversationNewMessagesDivider()
+                    return@items
+                }
+                val entry = (row as ConversationRow.Entry).entry
                 val rowMotion = messageMotionEvents[entry.anchor.id]
                 if (entry is ConversationEntry.Album) {
                     AlbumEntryRow(
@@ -1441,9 +1712,26 @@ fun ConversationScreen(
                     onPollVote = onPollVote,
                     onStopLiveLocation = onStopLiveLocation,
                     onRetry = onRetryMessage,
-                    onReplyPreviewClick = onReplyPreviewClick,
+                    onReplyPreviewClick = { replyChatId, replyMessageId ->
+                        // Arm the return anchor only when following the reply
+                        // actually moves the reader -- a target already on
+                        // screen needs no way back.
+                        val targetVisible = listState.layoutInfo.visibleItemsInfo.any { info ->
+                            rowMessages.getOrNull(info.index)
+                                ?.any { it.id == replyMessageId.toString() } == true
+                        }
+                        if (!targetVisible && returnAnchor == null && stashedReturnAnchor == null) {
+                            val anchorKey = displayRows.getOrNull(listState.firstVisibleItemIndex)?.key
+                            if (anchorKey != null) {
+                                stashedReturnAnchor = anchorKey to listState.firstVisibleItemScrollOffset
+                            }
+                        }
+                        onReplyPreviewClick(replyChatId, replyMessageId)
+                    },
                     reducedMotion = reducedMotion,
                     maxAvailableWidth = maxAvailableWidth,
+                    senderRunPosition = senderRunPositions[msg.id],
+                    showSenderName = showSenderNames,
                     modifier = Modifier.animateItem(
                         fadeInSpec = null,
                         fadeOutSpec = null,
@@ -1552,7 +1840,14 @@ fun ConversationScreen(
                     .border(1.dp, colors.accentSubtle, CircleShape)
                     .clickable {
                         coroutineScope.launch {
-                            if (entries.isNotEmpty()) listState.animateScrollToItem(entries.size)
+                            if (displayRows.isNotEmpty()) listState.animateScrollToItem(displayRows.lastIndex)
+                            // Landing on the newest message retires the unread
+                            // orientation for the session.
+                            lastSeenIncomingId = (
+                                messages.maxOfOrNull { message ->
+                                    if (!message.isOutgoing) message.id.toLongOrNull() ?: 0L else 0L
+                                } ?: 0L
+                                ).coerceAtLeast(lastSeenIncomingId)
                             showJumpToLatest = false
                         }
                     }
@@ -1564,6 +1859,82 @@ fun ConversationScreen(
                     contentDescription = "Jump to latest message",
                     tint = colors.accentSubtle,
                     modifier = Modifier.size(25.dp)
+                )
+                if (unreadBadgeCount > 0) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = 6.dp, y = (-2).dp)
+                            .clip(AetherEmber.Shapes.Pill)
+                            .background(colors.accent)
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                            .testTag("jump_to_latest_unread_badge")
+                    ) {
+                        Text(
+                            text = if (unreadBadgeCount >= 99) "99+" else unreadBadgeCount.toString(),
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+            }
+        }
+
+        // The way back from a reply jump: returns the reader to the exact
+        // position the jump took them away from, then disappears.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = returnAnchor != null,
+            enter = fadeIn(tween(ConversationMotion.FAST_MS)) +
+                androidx.compose.animation.slideInVertically(tween(ConversationMotion.FAST_MS)) { it / 3 },
+            exit = fadeOut(tween(ConversationMotion.FAST_MS)) +
+                androidx.compose.animation.slideOutVertically(tween(ConversationMotion.FAST_MS)) { it / 3 },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = if (showJumpToLatest) 76.dp else 16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .clip(AetherEmber.Shapes.Pill)
+                    .background(Color(0xE51B1B22))
+                    .border(1.dp, colors.accentSubtle, AetherEmber.Shapes.Pill)
+                    .clickable {
+                        val anchor = returnAnchor ?: return@clickable
+                        val index = displayRows.indexOfFirst { it.key == anchor.first }
+                        coroutineScope.launch {
+                            if (index >= 0) {
+                                isProgrammaticScroll = true
+                                try {
+                                    runCatching {
+                                        if (reducedMotion) listState.scrollToItem(index, anchor.second)
+                                        else listState.animateScrollToItem(index, anchor.second)
+                                    }
+                                } finally {
+                                    isProgrammaticScroll = false
+                                }
+                            }
+                            returnAnchor = null
+                        }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                    .semantics { contentDescription = "Return to previous reading position" }
+                    .testTag("return_to_position"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Undo,
+                    contentDescription = null,
+                    tint = colors.accentSubtle,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = "Return",
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
                 )
             }
         }
@@ -1715,6 +2086,7 @@ fun ConversationScreen(
             message = selectedContextMenuMessage,
             capabilities = selectedContextMenuMessage?.let { messageCapabilities[it.id] } ?: MessageCapabilities.Unknown,
             isVisible = isContextMenuVisible,
+            isBookmarked = selectedContextMenuMessage?.id in bookmarkedMessageIds,
             onDismiss = {
                 isContextMenuVisible = false
                 selectedContextMenuMessage = null
@@ -1759,6 +2131,7 @@ fun ConversationScreen(
                         replaceMediaLauncher.launch(mime)
                     }
                     MessageAction.PIN, MessageAction.UNPIN -> onPinMessage(target)
+                    MessageAction.BOOKMARK -> onToggleBookmark(target)
                     MessageAction.DELETE_FOR_ME -> onDeleteMessage(target, false)
                     MessageAction.DELETE_FOR_EVERYONE -> onDeleteMessage(target, true)
                     MessageAction.INFO -> infoMessage = target
@@ -2046,6 +2419,81 @@ private fun conversationContentTopPadding(hasPinnedBanner: Boolean): Dp =
         AetherFloatingHeaderDefaults.ExpandedHeight +
         (if (hasPinnedBanner) ConversationPinnedHeight + AetherEmber.Spacing.Space8 else 0.dp) +
         AetherEmber.Spacing.Space8
+
+/**
+ * One calendar-day boundary in the stream. Same restrained pill the single
+ * hardcoded "Today" marker used -- now honestly labeled for whichever day the
+ * reader is actually looking at.
+ */
+@Composable
+private fun ConversationDayDivider(label: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(AetherEmber.Shapes.Pill)
+                .background(Color(0x35000000))
+                .border(0.5.dp, Color(0x28FFFFFF), AetherEmber.Shapes.Pill)
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .testTag("conversation_day_divider"),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                fontFamily = ManropeFontFamily,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xF5FFFFFF)
+            )
+        }
+    }
+}
+
+/**
+ * Where previously-unread incoming traffic began when the conversation opened.
+ * A restrained accent pill -- louder than a day divider, quieter than a banner.
+ * Session-local: retired the moment the reader reaches that point, and never
+ * reported anywhere.
+ */
+@Composable
+private fun ConversationNewMessagesDivider() {
+    val colors = LocalAetherColors.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(AetherEmber.Shapes.Pill)
+                .background(colors.accent.copy(alpha = 0.22f))
+                .border(0.5.dp, colors.accent.copy(alpha = 0.55f), AetherEmber.Shapes.Pill)
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .testTag("conversation_unread_divider"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(colors.accent)
+            )
+            Text(
+                text = "New messages",
+                fontFamily = ManropeFontFamily,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xF5FFFFFF)
+            )
+        }
+    }
+}
 
 /**
  * Mac-like restrained optical control for in-conversation search.

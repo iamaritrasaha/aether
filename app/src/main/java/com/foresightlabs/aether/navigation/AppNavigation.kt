@@ -92,7 +92,8 @@ object Destinations {
     const val CHATS = "chats"
     const val PULSE = "pulse"
     const val CONTACTS = "contacts"
-    const val CONVERSATION_CHAT = "conversation/chat/{chatId}"
+    const val CONVERSATION_CHAT = "conversation/chat/{chatId}?jump={messageId}"
+    const val BOOKMARKS = "bookmarks"
     const val CONVERSATION_USER = "conversation/user/{userId}"
     const val CONVERSATION = "conversation/chat/{chatId}"
     const val PROFILE = "profile/{chatId}"
@@ -110,6 +111,17 @@ object Destinations {
 
     fun appLockReauth(purpose: String) = "app-lock-reauth/$purpose"
     fun conversation(chatId: String) = "conversation/chat/$chatId"
+    /** Opens a conversation and jumps straight to [messageId] (bookmark entry). */
+    fun conversationAtMessage(chatId: String, messageId: Long) =
+        "conversation/chat/$chatId?jump=$messageId"
+
+    /**
+     * A conversation entry's pending jump, held in its SavedStateHandle so it
+     * is consumed exactly once: it survives recreation until used, and never
+     * re-fires when the entry is returned to (from Profile, say).
+     */
+    const val PENDING_JUMP_KEY = "pending_jump_message_id"
+    const val JUMP_ARGUMENT_CONSUMED_KEY = "jump_argument_consumed"
     fun forumTopics(chatId: String) = "forum/$chatId"
     fun conversationTopic(chatId: Long, topicId: Int) = "conversation/topic/$chatId/$topicId"
     fun conversationWithUser(userId: String) = "conversation/user/$userId"
@@ -481,7 +493,11 @@ fun AetherApp(
 
                 composable(
                     route = Destinations.CONVERSATION_CHAT,
-                    arguments = listOf(navArgument("chatId") { type = NavType.StringType }),
+                    arguments = listOf(
+                        navArgument("chatId") { type = NavType.StringType },
+                        // Optional jump target (bookmarks): 0 = none.
+                        navArgument("messageId") { type = NavType.LongType; defaultValue = 0L }
+                    ),
                     // No page slide: the dock collapsing from the conversation list
                     // into the composer is the transition, driven below by the same
                     // progress Home reads — not an independent animation of this
@@ -493,6 +509,21 @@ fun AetherApp(
                 ) { backStackEntry ->
                     val chatId = backStackEntry.arguments?.getString("chatId").orEmpty()
                     val id = chatId.toLongOrNull() ?: return@composable
+                    val initialJump = backStackEntry.arguments?.getLong("messageId") ?: 0L
+                    val entryState = backStackEntry.savedStateHandle
+                    // The ?jump= argument is a one-time request; move it into the
+                    // entry's saved state on first composition so neither
+                    // recreation nor coming back from Profile repeats it.
+                    remember(backStackEntry.id) {
+                        if (initialJump != 0L && entryState.get<Boolean>(Destinations.JUMP_ARGUMENT_CONSUMED_KEY) != true) {
+                            entryState[Destinations.JUMP_ARGUMENT_CONSUMED_KEY] = true
+                            entryState[Destinations.PENDING_JUMP_KEY] = initialJump
+                        }
+                        Unit
+                    }
+                    val pendingJump by entryState
+                        .getStateFlow(Destinations.PENDING_JUMP_KEY, 0L)
+                        .collectAsStateWithLifecycle()
                     // 1 at rest in the conversation, moving toward 0 as it is
                     // uncovered by Home returning underneath it. Defined on the
                     // *same underlying transition* as Home's — both destinations
@@ -513,7 +544,9 @@ fun AetherApp(
                             target = com.foresightlabs.aether.domain.model.ConversationTarget.Chat(id),
                             onBack = { navController.popBackStack() },
                             onNavigateToProfile = { navController.navigate(Destinations.profile(chatId)) },
-                            onNavigateToChatAppearance = { navController.navigate(Destinations.chatAppearance(it)) }
+                            onNavigateToChatAppearance = { navController.navigate(Destinations.chatAppearance(it)) },
+                            pendingJumpMessageId = pendingJump,
+                            onPendingJumpConsumed = { entryState[Destinations.PENDING_JUMP_KEY] = 0L }
                         )
                     }
                 }
@@ -659,6 +692,21 @@ fun AetherApp(
                             onLoadSharedMedia = { targetChatId, category, offset ->
                                 (application as AetherApplication).telegram.getSharedMedia(targetChatId, category, offset)
                             },
+                            onOpenMessageInConversation = { targetChatId, messageId ->
+                                // Profile is normally opened FROM this conversation:
+                                // go back to it and jump there, rather than stacking
+                                // a second copy of the same chat above Profile.
+                                val previous = navController.previousBackStackEntry
+                                val returnsToSameChat =
+                                    previous?.destination?.route == Destinations.CONVERSATION_CHAT &&
+                                        previous.arguments?.getString("chatId") == targetChatId.toString()
+                                if (returnsToSameChat) {
+                                    previous!!.savedStateHandle[Destinations.PENDING_JUMP_KEY] = messageId
+                                    navController.popBackStack()
+                                } else {
+                                    navController.navigate(Destinations.conversationAtMessage(targetChatId.toString(), messageId))
+                                }
+                            },
                             onRequestMediaDownload = { fileId, isRetry ->
                                 val tg = (application as AetherApplication).telegram
                                 if (isRetry) tg.retryMediaDownload(fileId) else tg.requestFullMediaDownload(fileId)
@@ -752,9 +800,25 @@ fun AetherApp(
                         onNavigateToAppearance = { navController.navigate(Destinations.APPEARANCE) },
                         onNavigateToAbout = { navController.navigate(Destinations.ABOUT) },
                         onNavigateToAppLock = { navController.navigate(Destinations.APP_LOCK_SETTINGS) },
+                        onNavigateToBookmarks = { navController.navigate(Destinations.BOOKMARKS) },
                         onRequestLogout = settingsViewModel::requestLogout,
                         onConfirmLogout = settingsViewModel::confirmLogout,
                         onDismissLogout = settingsViewModel::dismissLogout
+                    )
+                }
+
+                composable(
+                    route = Destinations.BOOKMARKS,
+                    enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
+                    exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
+                    popEnterTransition = { AetherNavigationMotion.secondaryBackEnter(calm) },
+                    popExitTransition = { AetherNavigationMotion.secondaryBackExit(calm) }
+                ) {
+                    com.foresightlabs.aether.ui.bookmarks.BookmarksScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenBookmark = { chatId, messageId ->
+                            navController.navigate(Destinations.conversationAtMessage(chatId.toString(), messageId))
+                        }
                     )
                 }
 
@@ -1025,7 +1089,10 @@ private fun ConversationRoute(
     target: com.foresightlabs.aether.domain.model.ConversationTarget,
     onBack: () -> Unit,
     onNavigateToProfile: () -> Unit,
-    onNavigateToChatAppearance: (Long) -> Unit
+    onNavigateToChatAppearance: (Long) -> Unit,
+    /** Jump to this message once the conversation is open (bookmark / shared content); 0 = none. */
+    pendingJumpMessageId: Long = 0L,
+    onPendingJumpConsumed: () -> Unit = {}
 ) {
     val key = when (target) {
         is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> "conversation-chat-${target.chatId}"
@@ -1036,6 +1103,16 @@ private fun ConversationRoute(
         key = key,
         factory = ConversationViewModel.Factory(application, target)
     )
+    // A bookmark or shared-content entry that opens the conversation at a
+    // specific message. jumpTo defers until the chat is open and loads the
+    // surrounding window when needed; the request is consumed at once so it
+    // can never fire twice.
+    androidx.compose.runtime.LaunchedEffect(pendingJumpMessageId) {
+        if (pendingJumpMessageId != 0L) {
+            viewModel.jumpTo(pendingJumpMessageId.toString())
+            onPendingJumpConsumed()
+        }
+    }
     val isResolving by viewModel.isResolving.collectAsStateWithLifecycle()
     val resolveError by viewModel.resolveError.collectAsStateWithLifecycle()
     val header by viewModel.header.collectAsStateWithLifecycle()
@@ -1173,8 +1250,14 @@ private fun ConversationRoute(
             onSendMixedBatch = { items, caption, reply -> viewModel.sendSharedBatch(items, caption, reply?.id) },
             onResolveMessage = { id -> viewModel.resolveReplyEditTarget(id) },
             onSendVoiceNote = { path, duration, wave, reply -> viewModel.sendVoiceNote(path, duration, wave, reply?.id) },
+            onVoiceRecordingStarted = viewModel::onVoiceRecordingStarted,
+            onVoiceRecordingEnded = viewModel::onActivityEnded,
             onEditMessage = viewModel::editMessage, onAddReaction = viewModel::addReaction,
             onPinMessage = viewModel::pinMessage, onComposerChanged = viewModel::onComposerChanged,
+            onToggleBookmark = viewModel::toggleBookmark,
+            bookmarkedMessageIds = viewModel.bookmarkedMessageIds.collectAsStateWithLifecycle().value,
+            restoredDraft = viewModel.restoredDraft.collectAsStateWithLifecycle().value,
+            onReplyDraftChanged = viewModel::onDraftReplyChanged,
             linkPreview = linkPreview, onDismissLinkPreview = viewModel::dismissLinkPreview,
             onLoadOlder = viewModel::loadOlder, onDeleteMessage = viewModel::delete,
             onForwardMessages = { selectedMessages, toChatId, sendCopy, removeCaption ->
@@ -1243,6 +1326,8 @@ private fun ConversationRoute(
                 }
             },
             pinnedFromServer = pinnedMessages,
+            unreadBoundaryId = viewModel.unreadBoundaryId.collectAsStateWithLifecycle().value,
+            jumpFailures = viewModel.jumpFailures,
             onJumpToMessage = viewModel::jumpTo,
             onReplyPreviewClick = { replyChatId, replyMessageId ->
                 if (replyChatId == targetChatId) viewModel.jumpTo(replyMessageId.toString())

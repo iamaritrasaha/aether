@@ -41,6 +41,16 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * A draft Telegram already holds for this chat, offered back to the composer
+ * when the conversation opens. The reply target rides along: [replyMessageId]
+ * is 0 when the draft does not reply to anything.
+ */
+data class RestoredDraft(
+    val text: String,
+    val replyMessageId: Long = 0L
+)
+
 class ConversationViewModel(
     application: Application,
     private val target: com.foresightlabs.aether.domain.model.ConversationTarget
@@ -119,6 +129,26 @@ class ConversationViewModel(
         _sendError.value = null
     }
 
+    // --- local-only bookmarks --------------------------------------------------
+
+    private val bookmarkStore = (application as AetherApplication).bookmarkStore
+
+    /**
+     * Messages of THIS chat the account has bookmarked locally. Purely
+     * on-device state -- see [com.foresightlabs.aether.data.local.BookmarkStore];
+     * nothing here is sent to Telegram.
+     */
+    val bookmarkedMessageIds: StateFlow<Set<String>> = bookmarkStore.bookmarksFor(telegram.getMyUserId())
+        .map { list -> list.filter { it.chatId == activeChatId }.map { it.messageId.toString() }.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    fun toggleBookmark(message: Message) {
+        val messageId = message.id.toLongOrNull() ?: return
+        val accountId = telegram.getMyUserId()
+        if (accountId == 0L) return
+        viewModelScope.launch { bookmarkStore.toggle(accountId, activeChatId, messageId) }
+    }
+
     private val _forwardState = MutableStateFlow<ForwardState>(ForwardState.Idle)
     val forwardState: StateFlow<ForwardState> = _forwardState.asStateFlow()
 
@@ -140,6 +170,47 @@ class ConversationViewModel(
     /** Message the list should scroll to and briefly highlight, if any. */
     private val _jumpTarget = MutableStateFlow<String?>(null)
     val jumpTarget: StateFlow<String?> = _jumpTarget.asStateFlow()
+
+    /**
+     * Telegram's inbox read boundary as it stood when this conversation opened:
+     * incoming messages above this id were unread at open. 0 when the chat was
+     * fully read. Captured BEFORE openChat marks everything read, so the
+     * New-messages divider can honestly mark where the unread traffic began.
+     * The server's later state is irrelevant to it -- this is orientation for
+     * the reader, not a report back to Telegram.
+     */
+    private val _unreadBoundaryId = MutableStateFlow(0L)
+    val unreadBoundaryId: StateFlow<Long> = _unreadBoundaryId.asStateFlow()
+
+    private fun captureUnreadBoundary(chat: Chat?) {
+        _unreadBoundaryId.value =
+            if (chat != null && chat.unreadCount > 0) chat.lastReadInboxMessageId else 0L
+    }
+
+    /**
+     * The server draft, offered to the composer exactly once per open. The
+     * screen decides when (and whether) to seed it; re-offering after the
+     * user cleared or sent the text would resurrect a message they are done
+     * with.
+     */
+    private val _restoredDraft = MutableStateFlow<RestoredDraft?>(null)
+    val restoredDraft: StateFlow<RestoredDraft?> = _restoredDraft.asStateFlow()
+
+    private fun captureServerDraft(chat: Chat?) {
+        val text = chat?.draftText?.takeIf { it.isNotBlank() } ?: return
+        _restoredDraft.value = RestoredDraft(text, chat.draftReplyMessageId)
+    }
+
+    /**
+     * The reply the composer is currently holding, recorded so [onCleared]
+     * stores the draft WITH its reply context instead of dropping it (it used
+     * to, which made every cross-client draft lose what it was answering).
+     */
+    private var draftReplyId: Long? = null
+
+    fun onDraftReplyChanged(messageId: String?) {
+        draftReplyId = messageId?.toLongOrNull()
+    }
 
     /** One-shot server events consumed by visible message rows for motion only. */
     private val _messageMotionEvents = MutableStateFlow<Map<String, MessageMotionEvent>>(emptyMap())
@@ -229,9 +300,12 @@ class ConversationViewModel(
                     val resolvedChat = telegram.ensureChatLoaded(target.chatId)
                     if (resolvedChat != null) {
                         _header.value = resolvedChat
+                        captureUnreadBoundary(resolvedChat)
+                        captureServerDraft(resolvedChat)
                         telegram.openChat(target.chatId)
                         opened = true
                         loadInitial()
+                        runPendingJump()
                         refreshPinned()
                     } else {
                         _resolveError.value =
@@ -243,9 +317,12 @@ class ConversationViewModel(
                     val resolvedChat = telegram.ensureChatLoaded(target.chatId)
                     if (resolvedChat != null) {
                         _header.value = resolvedChat
+                        captureUnreadBoundary(resolvedChat)
+                        captureServerDraft(resolvedChat)
                         telegram.openChat(target.chatId)
                         opened = true
                         loadInitial()
+                        runPendingJump()
                         refreshPinned()
                     } else {
                         _resolveError.value = "Couldn't load this conversation. Please check your network and try again."
@@ -256,11 +333,14 @@ class ConversationViewModel(
                     result.fold(
                         onSuccess = { resolvedChat ->
                             _header.value = resolvedChat
+                            captureUnreadBoundary(resolvedChat)
+                            captureServerDraft(resolvedChat)
                             val chatId = resolvedChat.id.toLongOrNull() ?: target.userId
                             activeChatId = chatId
                             telegram.openChat(chatId)
                             opened = true
                             loadInitial()
+                            runPendingJump()
                         },
                         onFailure = { error ->
                             _resolveError.value = error.message ?: "Couldn't open chat with this contact. Please try again."
@@ -1321,22 +1401,56 @@ class ConversationViewModel(
      */
     fun jumpTo(messageId: String) {
         val id = messageId.toLongOrNull() ?: return
+        // A jump asked for before the chat is open (a bookmark or shared-content
+        // entry) waits for the initial page: jumping first would let the
+        // initial settle-to-latest scroll straight past it.
+        if (!opened) {
+            pendingJumpId = messageId
+            return
+        }
         val alreadyLoaded = telegram.messagesFlow(activeChatId).value.any { it.id == messageId }
         if (alreadyLoaded) {
             _jumpTarget.value = messageId
             return
         }
         viewModelScope.launch {
-            val window = telegram.loadHistoryAround(activeChatId, id)
+            val window = runCatching { telegram.loadHistoryAround(activeChatId, id) }.getOrDefault(emptyList())
             if (window.isNotEmpty()) {
                 telegram.upsertConversation(activeChatId, window, prepend = true)
                 window.firstOrNull()?.id?.toLongOrNull()?.let { first ->
                     if (first < oldestId || oldestId == 0L) oldestId = first
                 }
             }
-            _jumpTarget.value = messageId
+            // GetChatHistory answers with the neighbourhood even when the
+            // message itself is gone, so landing is decided by membership --
+            // never by a non-empty window. A target that never arrives would
+            // otherwise sit armed forever, waiting for a row that cannot come.
+            if (window.any { it.id == messageId }) {
+                _jumpTarget.value = messageId
+            } else {
+                _jumpFailures.tryEmit(messageId)
+            }
         }
     }
+
+    /** A jump requested before the conversation opened; see [jumpTo]. */
+    private var pendingJumpId: String? = null
+
+    private fun runPendingJump() {
+        val pending = pendingJumpId ?: return
+        pendingJumpId = null
+        jumpTo(pending)
+    }
+
+    private val _jumpFailures = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 4)
+
+    /**
+     * Ids whose jump could not land: the message was deleted, or Telegram could
+     * not be reached for it. One-shot, so the screen reports it exactly once.
+     */
+    val jumpFailures: kotlinx.coroutines.flow.SharedFlow<String> = _jumpFailures
+
+
 
     /** Clears the highlight once the list has scrolled to it. */
     fun consumeJumpTarget() {
@@ -1352,7 +1466,7 @@ class ConversationViewModel(
         clearChatAction()
         val draft = pendingDraft
         val chatId = activeChatId
-        val replyTo = null
+        val replyTo = draftReplyId
         telegram.setChatDraftAsync(chatId, draft, replyTo, forumTopicId)
         telegram.closeChatAsync(chatId)
     }

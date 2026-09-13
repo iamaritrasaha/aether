@@ -66,6 +66,13 @@ enum class MessageAction {
      * intersection.
      */
     SELECT,
+
+    /**
+     * Bookmarks the message locally in Aether. Like [SELECT] this is a client
+     * affordance rather than a Telegram capability: it is always offered,
+     * works on any message, and never leaves the device.
+     */
+    BOOKMARK,
     DELETE_FOR_ME,
     DELETE_FOR_EVERYONE
 }
@@ -107,6 +114,7 @@ object MessageActionPolicy {
         if (capabilities.canBeSaved && isSaveableMedia(message)) add(MessageAction.SAVE)
         if (capabilities.canGetLink) add(MessageAction.COPY_LINK)
         if (capabilities.canGetReadDate || capabilities.canGetViewers) add(MessageAction.INFO)
+        add(MessageAction.BOOKMARK)
         if (allowSelect) add(MessageAction.SELECT)
         if (capabilities.canBeDeletedOnlyForSelf) add(MessageAction.DELETE_FOR_ME)
         if (capabilities.canBeDeletedForAllUsers) add(MessageAction.DELETE_FOR_EVERYONE)
