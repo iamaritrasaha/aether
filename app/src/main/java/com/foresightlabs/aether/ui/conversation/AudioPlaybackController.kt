@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +45,15 @@ class AudioPlaybackController(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var player: ExoPlayer? = null
     private var ticker: Job? = null
+
+    /**
+     * The key of the active note, held separately from the published state:
+     * the state must be derivable from the player alone (publish() runs when
+     * the state is still null, i.e. exactly when the FIRST state is being
+     * established -- deriving the key from the state there would deadlock it
+     * at null forever and the UI would never leave the rest state).
+     */
+    private var activeKey: String? = null
 
     private val _playback = MutableStateFlow<Playback?>(null)
 
@@ -110,6 +120,7 @@ class AudioPlaybackController(private val context: Context) {
 
     private fun start(key: String, path: String) {
         releasePlayer()
+        activeKey = key
         val p = ExoPlayer.Builder(context).build().apply {
             setAudioAttributes(
                 androidx.media3.common.AudioAttributes.Builder()
@@ -128,6 +139,19 @@ class AudioPlaybackController(private val context: Context) {
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    publishNow()
+                }
+
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    // A file that exists but cannot be decoded (truncated
+                    // download, unsupported codec) must not leave the bubble
+                    // in limbo: return to the rest state so the control is
+                    // tappable again instead of frozen mid-"playing".
+                    if (com.foresightlabs.aether.BuildConfig.DEBUG) {
+                        android.util.Log.w("AetherTd", "AUDIO_PLAYBACK_ERROR code=${error.errorCode}")
+                    }
+                    player?.seekTo(0)
+                    player?.pause()
                     publishNow()
                 }
             })
@@ -155,8 +179,7 @@ class AudioPlaybackController(private val context: Context) {
 
     private fun publish(ended: Boolean) {
         val p = player ?: return
-        val current = _playback.value
-        val key = current?.key ?: return
+        val key = activeKey ?: return
         if (ended) {
             p.seekTo(0)
             p.pause()
@@ -174,13 +197,26 @@ class AudioPlaybackController(private val context: Context) {
         ticker?.cancel()
         player?.release()
         player = null
+        activeKey = null
         _playback.value = null
     }
 
     /** Releases the player; the controller instance is dead after this. */
     fun release() {
         releasePlayer()
+        scope.cancel()
         _pendingDownloadKey.value = null
+    }
+
+    /**
+     * A pending autoplay whose download FAILED must not stay armed: without
+     * this, the key would fire the moment that note ever gained a local file
+     * (or simply surprise the user by playing on some later re-map).
+     */
+    fun onDownloadFailed(key: String) {
+        if (_pendingDownloadKey.value == key) {
+            _pendingDownloadKey.value = null
+        }
     }
 
     private companion object {

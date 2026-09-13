@@ -506,8 +506,12 @@ fun ConversationScreen(
     LaunchedEffect(audioPendingPathArrival, messages) {
         val key = audioPendingPathArrival ?: return@LaunchedEffect
         val note = messages.firstNotNullOfOrNull { it.mediaItems.firstOrNull { m -> key == "voice:${m.id}" || key == "audio:${m.id}" } }
-        if (note != null && note.hasLocalFile) {
-            audioPlayback.onPathArrived(key, note.url)
+        when {
+            note == null -> Unit
+            note.hasLocalFile -> audioPlayback.onPathArrived(key, note.url)
+            // The download we armed autoplay for has failed: disarm, so a
+            // later unrelated re-map can never start this note playing.
+            note.downloadFailed -> audioPlayback.onDownloadFailed(key)
         }
     }
 
