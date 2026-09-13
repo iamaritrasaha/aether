@@ -112,4 +112,13 @@ else
 fi
 
 echo ""
+echo "-- Video evidence --"
+grep -oE "camera_selected front=[a-z]+ id=[^ ]*" "$LOG" | uniq -c | head -4 || true
+grep -oE "video=[a-z]+ outgoing=[a-z]+" "$LOG" | head -2 || true
+grep -cE "stage=RENDERER_ATTACHED" "$LOG" | sed 's/^/renderer attached events: /' || true
+grep -oE "reason=malformed_frames=[0-9]+|reason=frame_callback_error|reason=camera_init_failed|reason=no_camera_device" "$LOG" | sort -u | head -4 || true
+grep -oE "remote_source ssrc=[0-9]+ state=[A-Z]+ device=[A-Z]+" "$LOG" | uniq -c | head -6 || true
+echo "frame-origin note: renderer attach lines carry origin=LOCAL|REMOTE"
+
+echo ""
 echo "=== end summary ==="

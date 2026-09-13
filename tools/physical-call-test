@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# One-command physical call-validation harness.
+#
+#   tools/physical-call-test [SERIAL] [CAPTURE_SECONDS]
+#
+# 1. picks the adb device (explicit serial, or auto: prefers SM-M145F then SM-P610)
+# 2. verifies Aether is installed and prints version/build time
+# 3. clears the device log buffer (the only log "cleanup" this does)
+# 4. starts a DETACHED, tag-filtered, sanitized capture
+#    (harness/background-task kills are why this must be detached; redirected
+#    logcat is block-buffered, so the log may lag -- `adb logcat -d` is truth)
+# 5. prints READY FOR CALL
+# 6. on exit (Ctrl-C or after CAPTURE_SECONDS): summarizes the capture via
+#    tools/call-diagnostics-summary (timeline, counters, RTP, routing, A-F
+#    verdict, video evidence) into gitignored diagnostics/.
+#
+# No secret content is captured or printed (see CallDiagnostics: the API
+# cannot carry keys/payloads; the tag filter excludes everything else).
+
+set -uo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PACKAGE="com.foresightlabs.aether"
+TAGS="AetherCall AetherCallNative AndroidRuntime CRASH libc DEBUG AudioTrack AudioRecord AAudio ActivityTaskManager:I"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+OUT_DIR="$REPO_DIR/diagnostics"
+mkdir -p "$OUT_DIR"
+OUT_FILE="$OUT_DIR/physical-call-$STAMP.log"
+
+# --- 1. device -------------------------------------------------------------
+# A bare numeric first argument means CAPTURE_SECONDS, not a serial.
+SERIAL="${1:-}"
+DURATION_ARG=""
+if [[ "$SERIAL" =~ ^[0-9]+$ ]]; then
+    DURATION_ARG="$SERIAL"
+    SERIAL=""
+fi
+list_serials() { adb devices | tail -n +2 | grep -E "device$" | sed 's/[[:space:]]*device$//'; }
+if [ -z "$SERIAL" ]; then
+    # Exact known serials first (mDNS serials contain spaces — never split on whitespace).
+    for want in "adb-R9ZX703KTJA-KtfROG._adb-tls-connect._tcp" "adb-R52R409P2AZ-frJ1mo._adb-tls-connect._tcp"; do
+        list_serials | grep -Fx "$want" >/dev/null && SERIAL="$want" && break
+    done
+fi
+if [ -z "$SERIAL" ]; then
+    # Any single attached device is fine when unambiguous.
+    count=$(list_serials | wc -l)
+    if [ "$count" -eq 1 ]; then SERIAL=$(list_serials | head -1); fi
+fi
+if [ -z "$SERIAL" ] || ! adb -s "$SERIAL" shell true >/dev/null 2>&1; then
+    echo "No usable adb device (attached: $(list_serials | tr '\n' ' '))." >&2
+    exit 1
+fi
+MODEL=$(adb -s "$SERIAL" shell getprop ro.product.model | tr -d '\r')
+ABI=$(adb -s "$SERIAL" shell getprop ro.product.cpu.abi | tr -d '\r')
+echo "Device: $SERIAL ($MODEL, $ABI)"
+
+# --- 2. build --------------------------------------------------------------
+if ! adb -s "$SERIAL" shell pm path "$PACKAGE" >/dev/null 2>&1; then
+    echo "Aether is NOT installed on $SERIAL — run: ./gradlew :app:installDebug" >&2
+    exit 1
+fi
+VERSION=$(adb -s "$SERIAL" shell dumpsys package "$PACKAGE" | grep -m1 versionName | tr -d '\r' | awk '{print $1}')
+UPDATED=$(adb -s "$SERIAL" shell dumpsys package "$PACKAGE" | grep -m1 lastUpdateTime | tr -d '\r' | awk '{print $2}')
+echo "Installed: $VERSION (updated $UPDATED)"
+echo "  (stale build? re-run ./gradlew :app:installDebug — a data-preserving upgrade)"
+
+# --- 3. clear --------------------------------------------------------------
+adb -s "$SERIAL" logcat -c
+
+# --- 4. detached capture ---------------------------------------------------
+setsid nohup stdbuf -oL adb -s "$SERIAL" logcat -v time -s $TAGS > "$OUT_FILE" 2>&1 < /dev/null &
+CAP_PID=$!
+sleep 2
+# Verify the capture end-to-end (block buffering means an empty file is NOT
+# proof of a dead capture; the probe line must appear in the file).
+adb -s "$SERIAL" shell log -t AetherCall "capture_verification_probe gen=0 stage=PROBE"
+sleep 1
+if ! grep -q "capture_verification_probe" "$OUT_FILE"; then
+    echo "WARNING: probe line not yet visible (buffering) — capture may still be live; check $OUT_FILE" >&2
+fi
+
+DURATION="${2:-$DURATION_ARG}"
+echo ""
+echo "Capture: $OUT_FILE (pid $CAP_PID)"
+echo "READY FOR CALL"
+if [ "$DURATION" -gt 0 ] 2>/dev/null; then
+    sleep "$DURATION"
+    kill "$CAP_PID" 2>/dev/null
+else
+    echo "Place the call now. Ctrl-C to stop and summarize."
+    trap 'kill "$CAP_PID" 2>/dev/null' INT TERM
+    wait "$CAP_PID" 2>/dev/null || true
+fi
+
+# --- 6. summarize ----------------------------------------------------------
+echo ""
+echo "================ PHYSICAL CALL REPORT ================"
+echo "Device: $MODEL ($SERIAL) | Aether $VERSION | log: $OUT_FILE"
+grep -c "" "$OUT_FILE" | sed 's/^/captured lines: /'
+echo ""
+"$REPO_DIR/tools/call-diagnostics-summary" "$OUT_FILE"

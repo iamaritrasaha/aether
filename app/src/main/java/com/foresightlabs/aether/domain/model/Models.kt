@@ -449,7 +449,9 @@ data class ActiveCall(
     /** Whether the user wants the local camera on for this call. */
     val cameraIntentOn: Boolean = false,
     /** Facing of the camera the engine actually selected. */
-    val isFrontCamera: Boolean = true
+    val isFrontCamera: Boolean = true,
+    /** Wall-clock (epoch ms) at which the media transport itself reported CONNECTED; null before that. */
+    val connectedAtMs: Long? = null
 )
 
 enum class CallOutcome {

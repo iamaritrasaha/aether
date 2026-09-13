@@ -96,7 +96,24 @@ object CallDiagnostics {
         val type = error?.javaClass?.name ?: "unknown"
         val message = error?.message?.let { sanitise(it) }.orEmpty()
         sink(format(generation, CallStage.FAILED, "at=${stage.name} type=$type msg=$message"))
+        lastFailure = LastFailure(generation = generation, stage = stage.name, type = type, atMs = System.currentTimeMillis())
     }
+
+    /**
+     * The most recent failure's identity, for the DEBUG call inspector.
+     * Deliberately type+stage+generation only -- no message (a message can
+     * carry paths or half-sanitised context the inspector has no need for).
+     */
+    data class LastFailure(
+        val generation: Long,
+        val stage: String,
+        val type: String,
+        val atMs: Long
+    )
+
+    @Volatile
+    var lastFailure: LastFailure? = null
+        private set
 
     /**
      * Strips anything that could carry a secret out of a detail string.

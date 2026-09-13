@@ -1627,7 +1627,15 @@ open class TelegramClient(private val application: Application) {
         // drop even after media was up once).
         _activeCallState.value = current.copy(
             mediaState = mediaState,
-            mediaEverConnected = current.mediaEverConnected || mediaState == MediaConnectionState.CONNECTED
+            mediaEverConnected = current.mediaEverConnected || mediaState == MediaConnectionState.CONNECTED,
+            // The CONNECTED milestone's wall-clock instant: the debug
+            // inspector shows connect time / time-since-connect, and a
+            // reconnect must NOT overwrite it (the first connection is the
+            // milestone).
+            connectedAtMs = when {
+                mediaState == MediaConnectionState.CONNECTED -> current.connectedAtMs ?: System.currentTimeMillis()
+                else -> current.connectedAtMs
+            }
         )
     }
 
@@ -1730,7 +1738,8 @@ open class TelegramClient(private val application: Application) {
             // A video call begins with the camera intended on; the media
             // layer narrows this to false when camera permission is missing.
             cameraIntentOn = sameCall?.cameraIntentOn ?: call.isVideo,
-            isFrontCamera = sameCall?.isFrontCamera ?: true
+            isFrontCamera = sameCall?.isFrontCamera ?: true,
+            connectedAtMs = sameCall?.connectedAtMs
         )
         _activeCallState.value = updated
 

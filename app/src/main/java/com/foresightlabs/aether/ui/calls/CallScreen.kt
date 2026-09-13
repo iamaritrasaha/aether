@@ -413,6 +413,7 @@ private fun CallDebugInspector(
         }
     }
     val health = remember(tick, activeCall.callId) { healthProvider() }
+    val lastFailure = remember(tick) { com.foresightlabs.aether.calls.media.CallDiagnostics.lastFailure }
     val colors = LocalAetherColors.current
 
     Column(
@@ -426,12 +427,19 @@ private fun CallDebugInspector(
         InspectorLine("sig", activeCall.state.name)
         InspectorLine("media", activeCall.mediaState.name)
         InspectorLine("gen", health?.generation?.toString() ?: "-")
+        InspectorLine(
+            "conn",
+            activeCall.connectedAtMs?.let { "CONNECTED ${rel(it)}" } ?: "not yet"
+        )
         InspectorLine("cap", "${health?.captureSeconds ?: 0}s @ ${health?.lastCaptureActivityMs?.let { rel(it) } ?: "never"}")
         InspectorLine("pbk", "${health?.playbackSeconds ?: 0}s @ ${health?.lastPlaybackActivityMs?.let { rel(it) } ?: "never"}")
         InspectorLine("src", "mic=${health?.remoteMicActive == true} vid=${health?.remoteVideoSourcePresent == true}")
         InspectorLine("flags", "mute=${health?.muted} vPause=${health?.videoPaused} vStop=${health?.videoStopped}")
         InspectorLine("cam", "intent=${activeCall.cameraIntentOn} front=${health?.localCameraIsFront ?: activeCall.isFrontCamera}")
         InspectorLine("route", activeCall.audioRoute.name)
+        lastFailure?.let {
+            InspectorLine("err", "gen=${it.generation} ${it.stage.substringAfterLast('.')} ${it.type.substringAfterLast('.')}")
+        }
         Text(
             text = "DEBUG INSPECTOR",
             fontFamily = ManropeFontFamily,
