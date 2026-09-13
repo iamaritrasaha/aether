@@ -1,21 +1,29 @@
 # Calling — manual validation checklist
 
 This implementation pass is structurally complete, compiles, packages the real
-native transport, and passes its automated tests. Some of it **has** now been
-physically tested (Samsung SM-M145F, Android 15, against a second, separate
-Telegram test account, at commit `a7476ab` — see
-`docs/architecture/capability-status.md`'s Calling section for exactly which
-rows): signalling delivery end to end, and every previously-crashing boundary
-(JNI symbol retention, WebRTC Android-context init, real microphone metadata,
-the native-callback classloader crash) are confirmed fixed with zero crashes
-across four real calls. **None of that testing reached `CONNECTED` or
-two-way audio** — native media consistently times out (`TIMEOUT`) around 10
-seconds into `CONNECTING`, an open issue tracked in
-`calling-native-stack.md`. Every checkbox below therefore remains
-unchecked and still needs a real run once that boundary is resolved. See
-`docs/architecture/calling-native-stack.md` for what is actually running
-under the hood, including the one assumption (video pixel format) that could
-not be confirmed without a device.
+native transport, and passes its automated tests. Physical history, precisely:
+
+- `a7476ab` (SM-M145F, Android 15, second Telegram test account): signalling
+  end to end with zero loss across 3 calls; every previously-crashing boundary
+  (JNI symbol retention, WebRTC Android-context init, real microphone metadata,
+  native-callback classloader) confirmed fixed with zero crashes.
+- `54272c8`-era (SM-M145F): the reflector peer-tag fix confirmed native
+  `CONNECTED` (not just `CONNECTING`/`TIMEOUT`) on hardware.
+- Current head: `:call-media:connectedDebugAndroidTest` 9/9 PASS (voice native
+  suite + video suite: camera metadata contract, facing resolution, CAPTURE
+  mic+camera + PLAYBACK speaker+EXTERNAL video config, clean teardown) and
+  `:app:connectedDebugAndroidTest` 3/3 PASS — on BOTH Samsung SM-P610
+  (Android 13) and SM-M145F (Android 15), plus the x86_64 AVD.
+
+**Two-way physical audio has still never been verified.** Every checkbox below
+remains unchecked until a real two-account run. During that run, the DEBUG-only
+call inspector on the call screen shows live media evidence (capture/playback
+counters, remote source presence, route, camera facing), and
+`tools/call-diagnostics-summary` prints a per-generation connected duration and
+an A–F flow-class verdict from the captured log. See
+`docs/architecture/calling-native-stack.md` for what is actually running under
+the hood, including the one assumption (video pixel format) that is
+source-proven but not yet device-proven.
 
 Do not treat a green run of `testDebugUnitTest` / `assembleDebug` /
 `lintDebug` as evidence that any of the rows below are true. They are not
@@ -78,9 +86,11 @@ device run, of the kind described above, is.
 - [ ] Camera enable/disable during an active video call: disabling shows no
   video (not a frozen frame) on the other side; re-enabling resumes it
 - [ ] Switch camera (front/back) actually swaps which camera is sending —
-  note in `calling-native-stack.md`: front/back selection is a best-effort
-  guess by device-list order, not a verified mapping, so this is exactly the
-  kind of thing that could be swapped on some devices
+  since `8aeb0db` facing is resolved from ntgcalls' authoritative
+  `{id, is_front}` enumerator metadata (the same enumerator that opens the
+  device), with `LENS_FACING` as fallback; `VideoMediaNativeSmokeTest`
+  proves front+back resolve on-device, but a real switch mid-call is still
+  unverified
 - [ ] Ending the call from either side works
 - [ ] Backgrounding the Aether app during an active call keeps audio running
   (voice) and the call does not silently die
@@ -119,9 +129,12 @@ signalling payload contents, or Telegram credentials.
 - On-device native smoke suite (no call needed):
   `adb shell pm grant com.foresightlabs.aether.calls.media android.permission.RECORD_AUDIO`
   is unnecessary — `:call-media` installs its test APK with `-g` (auto-grant);
-  run `./gradlew :call-media:connectedDebugAndroidTest` and expect 6/6 PASS
+  run `./gradlew :call-media:connectedDebugAndroidTest` and expect 9/9 PASS
   (load/ping, WebRTC context, protocol, device enumeration, real
-  session+sources+teardown, callback registration).
+  session+sources+teardown, callback registration — plus the video suite:
+  camera metadata contract, front/back resolution, native session accepting
+  CAPTURE with camera + PLAYBACK with the EXTERNAL video slot, `videoStopped`
+  false, clean teardown).
 
 ## Physical run procedure (current tooling)
 

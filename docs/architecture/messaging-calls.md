@@ -228,13 +228,40 @@ than reviving a call that should stay dead.
 
 ### Video
 
-A call's `isVideo` flag flows through the same signalling and media-engine wiring as
-voice, with no separate call type: `CreateCall`/`AcceptCall` carry it to TDLib, the
-media engine configures a camera source only when it is set, and the call protocol
-Aether asks TDLib to negotiate is queried from what the linked media engine actually
-supports (`NTgCalls.getProtocol()`) rather than a hand-guessed layer/version list.
-Decoded video frames (local preview and remote picture) arrive as raw pixel buffers
-rather than through a renderer Aether attaches to a track -- see
+A call's `isVideo` flag is the only video signal the pinned TDLib API exposes, and
+every video decision derives from it:
+
+- **Outgoing intent** — `CreateCall(userId, protocol, isVideo)`: the only place
+  video intent exists at placement.
+- **Acceptance** — `AcceptCall(callId, protocol)` carries **no** video field.
+  Whether the answered call is a video call is read from the incoming `Call.isVideo`
+  itself; voice and video calls are accepted identically.
+- **Mid-call camera on/off** — TDLib has no API for it and no remote-video-state
+  update; camera changes travel only through the engines' own opaque signalling
+  channel (`SendCallSignalingData` / `UpdateNewCallSignalingData`, handled natively
+  by ntgcalls). Aether therefore offers camera controls only on calls whose
+  `isVideo` is set, and does not claim voice-to-video upgrade -- the capability was
+  never negotiated at call setup.
+- **Remote video evidence** — the engine's remote-source callback (CAMERA device
+  Active/Paused) surfaces in `CallMediaHealth.remoteVideoSourcePresent`; a frame
+  absence is never treated as proof video exists or doesn't.
+
+Camera selection is not guessed from list order: ntgcalls enumerates cameras through
+WebRTC's `CameraEnumerator` and reports each as JSON metadata
+`{"id": <enumerator device name>, "is_front": <bool>}`, where `is_front` is computed
+by the same enumerator that later opens the device (`createCapturer(id)`). Aether
+selects on that claim, with Android's `CameraCharacteristics.LENS_FACING` as the
+cross-check/fallback for metadata without a facing (see `CameraDeviceSelection`).
+Passing the metadata string itself to `CameraManager.getCameraCharacteristics` -- an
+earlier implementation -- always threw and silently degraded every video call to
+audio.
+
+The media engine configures a camera source only when `isVideo` is set *and* the
+camera grant exists (`videoCaptureEnabled`), and the call protocol Aether asks TDLib
+to negotiate is queried from what the linked media engine actually supports
+(`NTgCalls.getProtocol()`) rather than a hand-guessed layer/version list. Decoded
+video frames (local preview and remote picture) arrive as raw pixel buffers rather
+than through a renderer Aether attaches to a track -- see
 `docs/architecture/calling-native-stack.md` for the one part of this pipeline (pixel
 format) that is a documented assumption rather than a device-verified fact.
 
@@ -258,8 +285,10 @@ A draw-only transform must never be used on an interactive moving container.
 
 Runtime permissions are requested contextually, at the moment the feature is used,
 never at startup. Photos use the Android photo picker and documents use SAF, so no
-broad storage permission is held. Calling adds `RECORD_AUDIO` only; Telegram calling
-is internet VoIP and Aether holds none of `CALL_PHONE`, `READ_PHONE_STATE`,
+broad storage permission is held. Calling adds `RECORD_AUDIO` for every call and
+`CAMERA` only when a video call's camera is about to be used (answered as video,
+or the camera toggled on mid-call) — never for a voice call. Telegram calling is
+internet VoIP and Aether holds none of `CALL_PHONE`, `READ_PHONE_STATE`,
 `PROCESS_OUTGOING_CALLS` or `SYSTEM_ALERT_WINDOW`.
 
 ## Formatted text
