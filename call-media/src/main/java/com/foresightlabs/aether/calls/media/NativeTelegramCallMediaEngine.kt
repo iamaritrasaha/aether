@@ -35,6 +35,13 @@ class NativeTelegramCallMediaEngine {
     val isMediaTransportAvailable: Boolean
         get() = Shared.isTransportReady()
 
+    /**
+     * Latest evidence-based media health for the active call, if sampled --
+     * the debug call inspector's data source. Metadata only: counters, flags
+     * and facing, never payload, addresses or keys.
+     */
+    fun mediaHealthSnapshot(): CallMediaHealth? = Shared.mediaHealth
+
     fun init(callback: NativeCallEngineCallback) {
         Shared.callback = callback
         Shared.ensureListenersRegistered()

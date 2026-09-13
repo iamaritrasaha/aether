@@ -35,6 +35,14 @@ interface TelegramCallMediaEngine {
     /** Signalling bytes this engine needs delivered through TDLib's `SendCallSignalingData`. */
     val outgoingSignalingData: SharedFlow<ByteArray>
 
+    /**
+     * Latest evidence-based media health snapshot (counters/flags only), for
+     * the debug call inspector. Null until the first usable sample; default
+     * null for engines that do not track health.
+     */
+    val mediaHealth: CallMediaHealth?
+        get() = null
+
     suspend fun start(config: CallMediaConfig)
     fun setMicrophoneMuted(muted: Boolean)
     fun setAudioOutput(route: AudioRoute)
@@ -87,6 +95,10 @@ class DefaultTelegramCallMediaEngine(
 
     override val isMediaTransportAvailable: Boolean
         get() = nativeEngine.isMediaTransportAvailable
+
+    /** Latest evidence-based media health snapshot, for the debug inspector. */
+    override val mediaHealth: CallMediaHealth?
+        get() = nativeEngine.mediaHealthSnapshot()
 
     private var focusRequest: AudioFocusRequest? = null
 

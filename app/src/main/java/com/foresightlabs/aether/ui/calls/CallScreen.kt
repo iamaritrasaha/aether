@@ -90,7 +90,8 @@ fun AetherCallScreen(
     localVideoFrame: DecodedVideoFrame? = null,
     isCameraEnabled: Boolean = false,
     onToggleCamera: () -> Unit = {},
-    onSwitchCamera: () -> Unit = {}
+    onSwitchCamera: () -> Unit = {},
+    mediaHealthProvider: () -> com.foresightlabs.aether.calls.media.CallMediaHealth? = { null }
 ) {
     if (activeCall == null) return
 
@@ -159,6 +160,21 @@ fun AetherCallScreen(
             expression = AtmosphereExpression.CONVERSATION,
             enableAmbientMotion = true
         )
+
+        // DEBUG-build call inspector: media-pipeline evidence (counters, flags,
+        // facing, route) in one place, to make the later physical validation a
+        // read-off exercise. Metadata only -- no payload, addresses or keys --
+        // and never compiled into release UI.
+        if (com.foresightlabs.aether.BuildConfig.DEBUG) {
+            CallDebugInspector(
+                activeCall = activeCall,
+                healthProvider = mediaHealthProvider,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 96.dp)
+            )
+        }
 
         if (showsRemoteVideo) {
             DecodedVideoFrameImage(
@@ -373,6 +389,72 @@ fun OngoingCallBar(
             )
         }
     }
+}
+
+/**
+ * DEBUG-BUILD-ONLY call inspector: polls the media engine's evidence snapshot
+ * ([CallMediaHealth]) plus the call's own state once a second and renders it
+ * as a compact translucent panel. Its entire audience is the physical
+ * validation session -- every line answers a question the diagnostics log
+ * would otherwise have to be mined for. Exposes metadata/state only: no
+ * signalling bytes, no addresses, no keys, no frame data.
+ */
+@Composable
+private fun CallDebugInspector(
+    activeCall: ActiveCall,
+    healthProvider: () -> com.foresightlabs.aether.calls.media.CallMediaHealth?,
+    modifier: Modifier = Modifier
+) {
+    var tick by remember { mutableStateOf(0) }
+    LaunchedEffect(activeCall.callId) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            tick++
+        }
+    }
+    val health = remember(tick, activeCall.callId) { healthProvider() }
+    val colors = LocalAetherColors.current
+
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xB3141419))
+            .border(0.5.dp, AetherCallUi.ControlBorder, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("call_debug_inspector")
+    ) {
+        InspectorLine("sig", activeCall.state.name)
+        InspectorLine("media", activeCall.mediaState.name)
+        InspectorLine("gen", health?.generation?.toString() ?: "-")
+        InspectorLine("cap", "${health?.captureSeconds ?: 0}s @ ${health?.lastCaptureActivityMs?.let { rel(it) } ?: "never"}")
+        InspectorLine("pbk", "${health?.playbackSeconds ?: 0}s @ ${health?.lastPlaybackActivityMs?.let { rel(it) } ?: "never"}")
+        InspectorLine("src", "mic=${health?.remoteMicActive == true} vid=${health?.remoteVideoSourcePresent == true}")
+        InspectorLine("flags", "mute=${health?.muted} vPause=${health?.videoPaused} vStop=${health?.videoStopped}")
+        InspectorLine("cam", "intent=${activeCall.cameraIntentOn} front=${health?.localCameraIsFront ?: activeCall.isFrontCamera}")
+        InspectorLine("route", activeCall.audioRoute.name)
+        Text(
+            text = "DEBUG INSPECTOR",
+            fontFamily = ManropeFontFamily,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Medium,
+            color = colors.textTertiary,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+private fun rel(epochMs: Long): String = "${((System.currentTimeMillis() - epochMs) / 1000).coerceAtLeast(0)}s ago"
+
+@Composable
+private fun InspectorLine(label: String, value: String) {
+    val colors = LocalAetherColors.current
+    Text(
+        text = "$label: $value",
+        fontFamily = ManropeFontFamily,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Normal,
+        color = colors.textSecondary
+    )
 }
 
 /**

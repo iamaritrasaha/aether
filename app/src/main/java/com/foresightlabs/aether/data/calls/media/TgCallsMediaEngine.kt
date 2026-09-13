@@ -38,6 +38,9 @@ class TgCallsMediaEngine(
     override val isCameraActive: StateFlow<Boolean> = delegate.isCameraActive
     override val isFrontCamera: StateFlow<Boolean> = delegate.isFrontCamera
 
+    override val mediaHealth: com.foresightlabs.aether.calls.media.CallMediaHealth?
+        get() = delegate.mediaHealth
+
     override val videoFrames: SharedFlow<DecodedVideoFrame> = delegate.videoFrames
     override val outgoingSignalingData: SharedFlow<ByteArray> = delegate.outgoingSignalingData
 

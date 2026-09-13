@@ -881,7 +881,8 @@ fun AetherApp(
                     // state, which used to drift from what the engine actually did.
                     isCameraEnabled = activeCall!!.cameraIntentOn,
                     onToggleCamera = { callsRepository?.setCameraEnabled(!activeCall!!.cameraIntentOn) },
-                    onSwitchCamera = { callsRepository?.switchCamera() }
+                    onSwitchCamera = { callsRepository?.switchCamera() },
+                    mediaHealthProvider = { callsRepository?.mediaHealth }
                 )
             }
         }

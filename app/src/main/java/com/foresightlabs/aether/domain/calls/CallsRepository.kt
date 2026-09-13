@@ -26,6 +26,15 @@ interface CallsRepository {
     /** Local/remote decoded video frames for the active call's renderer to draw. */
     val videoFrames: SharedFlow<DecodedVideoFrame>
 
+    /**
+     * Latest evidence-based media health for the active call (counters/flags
+     * only, never payload), for the debug call inspector. Null until the
+     * first usable sample; default null for repositories without a tracking
+     * engine.
+     */
+    val mediaHealth: com.foresightlabs.aether.calls.media.CallMediaHealth?
+        get() = null
+
     suspend fun initiateCall(userId: Long, isVideo: Boolean = false): Result<Int>
     suspend fun acceptCall(callId: Int): Result<Unit>
     suspend fun discardCall(callId: Int): Result<Unit>

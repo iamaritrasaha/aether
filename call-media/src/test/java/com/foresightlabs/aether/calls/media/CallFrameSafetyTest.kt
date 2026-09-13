@@ -123,4 +123,73 @@ class CallFrameSafetyTest {
             assertEquals(image.width * image.height, image.pixels.size)
         }
     }
+
+    @Test
+    fun anOversizedBufferIsAcceptedWithoutOverreading() {
+        // A buffer longer than the declared geometry is legal (producers may
+        // pad); conversion must consume only the required prefix.
+        val w = 34
+        val h = 18
+        val data = syntheticFrame(w, h) + ByteArray(4096) { 0x55 }
+        val image = I420Converter.convert(data, w, h)!!
+        assertEquals(w, image.width)
+        assertEquals(h, image.height)
+    }
+
+    @Test
+    fun aSyntheticGradientConvertsToExpectedPixels() {
+        // Deterministic content check, not just geometry: mid-grey Y with
+        // neutral chroma must land on neutral mid-grey RGB under BT.601.
+        val w = 8
+        val h = 8
+        val data = ByteArray(w * h * 3 / 2)
+        java.util.Arrays.fill(data, 0, w * h, 128.toByte())          // Y mid
+        java.util.Arrays.fill(data, w * h, data.size, 128.toByte())  // U=V=128 -> neutral
+        val image = I420Converter.convert(data, w, h)!!
+        // (128-16)*298 >> 8 + 128 = 135 coerced; chroma terms vanish at u=v=128.
+        val px = image.pixels[0]
+        val r = (px shr 16) and 0xFF
+        val g = (px shr 8) and 0xFF
+        val b = px and 0xFF
+        assertEquals(r, g)
+        assertEquals(g, b)
+        assertTrue("neutral grey must be plausible: $r", r in 100..160)
+    }
+
+    @Test
+    fun conversionCostOfARealisticFrameIsMeasuredAndBounded() {
+        // 640x480 is the conversion ceiling for a remote frame
+        // (maxDimension=640). Sixty frames ~ two seconds of 30fps video.
+        val w = 640
+        val h = 480
+        val data = syntheticFrame(w, h)
+        val start = System.nanoTime()
+        val runs = 60
+        repeat(runs) { I420Converter.convert(data, w, h) }
+        val perFrameMillis = (System.nanoTime() - start) / 1_000_000.0 / runs
+        println("I420->ARGB 640x480 average conversion: %.2f ms/frame".format(perFrameMillis))
+        // Generous: the assertion catches catastrophic regressions (orders of
+        // magnitude), not real-time suitability. Real-time suitability comes
+        // from the engine's newest-frame-only, throttled callback path.
+        assertTrue(
+            "conversion regressed catastrophically: %.2f ms/frame".format(perFrameMillis),
+            perFrameMillis < 100.0
+        )
+    }
+
+    /** A deterministic, well-formed I420 buffer for [w] x [h]: greyscale ramp. */
+    private fun syntheticFrame(w: Int, h: Int): ByteArray {
+        val data = ByteArray(I420Converter.requiredSize(w, h).toInt())
+        var y = 0
+        while (y < h) {
+            var x = 0
+            while (x < w) {
+                data[y * w + x] = ((x + y) * 7 % 256).toByte()
+                x++
+            }
+            y++
+        }
+        java.util.Arrays.fill(data, w * h, data.size, 128.toByte())
+        return data
+    }
 }

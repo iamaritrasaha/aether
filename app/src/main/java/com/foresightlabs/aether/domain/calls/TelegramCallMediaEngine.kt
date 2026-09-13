@@ -60,6 +60,14 @@ interface TelegramCallMediaEngine {
     /** Facing of the camera the engine actually selected (front by default). */
     val isFrontCamera: StateFlow<Boolean>
 
+    /**
+     * Latest evidence-based media health snapshot (counters/flags only), for
+     * the debug call inspector. Null until the first usable sample; default
+     * null for engines that do not track health.
+     */
+    val mediaHealth: com.foresightlabs.aether.calls.media.CallMediaHealth?
+        get() = null
+
     /** Local/remote decoded video frames, for a video call's renderer to draw. */
     val videoFrames: SharedFlow<DecodedVideoFrame>
 

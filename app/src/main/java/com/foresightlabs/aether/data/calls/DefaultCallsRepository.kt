@@ -66,6 +66,9 @@ class DefaultCallsRepository(
     override val activeCallState: StateFlow<ActiveCall?> = telegram.activeCallState
     override val videoFrames: SharedFlow<DecodedVideoFrame> = mediaEngine.videoFrames
 
+    override val mediaHealth: com.foresightlabs.aether.calls.media.CallMediaHealth?
+        get() = mediaEngine.mediaHealth
+
     private val _historyState = MutableStateFlow<CallHistoryUiState>(CallHistoryUiState.Loading)
     override val historyState: StateFlow<CallHistoryUiState> = _historyState.asStateFlow()
 
