@@ -54,6 +54,13 @@ class CallService : Service() {
                 val liveCallId = repo.activeCallState.value?.callId
                 val incoming = IncomingCallNotifier(this)
                 incoming.cancel()
+                val actionBackend = runCatching {
+                    com.foresightlabs.aether.domain.calls.CallBackend.valueOf(
+                        intent?.getStringExtra(EXTRA_BACKEND)
+                            ?: com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA.name
+                    )
+                }.getOrDefault(com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA)
+
                 if (actionCallId == liveCallId && liveCallId != null) {
                     if (action == ACTION_ACCEPT_CALL && ContextCompat.checkSelfPermission(this, CallPermissions.MICROPHONE) !=
                     PackageManager.PERMISSION_GRANTED
@@ -72,10 +79,22 @@ class CallService : Service() {
                         openMainActivity()
                     } else {
                         CoroutineScope(Dispatchers.Default).launch {
-                            if (action == ACTION_ACCEPT_CALL) {
-                                repo.acceptCall(liveCallId)
-                            } else {
-                                repo.discardCall(liveCallId)
+                            when (actionBackend) {
+                                com.foresightlabs.aether.domain.calls.CallBackend.AETHER -> {
+                                    val aether = (application as? AetherApplication)?.aetherCallsRepository
+                                    if (action == ACTION_ACCEPT_CALL) {
+                                        aether?.acceptCall()
+                                    } else {
+                                        aether?.declineCall()
+                                    }
+                                }
+                                com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA -> {
+                                    if (action == ACTION_ACCEPT_CALL) {
+                                        repo.acceptCall(liveCallId)
+                                    } else {
+                                        repo.discardCall(liveCallId)
+                                    }
+                                }
                             }
                         }
                     }
@@ -202,6 +221,7 @@ class CallService : Service() {
         const val EXTRA_IS_CONNECTED = "extra_is_connected"
         const val EXTRA_IS_VIDEO = "extra_is_video"
         const val EXTRA_GENERATION = "extra_generation"
+        const val EXTRA_BACKEND = "extra_backend"
 
         /**
          * The foreground service type this call may actually claim, given what

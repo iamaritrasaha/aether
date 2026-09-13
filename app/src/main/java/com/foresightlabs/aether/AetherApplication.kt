@@ -177,12 +177,6 @@ class AetherApplication : Application(), ImageLoaderFactory {
         })
         telegram.start()
 
-        // Aether Calls: poll the dev call service for incoming invites while
-        // the app runs (dev prototype has no push).
-        applicationScope.launch {
-            aetherCallsRepository.startIncomingPolling()
-        }
-
         // Cross-backend preemption: when the OTHER backend's newer call takes
         // the single call slot, the displaced backend tears its own call down.
         // Each side only ever reacts to its own name here -- backend isolation.

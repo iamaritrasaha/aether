@@ -37,7 +37,14 @@ class IncomingCallNotifier(private val context: Context) {
         getUser = { null }
     )
 
-    fun showIncoming(callId: Int, callerName: String, isVideo: Boolean, generation: Long) {
+    fun showIncoming(
+        callId: Int,
+        callerName: String,
+        isVideo: Boolean,
+        generation: Long,
+        backend: com.foresightlabs.aether.domain.calls.CallBackend =
+            com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA
+    ) {
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -52,6 +59,7 @@ class IncomingCallNotifier(private val context: Context) {
             action = CallService.ACTION_ACCEPT_CALL
             putExtra(CallService.EXTRA_CALL_ID, callId)
             putExtra(CallService.EXTRA_GENERATION, generation)
+            putExtra(CallService.EXTRA_BACKEND, backend.name)
         }
         val pendingAccept = PendingIntent.getService(
             context,
@@ -64,6 +72,7 @@ class IncomingCallNotifier(private val context: Context) {
             action = CallService.ACTION_DECLINE_CALL
             putExtra(CallService.EXTRA_CALL_ID, callId)
             putExtra(CallService.EXTRA_GENERATION, generation)
+            putExtra(CallService.EXTRA_BACKEND, backend.name)
         }
         val pendingDecline = PendingIntent.getService(
             context,
@@ -75,7 +84,10 @@ class IncomingCallNotifier(private val context: Context) {
         val notification: Notification = NotificationCompat.Builder(context, AetherApplication.CHANNEL_CALLS)
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentTitle(callerName)
-            .setContentText((if (isVideo) "Incoming video call" else "Incoming voice call") + " · Telegram Call (Beta)")
+            .setContentText(
+                (if (isVideo) "Incoming video call" else "Incoming voice call") +
+                    " · " + backend.label
+            )
             .setOngoing(true)
             .setContentIntent(pendingOpen)
             .setCategory(NotificationCompat.CATEGORY_CALL)

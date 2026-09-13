@@ -99,12 +99,21 @@ class AetherCallsRepository(
     fun startIncomingPolling() {
         if (incomingPollJob?.isActive == true) return
         incomingPollJob = scope.launch {
+            var consecutiveFailures = 0
             while (true) {
                 val self = selfIdentity() ?: run { delay(10_000); continue }
                 // Idempotent re-registration keeps the dev directory fresh
                 // (server restarts lose state by design).
-                serviceClient.register(self.aetherId, self.displayName, self.telegramUserId)
-                val invite = serviceClient.incoming(self.aetherId) ?: run { delay(POLL_MILLIS); continue }
+                val registered = serviceClient.register(self.aetherId, self.displayName, self.telegramUserId)
+                val invite = if (registered) serviceClient.incoming(self.aetherId) else null
+                if (invite == null) {
+                    // Service down/unreachable: back off up to 30s so a device
+                    // without the dev service never churns sockets.
+                    consecutiveFailures++
+                    delay((POLL_MILLIS * consecutiveFailures).coerceAtMost(30_000))
+                    continue
+                }
+                consecutiveFailures = 0
                 if (_activeCall.value != null) {
                     // One canonical call: refuse while busy (the service will
                     // report us unavailable; the caller sees a decline).
@@ -140,6 +149,16 @@ class AetherCallsRepository(
             backend = CallBackend.AETHER
         ).also { hub.setAetherCall(it) }
         pendingInviteId = invite.inviteId
+        // Aether incoming-call ringing: same surface, own backend label, and
+        // the notification actions carry BOTH the call id and the backend so
+        // a stale action can never drive a newer call.
+        com.foresightlabs.aether.data.calls.IncomingCallNotifier(context).showIncoming(
+            callId = invite.inviteId.hashCode(),
+            callerName = invite.from.displayName,
+            isVideo = invite.isVideo,
+            generation = id,
+            backend = CallBackend.AETHER
+        )
     }
 
     @Volatile
