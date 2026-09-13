@@ -180,7 +180,9 @@ class AetherApplication : Application(), ImageLoaderFactory {
         // Cross-backend preemption: when the OTHER backend's newer call takes
         // the single call slot, the displaced backend tears its own call down.
         // Each side only ever reacts to its own name here -- backend isolation.
-        applicationScope.launch {
+        // Touching callHub builds the whole call stack (repository, media
+        // engine, notifier), so a build with calling held never touches it.
+        if (AetherFeatureFlags.CALLS_ENABLED) applicationScope.launch {
             callHub.preemptedBackend.collect { preempted ->
                 if (preempted == com.foresightlabs.aether.domain.calls.CallBackend.TELEGRAM_BETA) {
                     val repo = callsRepository
@@ -248,7 +250,13 @@ class AetherApplication : Application(), ImageLoaderFactory {
             }
 
             notificationManager.createNotificationChannel(messagesChannel)
-            notificationManager.createNotificationChannel(callsChannel)
+            if (AetherFeatureFlags.CALLS_ENABLED) {
+                notificationManager.createNotificationChannel(callsChannel)
+            } else {
+                // A build without calling shows no "Calls" category in system
+                // settings -- including one an earlier install left behind.
+                notificationManager.deleteNotificationChannel(CHANNEL_CALLS)
+            }
         }
     }
 

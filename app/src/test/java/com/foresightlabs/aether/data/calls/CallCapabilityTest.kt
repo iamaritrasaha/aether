@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeFalse
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /**
@@ -29,7 +30,9 @@ class CallCapabilityTest {
 
     @Test
     fun `standard debug build compiles calling in`() {
-        assumeFalse("release variant assertions live in the test below", BuildConfig.DEBUG)
+        // Debug-only: under testReleaseUnitTest this must SKIP, not assert --
+        // the release variant's assertions live in the test below.
+        assumeTrue("release variant assertions live in the test below", BuildConfig.DEBUG)
         assertTrue(BuildConfig.CALLING_ENABLED)
         assertTrue(AetherFeatureFlags.CALLS_ENABLED)
     }

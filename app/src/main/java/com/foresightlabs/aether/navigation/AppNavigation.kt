@@ -629,7 +629,13 @@ fun AetherApp(
                             runCatching { telegram.ensureChatLoaded(chatId.toLong()) }
                         }
                     }
-                    val profileCalls = (application as AetherApplication).callsRepository
+                    // Null with calling held: the profile then offers no call
+                    // action and never builds the call stack.
+                    val profileCalls = if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED) {
+                        (application as AetherApplication).callsRepository
+                    } else {
+                        null
+                    }
                     val coroutineScope = rememberCoroutineScope()
                     var videoNotice by remember { mutableStateOf<String?>(null) }
                     // A call is never placed before the OS grants what it needs;
@@ -638,8 +644,8 @@ fun AetherApp(
                         val targetUserId = chat?.directUser?.id?.toLongOrNull() ?: chat?.id?.toLongOrNull() ?: 0L
                         if (targetUserId != 0L) {
                             coroutineScope.launch {
-                                profileCalls.initiateCall(targetUserId, isVideo = isVideo)
-                                    .exceptionOrNull()?.message
+                                profileCalls?.initiateCall(targetUserId, isVideo = isVideo)
+                                    ?.exceptionOrNull()?.message
                                     ?.let { videoNotice = it }
                             }
                         }
@@ -657,8 +663,8 @@ fun AetherApp(
                                 val tg = (application as AetherApplication).telegram
                                 if (isRetry) tg.retryMediaDownload(fileId) else tg.requestFullMediaDownload(fileId)
                             },
-                            canCallAudio = profileCalls.isCallMediaAvailable,
-                            canCallVideo = profileCalls.isCallMediaAvailable,
+                            canCallAudio = profileCalls?.isCallMediaAvailable == true,
+                            canCallVideo = profileCalls?.isCallMediaAvailable == true,
                             onStartVoiceCall = { startProfileCall(false) },
                             onStartVideoCall = { startProfileCall(true) }
                         )
@@ -702,7 +708,9 @@ fun AetherApp(
                     )
                 }
 
-                composable(
+                // Calling held: the Calls destination is not registered at all,
+                // so no link, stale back stack or deep entry can reach it.
+                if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED) composable(
                     route = Destinations.CALLS,
                     enterTransition = { AetherNavigationMotion.secondaryForwardEnter(calm) },
                     exitTransition = { AetherNavigationMotion.secondaryForwardExit(calm) },
@@ -863,7 +871,11 @@ fun AetherApp(
         }
         // The ONE canonical call across both backends (Aether/LiveKit and
         // Telegram Beta). Surfaces observe the hub, never a backend flow.
-        val activeCall by (application as? AetherApplication)?.callHub?.activeCall
+        // Reading callHub builds the call stack, so a build with calling held
+        // never reads it.
+        val activeCall by (application as? AetherApplication)
+            ?.takeIf { com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED }
+            ?.callHub?.activeCall
             ?.collectAsStateWithLifecycle(initialValue = null)
             ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<com.foresightlabs.aether.domain.model.ActiveCall?>(null) }
         val navScope = rememberCoroutineScope()
@@ -1042,7 +1054,13 @@ private fun ConversationRoute(
     var chooserRequest by remember {
         androidx.compose.runtime.mutableStateOf<CallChooserRequest?>(null)
     }
-    val aetherRepo = (application as? AetherApplication)?.aetherCallsRepository
+    // Constructing the LiveKit repository is itself call initialization; a
+    // build with Aether Calls held must never do it on a conversation open.
+    val aetherRepo = if (com.foresightlabs.aether.AetherFeatureFlags.AETHER_CALLS_ENABLED) {
+        (application as? AetherApplication)?.aetherCallsRepository
+    } else {
+        null
+    }
     // Aether start pending its mic-permission gate: the chooser's request is
     // snapshotted HERE, never re-read from chooserRequest inside the start
     // coroutine -- the sheet's hide() also fires onDismissRequest (which drops

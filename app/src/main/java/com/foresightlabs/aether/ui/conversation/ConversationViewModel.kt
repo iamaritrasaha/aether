@@ -55,7 +55,9 @@ class ConversationViewModel(
 
     // Calls have exactly one entry point. Reaching past this into TelegramClient
     // would skip the media-availability check and ring someone for nothing.
-    private val calls = (application as AetherApplication).callsRepository
+    // Lazy, and only ever touched behind AetherFeatureFlags.CALLS_ENABLED:
+    // building the repository initializes the call stack.
+    private val calls by lazy { (application as AetherApplication).callsRepository }
 
     private var activeChatId: Long = when (target) {
         is com.foresightlabs.aether.domain.model.ConversationTarget.Chat -> target.chatId
@@ -742,7 +744,8 @@ class ConversationViewModel(
     }
 
     /** Whether a call started right now for this conversation could actually carry audio. */
-    val isCallMediaAvailable: Boolean get() = calls.isCallMediaAvailable
+    val isCallMediaAvailable: Boolean
+        get() = com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED && calls.isCallMediaAvailable
 
     /**
      * The repository's single [ActiveCall], surfaced here only when it belongs
@@ -750,9 +753,15 @@ class ConversationViewModel(
      * never hijack this Conversation's header/Curtain/banner.
      */
     val activeCallForThisChat: StateFlow<com.foresightlabs.aether.domain.model.ActiveCall?> =
-        calls.activeCallState
-            .map { call -> call?.takeIf { it.userId == resolveCallTargetUserId() } }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        if (com.foresightlabs.aether.AetherFeatureFlags.CALLS_ENABLED) {
+            calls.activeCallState
+                .map { call -> call?.takeIf { it.userId == resolveCallTargetUserId() } }
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        } else {
+            // Calling held: there is never a call to show, and the call stack
+            // is never built to find that out.
+            MutableStateFlow(null)
+        }
 
     fun toggleCallMute() = calls.toggleMute()
     fun toggleCallSpeaker() = calls.toggleSpeaker()
