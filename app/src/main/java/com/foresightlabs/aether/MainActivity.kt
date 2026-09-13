@@ -35,7 +35,7 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     handleNotificationIntent(intent)
-    handleShareIntent(intent)
+    handleShareIntent(intent, isNewShare = false)
     enableEdgeToEdge(
       statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
       navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
@@ -83,7 +83,7 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
     super.onNewIntent(intent)
     setIntent(intent)
     handleNotificationIntent(intent)
-    handleShareIntent(intent)
+    handleShareIntent(intent, isNewShare = true)
   }
 
   /**
@@ -99,7 +99,7 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
    * grant still holds; nothing here assumes a filesystem path, and nothing is
    * sent -- the share waits for a recipient and an explicit send.
    */
-  private fun handleShareIntent(intent: Intent?) {
+  private fun handleShareIntent(intent: Intent?, isNewShare: Boolean) {
     if (!SharedIntents.isShare(intent)) return
     val gateway = SharedUriGateway(applicationContext)
     val content = SharedIntents.normalize(
@@ -107,7 +107,16 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
       mimeTypeOf = gateway::mimeType,
       displayNameOf = gateway::displayName
     )
-    SharedContentInbox.offer(content, SharedIntents.identityOf(intent))
+    // onNewIntent is always a fresh share from the sending app (never a
+    // recreation replay), so the identity dedupe is bypassed -- otherwise a
+    // second share of identical content was silently dropped. onCreate
+    // redelivers the stored launch intent on every recreation, where the
+    // dedupe is exactly what prevents the picker reopening.
+    if (isNewShare) {
+      SharedContentInbox.offerNewShare(content, SharedIntents.identityOf(intent))
+    } else {
+      SharedContentInbox.offer(content, SharedIntents.identityOf(intent))
+    }
   }
 
   private fun handleNotificationIntent(intent: Intent?) {
@@ -115,6 +124,12 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
     val chatId = intent.getLongExtra(AetherNotificationManager.EXTRA_CHAT_ID, 0L)
     if (chatId != 0L) {
       ActiveConversationTracker.setPendingNavigationChatId(chatId)
+      // Consumed: the same launch Intent is redelivered on every
+      // configuration-change recreation (onCreate), and without this the app
+      // force-jumped back into the notified chat on each rotation. Removing
+      // the extra only affects this in-process copy; a fresh tap always
+      // delivers a fresh PendingIntent.
+      intent.removeExtra(AetherNotificationManager.EXTRA_CHAT_ID)
     }
   }
 }

@@ -69,6 +69,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -696,7 +697,12 @@ fun MessageComposer(
     modifier: Modifier = Modifier
 ) {
     // Held as a TextFieldValue so the selection is available for formatting.
-    var field by remember { mutableStateOf(TextFieldValue("")) }
+    // Saveable: typed text must survive rotation / Activity recreation -- a
+    // half-typed message is real user data (the ViewModel's pendingDraft copy
+    // is only uploaded on VM clear, never read back into the field).
+    var field by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(""))
+    }
     var formatting by remember { mutableStateOf<List<AetherEntity>>(emptyList()) }
     var sendingTransition by remember { mutableStateOf(false) }
     val composerScope = rememberCoroutineScope()

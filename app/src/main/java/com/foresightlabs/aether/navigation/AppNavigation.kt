@@ -230,15 +230,22 @@ fun AetherApp(
         return
     }
 
-    // Once a share has a recipient, that conversation opens through the same
-    // navigation every other conversation is opened by.
-    androidx.compose.runtime.LaunchedEffect(shareDelivery?.chatId) {
-        val addressed = shareDelivery?.chatId ?: return@LaunchedEffect
-        navController.navigate(Destinations.conversation(addressed.toString()))
-    }
-
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isTablet = maxWidth >= 720.dp
+
+        // Once a share has a recipient, that conversation opens through the
+        // same navigation every other conversation is opened by. Form-factor
+        // gated: on a tablet-width window an addressed share SELECTS the pane
+        // (see the two-pane branch below); this effect used to run there too,
+        // pushing a full-screen conversation OVER the two-pane layout -- a
+        // double instance of the same conversation whose disposal also tore
+        // down active-conversation tracking for the pane still showing it.
+        androidx.compose.runtime.LaunchedEffect(shareDelivery?.chatId, isTablet) {
+            val addressed = shareDelivery?.chatId ?: return@LaunchedEffect
+            if (!isTablet) {
+                navController.navigate(Destinations.conversation(addressed.toString()))
+            }
+        }
 
         // The persistent rear layer. It lives above the navigation graph and
         // outlives every route change, so the black surface Home shows the
@@ -285,7 +292,10 @@ fun AetherApp(
             // the graph to open those peripheral screens, on the same
             // navController the NavHost below binds.
             if (isTablet) {
-                var selectedChatId by remember { mutableStateOf(folderChats.firstOrNull()?.id) }
+                                // Saveable: the selected pane must survive rotation --
+                // isTablet flips with width, and any recreation used to drop
+                // the user back to the folder's first chat.
+                var selectedChatId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(folderChats.firstOrNull()?.id) }
                 // Two panes rather than a back stack, so an addressed share
                 // selects the conversation here instead of navigating to it.
                 androidx.compose.runtime.LaunchedEffect(shareDelivery?.chatId) {
@@ -587,7 +597,11 @@ fun AetherApp(
                         application = application,
                         target = com.foresightlabs.aether.domain.model.ConversationTarget.User(id),
                         onBack = { navController.popBackStack() },
-                        onNavigateToProfile = { /* profile navigation */ },
+                        // A TDLib private chat's id IS its user id, so the
+                        // profile route the chat-based conversations use
+                        // resolves here too. This was an empty callback: the
+                        // header is visibly tappable and tapping did nothing.
+                        onNavigateToProfile = { navController.navigate(Destinations.profile(id.toString())) },
                         onNavigateToChatAppearance = { navController.navigate(Destinations.chatAppearance(it)) }
                     )
                 }
@@ -602,6 +616,20 @@ fun AetherApp(
                 ) { backStackEntry ->
                     val chatId = backStackEntry.arguments?.getString("chatId")
                     val chat = chats.firstOrNull { it.id == chatId }
+                    // Profiles are reachable for chats outside the loaded list
+                    // (search results, a chat the list has not paginated to
+                    // yet, or a deep entry right after process death). Without
+                    // this fetch the route rendered a blank screen with no
+                    // back button for exactly those cases. ensureChatLoaded
+                    // publishes into the chat list, so recomposition renders
+                    // the profile once TDLib answers; a genuinely unknown id
+                    // simply stays on the (harmless) empty route.
+                    val telegram = (application as AetherApplication).telegram
+                    LaunchedEffect(chatId) {
+                        if (chat == null && chatId?.toLongOrNull() != null) {
+                            runCatching { telegram.ensureChatLoaded(chatId.toLong()) }
+                        }
+                    }
                     val profileCalls = (application as AetherApplication).callsRepository
                     val coroutineScope = rememberCoroutineScope()
                     var videoNotice by remember { mutableStateOf<String?>(null) }

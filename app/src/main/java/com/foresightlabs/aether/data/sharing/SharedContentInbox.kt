@@ -72,6 +72,23 @@ object SharedContentInbox {
         return waiting.content
     }
 
+    /**
+     * Accepts a share that arrived through `onNewIntent` -- a genuinely new
+     * share intent from the system, never a replay of a stored launch intent.
+     * The identity gate does not apply here: the user sharing the SAME link or
+     * photo twice in a row is two shares, and the second one was previously
+     * swallowed silently because the content-derived identity matched the
+     * first's. A recreation replay of this same intent is still deduped
+     * afterwards, because [offer] sees the identity it now carries.
+     */
+    fun offerNewShare(content: SharedContent?, identity: String?): Boolean {
+        if (content == null) return false
+        acceptedIdentity = identity
+        _delivery.value = null
+        _pending.value = content
+        return true
+    }
+
     /** The share was abandoned -- recipient selection dismissed, or nothing to send. */
     fun clear() {
         _pending.value = null

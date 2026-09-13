@@ -64,6 +64,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -296,7 +297,8 @@ private fun AuthChoice(label: String, icon: androidx.compose.ui.graphics.vector.
 
 @Composable
 private fun PhoneStep(busy: Boolean, error: String?, country: CountryDial, onCountryClick: () -> Unit, onSubmit: (String) -> Unit) {
-    var number by remember { mutableStateOf("") }
+    // Saveable: a phone number typed mid-login survives rotation.
+    var number by rememberSaveable { mutableStateOf("") }
     Column(Modifier.widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Your phone number", color = AuthText, fontFamily = SpaceGroteskFontFamily, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Telegram will decide whether this is an existing account or a new registration.", color = AuthSecondary, fontFamily = ManropeFontFamily, fontSize = 13.sp)
@@ -311,7 +313,8 @@ private fun PhoneStep(busy: Boolean, error: String?, country: CountryDial, onCou
 
 @Composable
 private fun CodeStep(state: AuthUiState.Code, busy: Boolean, error: String?, onSubmit: (String) -> Unit, onResend: () -> Unit) {
-    var code by remember { mutableStateOf("") }
+    // Saveable: an SMS code typed mid-login survives rotation.
+    var code by rememberSaveable { mutableStateOf("") }
     var timerSeconds by remember(state.timeoutSeconds) { mutableIntStateOf(state.timeoutSeconds) }
 
     LaunchedEffect(timerSeconds) {
@@ -354,7 +357,8 @@ private fun EmailAddressStep(busy: Boolean, error: String?, onSubmit: (String) -
 
 @Composable
 private fun EmailCodeStep(state: AuthUiState.EmailCode, busy: Boolean, error: String?, onSubmit: (String) -> Unit, onResend: () -> Unit, onReset: () -> Unit) {
-    var code by remember { mutableStateOf("") }
+    // Saveable: an email code typed mid-login survives rotation.
+    var code by rememberSaveable { mutableStateOf("") }
     CodeEntry("Email verification code", "Telegram sent a code to ${state.addressPattern.ifBlank { "your email" }}.", code, state.codeLength, busy = busy, error = error, onCodeChange = { value -> code = value.filter(Char::isDigit).let { state.codeLength?.let(it::take) ?: it } }, onSubmit = { onSubmit(code) }, resend = onResend)
     if (state.canReset) TextButton(onClick = onReset, modifier = Modifier.height(48.dp)) { Text("Use phone instead", color = AuthSecondary) }
 }
@@ -406,7 +410,8 @@ private fun CodeEntry(
 
 @Composable
 private fun PasswordStep(state: AuthUiState.Password, recoveryRequested: Boolean, busy: Boolean, error: String?, onSubmit: (String) -> Unit, onRequestRecovery: () -> Unit) {
-    var password by remember { mutableStateOf("") }
+    // Saveable: a 2FA password typed mid-login survives rotation.
+    var password by rememberSaveable { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
     val recovery = recoveryRequested || state.recoveryEmailAddressPattern?.isNotBlank() == true
     Column(Modifier.widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

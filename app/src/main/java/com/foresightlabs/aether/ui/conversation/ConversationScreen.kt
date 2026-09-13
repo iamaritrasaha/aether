@@ -60,6 +60,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
@@ -440,6 +441,19 @@ fun ConversationScreen(
 
     val audioRecorder = remember { AudioRecorderManager(context) }
     var isRecordingAudio by remember { mutableStateOf(false) }
+    // An in-flight voice recording must not outlive this composition: on
+    // rotation the new screen gets a fresh AudioRecorderManager, and the old
+    // MediaRecorder would keep the microphone held (blocking every later
+    // recording, here and in other apps) with no handle left to release it.
+    // The half-made recording is discarded -- it cannot be sent from a
+    // composition that no longer exists.
+    DisposableEffect(Unit) {
+        onDispose {
+            if (audioRecorder.isRecording) {
+                audioRecorder.cancelRecording()
+            }
+        }
+    }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()

@@ -212,4 +212,31 @@ class SharedContentLifecycleTest {
         directUser = directUser,
         blockableUserId = directUser?.id?.toLongOrNull()
     )
+
+    @Test
+    fun `a genuinely new share of identical content is accepted, not swallowed`() {
+        val same = "ACTION_VIEW|text/plain|https://example.com"
+        SharedContentInbox.offer(SharedContent.Text("https://example.com"), same)
+        // The old behaviour: a second share of the SAME content (a real user
+        // action, e.g. sharing the same link again after sending the first)
+        // hit the identity gate and vanished silently.
+        assertFalse(SharedContentInbox.offer(SharedContent.Text("https://example.com"), same))
+
+        // onNewIntent is a genuinely new share: always accepted.
+        assertTrue(
+            "a new share intent with identical content must be accepted",
+            SharedContentInbox.offerNewShare(SharedContent.Text("https://example.com"), same)
+        )
+        assertEquals(SharedContent.Text("https://example.com"), SharedContentInbox.pending.value)
+    }
+
+    @Test
+    fun `after offerNewShare a recreation replay is still deduped`() {
+        val identity = "ACTION_VIEW|text/plain|https://example.com"
+        SharedContentInbox.offerNewShare(SharedContent.Text("https://example.com"), identity)
+        assertTrue(SharedContentInbox.pending.value != null)
+        // The stored launch intent is redelivered on every Activity recreation;
+        // that replay must not reopen recipient selection.
+        assertFalse(SharedContentInbox.offer(SharedContent.Text("https://example.com"), identity))
+    }
 }
