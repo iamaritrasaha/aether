@@ -707,10 +707,18 @@ fun MessageComposer(
     var sendingTransition by remember { mutableStateOf(false) }
     val composerScope = rememberCoroutineScope()
 
+    // Which prefill/edit each seeding served. Both the seeds and the field
+    // survive Activity recreation now; without these markers the seed
+    // LaunchedEffects would re-fire on restore and overwrite the user's
+    // half-typed text with the original prefill/edit target.
+    var seededPrefill by rememberSaveable { mutableStateOf<String?>(null) }
+    var seededEditId by rememberSaveable { mutableStateOf<String?>(null) }
+
     LaunchedEffect(prefillText) {
         val incoming = prefillText
-        if (!incoming.isNullOrEmpty()) {
+        if (!incoming.isNullOrEmpty() && seededPrefill != incoming) {
             field = TextFieldValue(text = incoming, selection = TextRange(incoming.length))
+            seededPrefill = incoming
             // Reported like typing, so everything keyed on the draft -- the link
             // preview above all -- sees it exactly as it would a typed message.
             onTextChanged(incoming)
@@ -718,11 +726,18 @@ fun MessageComposer(
     }
 
     LaunchedEffect(editingMessage?.id) {
-        if (editingMessage != null) {
-            field = TextFieldValue(
-                text = editingMessage.text,
-                selection = TextRange(editingMessage.text.length)
-            )
+        val editId = editingMessage?.id
+        when {
+            // Edit finished or cancelled: re-arm, so editing the SAME message
+            // again in this composer's lifetime still seeds.
+            editId == null -> seededEditId = null
+            seededEditId != editId -> {
+                field = TextFieldValue(
+                    text = editingMessage.text,
+                    selection = TextRange(editingMessage.text.length)
+                )
+                seededEditId = editId
+            }
         }
     }
     val text = field.text

@@ -68,6 +68,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -314,14 +316,20 @@ fun ConversationScreen(
         ) == 0f
     }
 
-    var replyingToMessage by remember { mutableStateOf<Message?>(null) }
-    var editingMessage by remember { mutableStateOf<Message?>(null) }
+    // Held as ids, not Message objects, and saveable: rotating mid-reply or
+    // mid-edit must not orphan the composer state (an edit that silently
+    // lost its target also lost the text being edited). The Message objects
+    // re-resolve from the chat's loaded messages on restore.
+    var replyingToMessageId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editingMessageId by rememberSaveable { mutableStateOf<String?>(null) }
+    val replyingToMessage = replyingToMessageId?.let { id -> messages.firstOrNull { it.id == id } }
+    val editingMessage = editingMessageId?.let { id -> messages.firstOrNull { it.id == id } }
     var selectedContextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var forwardingMessages by remember { mutableStateOf<List<Message>>(emptyList()) }
     var replyQuote by remember { mutableStateOf<ReplyQuote?>(null) }
     var infoMessage by remember { mutableStateOf<Message?>(null) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
-    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedIds by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
     var deleteConfirmMessages by remember { mutableStateOf<List<Message>?>(null) }
     // Grouping is derived once per message-list change, not per frame.
     val entries = remember(messages) { MessageGrouping.group(messages) }
@@ -333,7 +341,7 @@ fun ConversationScreen(
     var showLiveLocationSheet by remember { mutableStateOf(false) }
     var showVenueSheet by remember { mutableStateOf(false) }
     var showScheduledSheet by remember { mutableStateOf(false) }
-    var curtainState by remember { mutableStateOf(CurtainState.COMPOSER) }
+    var curtainState by rememberSaveable { mutableStateOf(CurtainState.COMPOSER) }
     // Truthful only: derived from the real signalling + media states, never
     // set directly by this screen. See CallStatePresenter for why ACTIVE is
     // unreachable without the native transport reporting CONNECTED.
@@ -413,8 +421,34 @@ fun ConversationScreen(
     // What another application shared into this conversation, once its bytes
     // have been copied out of the sender's URIs. Reviewed in
     // CurtainState.SHARE_PREVIEW; never sent without an explicit tap.
-    var pendingShare by remember { mutableStateOf<PendingShare?>(null) }
-    var sharedDraft by remember { mutableStateOf<String?>(null) }
+    // Saveable: the share was already consumed from the inbox, so rotation
+    // is the LAST copy of it -- losing this state lost the share entirely
+    // (the inbox is empty and the source grant has expired).
+    var pendingShare by rememberSaveable(
+        stateSaver = Saver(
+            save = { share ->
+                ArrayList<Any?>().apply {
+                    share?.attachments?.forEach {
+                        add(it.path); add(it.kind.name); add(it.name)
+                    }
+                    add(share?.caption)
+                }
+            },
+            restore = { items ->
+                val list = items as ArrayList<*>
+                val caption = list.lastOrNull() as? String ?: ""
+                val files = list.dropLast(1).chunked(3).map { triple ->
+                    SharedAttachmentFile(
+                        path = triple[0] as String,
+                        kind = SharedAttachmentKind.valueOf(triple[1] as String),
+                        name = triple[2] as String?
+                    )
+                }
+                PendingShare(files, caption)
+            }
+        )
+    ) { mutableStateOf<PendingShare?>(null) }
+    var sharedDraft by rememberSaveable { mutableStateOf<String?>(null) }
 
     var cameraTempFile by remember { mutableStateOf<File?>(null) }
     val cameraLauncher = rememberLauncherForActivityResult(
@@ -506,7 +540,7 @@ fun ConversationScreen(
             val file = copyUriToTempFile(context, uri, "doc_")
             if (file != null) {
                 onSendDocument(file.absolutePath, "", replyingToMessage)
-                replyingToMessage = null
+                replyingToMessageId = null
             }
         }
     }
@@ -822,7 +856,7 @@ fun ConversationScreen(
             MessageComposer(
                 replyingTo = replyingToMessage,
                 onDismissReply = {
-                    replyingToMessage = null
+                    replyingToMessageId = null
                     replyQuote = null
                 },
                 replyQuote = replyQuote,
@@ -939,7 +973,7 @@ fun ConversationScreen(
                 onSendMessage = { text, formatting ->
                     curtainState = CurtainState.COMPOSER
                     onSendMessage(text, replyingToMessage, formatting, replyQuote)
-                    replyingToMessage = null
+                    replyingToMessageId = null
                     replyQuote = null
                 },
                 onTextChanged = { newText ->
@@ -990,7 +1024,7 @@ fun ConversationScreen(
                         isRecordingAudio = false
                         if (recordResult != null) {
                             onSendVoiceNote(recordResult.filePath, recordResult.durationSec, ByteArray(0), replyingToMessage)
-                            replyingToMessage = null
+                            replyingToMessageId = null
                         }
                     } else {
                         val hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -1025,17 +1059,17 @@ fun ConversationScreen(
                 },
                 onClearSelection = { selectedIds = emptySet() },
                 onReplySelected = { msg ->
-                    replyingToMessage = msg
+                    replyingToMessageId = msg.id
                     replyQuote = null
                 },
                 onEditSelected = { msg ->
-                    editingMessage = msg
+                    editingMessageId = msg.id
                 },
                 editingMessage = editingMessage,
-                onDismissEdit = { editingMessage = null },
+                onDismissEdit = { editingMessageId = null },
                 onSaveEdit = { msg, newText, _ ->
                     onEditMessage(msg, newText)
-                    editingMessage = null
+                    editingMessageId = null
                 },
                 onCopySelected = { chosen ->
                     clipboardManager.setText(
@@ -1092,7 +1126,7 @@ fun ConversationScreen(
                         onSendDocument = onSendDocument,
                         onSendPhotoAlbum = onSendPhotoAlbum
                     ) }
-                    replyingToMessage = null
+                    replyingToMessageId = null
                     pendingShare = null
                     curtainState = CurtainState.COMPOSER
                 },
@@ -1112,7 +1146,7 @@ fun ConversationScreen(
                         } else {
                             onSendPhoto(media.path, "", replyingToMessage, media.viewOnce)
                         }
-                        replyingToMessage = null
+                        replyingToMessageId = null
                     }
                     pendingMedia = null
                     curtainState = CurtainState.COMPOSER
@@ -1277,7 +1311,7 @@ fun ConversationScreen(
                     message = msg,
                     motionEvent = rowMotion,
                     onSwipeToReply = { replyTarget ->
-                        replyingToMessage = replyTarget
+                        replyingToMessageId = replyTarget.id
                     },
                     onLongPress = { targetMsg ->
                         // Reverted: routing this through the context menu when not
@@ -1445,7 +1479,7 @@ fun ConversationScreen(
                 onDismiss = { showContactSheet = false },
                 onSend = { phone, first, last ->
                     onSendContact(phone, first, last, replyingToMessage)
-                    replyingToMessage = null
+                    replyingToMessageId = null
                     showContactSheet = false
                 }
             )
@@ -1474,7 +1508,7 @@ fun ConversationScreen(
                 onDismiss = { showLocationSheet = false },
                 onSend = { lat, lon ->
                     onSendLocation(lat, lon, replyingToMessage)
-                    replyingToMessage = null
+                    replyingToMessageId = null
                     showLocationSheet = false
                 }
             )
@@ -1497,7 +1531,7 @@ fun ConversationScreen(
                 onDismiss = { showLiveLocationSheet = false },
                 onSendLive = { lat, lon, dur ->
                     onSendLiveLocation(lat, lon, dur, replyingToMessage)
-                    replyingToMessage = null
+                    replyingToMessageId = null
                     showLiveLocationSheet = false
                 }
             )
@@ -1520,7 +1554,7 @@ fun ConversationScreen(
                 onDismiss = { showVenueSheet = false },
                 onSendVenue = { lat, lon, title, address ->
                     onSendVenue(lat, lon, title, address, replyingToMessage)
-                    replyingToMessage = null
+                    replyingToMessageId = null
                     showVenueSheet = false
                 }
             )
@@ -1561,7 +1595,7 @@ fun ConversationScreen(
             onDismiss = { showVideoNoteRecorder = false },
             onSendVideoNote = { filePath, duration, length ->
                 onSendVideoNote(filePath, duration, length, replyingToMessage)
-                replyingToMessage = null
+                replyingToMessageId = null
                 showVideoNoteRecorder = false
             }
         )
@@ -1591,11 +1625,11 @@ fun ConversationScreen(
                 val target = selectedContextMenuMessage ?: return@MessageContextMenu
                 when (action) {
                     MessageAction.REPLY -> {
-                        replyingToMessage = target
+                        replyingToMessageId = target.id
                         replyQuote = null
                     }
                     MessageAction.QUOTE_REPLY -> {
-                        replyingToMessage = target
+                        replyingToMessageId = target.id
                         replyQuote = ReplyQuote.from(target.richText, 0, target.text.length)
                     }
                     MessageAction.COPY -> {
@@ -1609,7 +1643,7 @@ fun ConversationScreen(
                         curtainState = CurtainState.FORWARDING
                     }
                     MessageAction.SELECT -> selectedIds = setOf(target.id)
-                    MessageAction.EDIT -> editingMessage = target
+                    MessageAction.EDIT -> editingMessageId = target.id
                     MessageAction.REPLACE_MEDIA -> {
                         replacingMediaMessage = target
                         val mime = when (target.type) {
@@ -1643,7 +1677,7 @@ fun ConversationScreen(
 
         // Dismiss message edit mode on back press before exiting Conversation
         BackHandler(enabled = editingMessage != null) {
-            editingMessage = null
+            editingMessageId = null
         }
 
         // Delete confirmation now lives in the Curtain itself -- see
