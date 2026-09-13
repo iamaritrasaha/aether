@@ -304,6 +304,33 @@ fun MediaViewer(
                         )
                     }
                 }
+            } else if (hasValidLocalSource && activeItem.url.endsWith(".tgs", ignoreCase = true)) {
+                // Animated sticker (.tgs = gzip-compressed Lottie): Coil has no
+                // decoder for it, so the ordinary image path always failed into
+                // a "Couldn't load photo" panel that retrying could never clear
+                // (the file was already fully downloaded). Same rendering the
+                // chat bubble uses, full-screen.
+                val lottieJson = remember(activeItem.url) {
+                    com.foresightlabs.aether.data.media.TgsDecompressor.decompressFile(File(activeItem.url))
+                }
+                if (lottieJson != null) {
+                    val composition by com.airbnb.lottie.compose.rememberLottieComposition(
+                        com.airbnb.lottie.compose.LottieCompositionSpec.JsonString(lottieJson)
+                    )
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        com.airbnb.lottie.compose.LottieAnimation(
+                            composition = composition,
+                            iterations = com.airbnb.lottie.compose.LottieConstants.IterateForever,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                } else {
+                    MediaViewerShell(
+                        previewBitmap = previewBitmap,
+                        failed = true,
+                        onRetry = { onRequestDownload(activeItem.fileId, true) }
+                    )
+                }
             } else if (hasValidLocalSource) {
                 SubcomposeAsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
@@ -541,6 +568,16 @@ private fun MediaViewerShell(
     }
 }
 
+private fun mimeTypeFor(fileName: String, isVideo: Boolean): String {
+    val extension = fileName.substringAfterLast('.', "").lowercase()
+    val mapped = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+    return when {
+        mapped != null -> mapped
+        isVideo -> "video/mp4"
+        else -> "image/jpeg"
+    }
+}
+
 private fun shareMediaItem(context: Context, mediaItem: MediaItem) {
     try {
         val isVideo = mediaItem.isVideo
@@ -577,9 +614,14 @@ private fun saveMediaToDownloads(context: Context, mediaItem: MediaItem) {
 
         val fileName = sourceFile.name
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // The stored mime must match the actual bytes: a hardcoded
+            // image/jpeg mislabels every PNG/WebP photo in MediaStore, which
+            // then mis-handles them in other apps. Unknown extensions fall
+            // back to the broad photo/video type the viewer deals in.
+            val mimeType = mimeTypeFor(fileName, isVideo)
             val contentValues = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, if (isVideo) "video/mp4" else "image/jpeg")
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                 put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
             }
             val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
@@ -590,7 +632,12 @@ private fun saveMediaToDownloads(context: Context, mediaItem: MediaItem) {
                 Toast.makeText(context, "Saved to Downloads", Toast.LENGTH_SHORT).show()
             }
         } else {
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            // Pre-Q: the public Downloads directory needs WRITE_EXTERNAL_STORAGE,
+            // which Aether does not hold -- the write failed with only a toast.
+            // The app-specific downloads dir needs no permission and the toast
+            // already tells the user exactly where the file went.
+            val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: context.filesDir
             val destFile = File(downloadsDir, fileName)
             FileInputStream(sourceFile).use { input ->
                 FileOutputStream(destFile).use { output -> input.copyTo(output) }

@@ -31,6 +31,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import com.foresightlabs.aether.domain.sharing.SharedAttachmentKind
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
@@ -445,6 +446,39 @@ class ConversationViewModel(
             )
             mediaSendInFlight = false
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
+    /**
+     * Sends a mixed share (photos + videos + files) as one guarded batch.
+     *
+     * The per-item senders' `mediaSendInFlight` guard blocks CONCURRENT calls,
+     * which is correct for a double-tapped send button but silently dropped
+     * every item after the first when the share path issued its sends
+     * back-to-back. Here the guard is taken ONCE and the items are sent
+     * sequentially inside the same coroutine; a per-item failure is reported
+     * through the ordinary send-error flow and does not abort the rest.
+     */
+    fun sendSharedBatch(items: List<Pair<String, SharedAttachmentKind>>, caption: String, replyToId: String?) {
+        if (items.isEmpty() || mediaSendInFlight) return
+        mediaSendInFlight = true
+        viewModelScope.launch {
+            try {
+                items.forEachIndexed { index, (path, kind) ->
+                    // Telegram captions a group from its first member; a lone
+                    // item keeps the caption either way.
+                    val itemCaption = if (index == 0) caption else ""
+                    val reply = replyToId?.takeIf { index == 0 }?.toLongOrNull()
+                    val result = when (kind) {
+                        SharedAttachmentKind.IMAGE -> telegram.sendPhoto(activeChatId, path, itemCaption, reply, forumTopicId, false)
+                        SharedAttachmentKind.VIDEO -> telegram.sendVideo(activeChatId, path, itemCaption, 0, 0, 0, reply, forumTopicId, false)
+                        SharedAttachmentKind.FILE -> telegram.sendDocument(activeChatId, path, itemCaption, reply)
+                    }
+                    result.exceptionOrNull()?.message?.let { _sendError.value = it }
+                }
+            } finally {
+                mediaSendInFlight = false
+            }
         }
     }
 

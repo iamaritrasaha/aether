@@ -153,7 +153,7 @@ class SharedContentComposerTest {
     }
 
     @Test
-    fun sharedVideosAndFilesUseTheirOwnExistingSends() {
+    fun sharedVideosAndFilesGoAsOneSequentialBatch() {
         val recorder = Recorder()
         recorder.send(
             PendingShare(
@@ -165,11 +165,14 @@ class SharedContentComposerTest {
             )
         )
 
-        assertEquals(listOf("/tmp/clip.mp4"), recorder.videos.map { it.first })
-        assertEquals(listOf("/tmp/report.pdf"), recorder.documents.map { it.first })
-        // Telegram captions a group from its first member.
-        assertEquals("notes", recorder.videos.single().second)
-        assertEquals("", recorder.documents.single().second)
+        // One batch, both items intact: the old per-item callback burst was
+        // silently truncated by the senders' in-flight guard after the first.
+        assertEquals(1, recorder.batches.size)
+        val (items, caption, _) = recorder.batches.single()
+        assertEquals(listOf("/tmp/clip.mp4" to SharedAttachmentKind.VIDEO, "/tmp/report.pdf" to SharedAttachmentKind.FILE), items)
+        // Telegram captions a group from its first member; the batch carries
+        // the caption once for the VM to place on the first item.
+        assertEquals("notes", caption)
         assertTrue(recorder.albums.isEmpty())
     }
 
@@ -186,17 +189,15 @@ class SharedContentComposerTest {
 
     private class Recorder {
         val photos = mutableListOf<Triple<String, String, Boolean>>()
-        val videos = mutableListOf<Pair<String, String>>()
-        val documents = mutableListOf<Pair<String, String>>()
         val albums = mutableListOf<Pair<List<String>, String>>()
+        val batches = mutableListOf<Triple<List<Pair<String, SharedAttachmentKind>>, String, Boolean>>()
 
         fun send(share: PendingShare) = sendSharedAttachments(
             share = share,
             replyingTo = null,
             onSendPhoto = { path, caption, _, viewOnce -> photos += Triple(path, caption, viewOnce) },
-            onSendVideo = { path, caption, _, _, _ -> videos += path to caption },
-            onSendDocument = { path, caption, _ -> documents += path to caption },
-            onSendPhotoAlbum = { paths, caption, _ -> albums += paths to caption }
+            onSendPhotoAlbum = { paths, caption, _ -> albums += paths to caption },
+            onSendMixedBatch = { items, caption, reply -> batches += Triple(items, caption, reply != null) }
         )
     }
 

@@ -1043,6 +1043,7 @@ private fun ConversationRoute(
             onSendVideo = { path, caption, duration, reply, viewOnce -> viewModel.sendVideo(path, caption, duration, reply?.id, viewOnce) },
             onSendDocument = { path, caption, reply -> viewModel.sendDocument(path, caption, reply?.id) },
             onSendPhotoAlbum = { paths, caption, reply -> viewModel.sendPhotoAlbum(paths, caption, reply?.id) },
+            onSendMixedBatch = { items, caption, reply -> viewModel.sendSharedBatch(items, caption, reply?.id) },
             onSendVoiceNote = { path, duration, wave, reply -> viewModel.sendVoiceNote(path, duration, wave, reply?.id) },
             onEditMessage = viewModel::editMessage, onAddReaction = viewModel::addReaction,
             onPinMessage = viewModel::pinMessage, onComposerChanged = viewModel::onComposerChanged,

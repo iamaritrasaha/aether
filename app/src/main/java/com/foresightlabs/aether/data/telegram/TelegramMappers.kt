@@ -269,10 +269,18 @@ object TelegramMappers {
         lastReadOutboxMessageId: Long,
         reply: ReplyPreview? = null,
         resolvePath: (TdApi.File?) -> String? = { localPath(it) },
-        isDownloadFailed: (Int) -> Boolean = { false }
+        isDownloadFailed: (Int) -> Boolean = { false },
+        // Lookup-only path resolution for CONTENT files a message must not
+        // auto-download (video, documents): consults the client's download
+        // cache but never requests a download. Without it, a completed
+        // download never reached the mapped path (the mapper read the stale
+        // TdApi.File TDLib does not mutate), so video spun forever in the
+        // viewer until the chat was re-entered and documents could never be
+        // opened at all.
+        resolveContentPath: (TdApi.File?) -> String? = { localPath(it) }
     ): Message {
         val senderName = senderName(message.senderId, users, chats, message.isOutgoing)
-        val presentation = mapPresentation(message.content, message.id, resolvePath, isDownloadFailed)
+        val presentation = mapPresentation(message.content, message.id, resolvePath, isDownloadFailed, resolveContentPath)
         val type = presentation.type
         val text = if (type == MessageType.SERVICE) {
             ServiceMessages.describe(message.content, senderName).trim()
@@ -475,7 +483,8 @@ object TelegramMappers {
         content: TdApi.MessageContent?,
         messageId: Long,
         resolvePath: (TdApi.File?) -> String?,
-        isDownloadFailed: (Int) -> Boolean = { false }
+        isDownloadFailed: (Int) -> Boolean = { false },
+        resolveContentPath: (TdApi.File?) -> String? = { localPath(it) }
     ): MediaPresentation {
         // A message's media EXISTS the moment TDLib reports the message, whether
         // or not its bytes have arrived. This never returns emptyList() merely
@@ -571,7 +580,7 @@ object TelegramMappers {
                 // message loads. localPath() only reports whether it already
                 // happens to be on disk; playback requests the real download later,
                 // on demand, when the viewer actually opens.
-                val videoLocalPath = localPath(videoFile).orEmpty()
+                val videoLocalPath = resolveContentPath(videoFile).orEmpty()
                 val thumbItems = mediaItem(
                     thumbFile,
                     caption,
@@ -617,12 +626,37 @@ object TelegramMappers {
             is TdApi.MessageDocument -> {
                 val document = content.document
                 val name = document?.fileName?.takeIf { it.isNotBlank() } ?: "Document"
+                val contentFile = document?.document
+                // Lookup-only path (never auto-requests a download, same rule
+                // as video content): the id is what matters here -- it is
+                // indexed, so when a download completes the message re-maps
+                // and the file chip becomes openable.
+                val localPathNow = if (contentFile != null) resolveContentPath(contentFile).orEmpty() else ""
+                val local = contentFile?.local
+                val remote = contentFile?.remote
+                val items = if (contentFile != null) {
+                    listOf(
+                        MediaItem(
+                            id = "$messageId:${contentFile.id}",
+                            url = localPathNow,
+                            caption = content.caption?.text.orEmpty(),
+                            fileId = contentFile.id,
+                            hasLocalFile = localPathNow.isNotBlank(),
+                            isDownloading = local?.isDownloadingActive == true,
+                            downloadFailed = isDownloadFailed(contentFile.id),
+                            isUploading = remote?.isUploadingActive == true
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
                 MediaPresentation(
                     text = content.caption?.text.orEmpty(),
                     type = MessageType.FILE,
                     fileName = name,
                     fileSize = formatFileSize(document?.document?.size ?: 0L),
-                    fileExtension = name.substringAfterLast('.', "").uppercase().ifBlank { null }
+                    fileExtension = name.substringAfterLast('.', "").uppercase().ifBlank { null },
+                    mediaItems = items
                 )
             }
             is TdApi.MessageAudio -> {

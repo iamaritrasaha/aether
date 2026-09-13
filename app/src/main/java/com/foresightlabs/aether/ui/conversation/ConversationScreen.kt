@@ -221,6 +221,8 @@ fun ConversationScreen(
     onSendDocument: (String, String, Message?) -> Unit = { _, _, _ -> },
     /** Several photos as one Telegram album; see TelegramClient.sendPhotoAlbum. */
     onSendPhotoAlbum: (List<String>, String, Message?) -> Unit = { _, _, _ -> },
+    /** A mixed share (photo/video/file), sent as one guarded sequential batch. */
+    onSendMixedBatch: (List<Pair<String, com.foresightlabs.aether.domain.sharing.SharedAttachmentKind>>, String, Message?) -> Unit = { _, _, _ -> },
     onSendVoiceNote: (String, Int, ByteArray, Message?) -> Unit = { _, _, _, _ -> },
     onEditMessage: (Message, String) -> Unit = { _, _ -> },
     onAddReaction: (Message, String) -> Unit = { _, _ -> },
@@ -486,6 +488,32 @@ fun ConversationScreen(
             if (audioRecorder.isRecording) {
                 audioRecorder.cancelRecording()
             }
+        }
+    }
+
+    // Opens a received document: the downloaded file through a view intent,
+    // or the download request when the bytes have not arrived yet. The chip
+    // is tappable only when one of the two is possible.
+    val openDocument: (com.foresightlabs.aether.domain.model.MediaItem) -> Unit = { media ->
+        val path = media.url.removePrefix("file://")
+        if (path.isNotBlank() && File(path).exists()) {
+            try {
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context, "${context.packageName}.fileprovider", File(path)
+                )
+                val extension = path.substringAfterLast('.', "").lowercase()
+                val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                    ?: "application/octet-stream"
+                context.startActivity(
+                    android.content.Intent(android.content.Intent.ACTION_VIEW)
+                        .setDataAndType(uri, mime)
+                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                )
+            } catch (t: Throwable) {
+                Toast.makeText(context, "No app can open this file", Toast.LENGTH_SHORT).show()
+            }
+        } else if (media.fileId != 0) {
+            onRequestMediaDownload(media.fileId, false)
         }
     }
 
@@ -1122,9 +1150,8 @@ fun ConversationScreen(
                         share = share,
                         replyingTo = replyingToMessage,
                         onSendPhoto = onSendPhoto,
-                        onSendVideo = onSendVideo,
-                        onSendDocument = onSendDocument,
-                        onSendPhotoAlbum = onSendPhotoAlbum
+                        onSendPhotoAlbum = onSendPhotoAlbum,
+                        onSendMixedBatch = onSendMixedBatch
                     ) }
                     replyingToMessageId = null
                     pendingShare = null
@@ -1339,6 +1366,7 @@ fun ConversationScreen(
                         isMediaViewerVisible = true
                         onOpenMessageContent(msg.id)
                     },
+                    onOpenDocument = { media -> openDocument(media) },
                     onReactionClick = { targetMsg, emoji ->
                         onAddReaction(targetMsg, emoji)
                     },
@@ -1770,9 +1798,11 @@ internal fun sendSharedAttachments(
     share: PendingShare,
     replyingTo: Message?,
     onSendPhoto: (String, String, Message?, Boolean) -> Unit,
-    onSendVideo: (String, String, Int, Message?, Boolean) -> Unit,
-    onSendDocument: (String, String, Message?) -> Unit,
-    onSendPhotoAlbum: (List<String>, String, Message?) -> Unit
+    onSendPhotoAlbum: (List<String>, String, Message?) -> Unit,
+    // A mixed share is one batch, not a burst of per-item sends: the
+    // per-item senders' in-flight guard drops every call after the first,
+    // which silently discarded all but one attachment.
+    onSendMixedBatch: (List<Pair<String, SharedAttachmentKind>>, String, Message?) -> Unit
 ) {
     val items = share.attachments
     if (items.isEmpty()) return
@@ -1781,16 +1811,16 @@ internal fun sendSharedAttachments(
         onSendPhotoAlbum(items.map { it.path }, share.caption, replyingTo)
         return
     }
-    items.forEachIndexed { index, item ->
-        // Telegram captions a group from its first member; a lone item keeps its
-        // caption either way.
-        val caption = if (index == 0) share.caption else ""
+    if (items.size == 1) {
+        val item = items.first()
         when (item.kind) {
-            SharedAttachmentKind.IMAGE -> onSendPhoto(item.path, caption, replyingTo.takeIf { index == 0 }, false)
-            SharedAttachmentKind.VIDEO -> onSendVideo(item.path, caption, 0, replyingTo.takeIf { index == 0 }, false)
-            SharedAttachmentKind.FILE -> onSendDocument(item.path, caption, replyingTo.takeIf { index == 0 })
+            SharedAttachmentKind.IMAGE -> onSendPhoto(item.path, share.caption, replyingTo, false)
+            SharedAttachmentKind.VIDEO -> onSendMixedBatch(listOf(item.path to item.kind), share.caption, replyingTo)
+            SharedAttachmentKind.FILE -> onSendMixedBatch(listOf(item.path to item.kind), share.caption, replyingTo)
         }
+        return
     }
+    onSendMixedBatch(items.map { it.path to it.kind }, share.caption, replyingTo)
 }
 
 private fun copyUriToTempFile(context: android.content.Context, uri: Uri, prefix: String): File? {

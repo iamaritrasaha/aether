@@ -3673,11 +3673,19 @@ open class TelegramClient(private val application: Application) {
             lastReadOutboxMessageId = lastRead,
             reply = replyPreview(message),
             resolvePath = ::resolveMediaPath,
-            isDownloadFailed = { failedDownloads[it] == true }
+            isDownloadFailed = { failedDownloads[it] == true },
+            resolveContentPath = ::resolvedVideoPath
         )
         mediaReferenceIndex.replace(
             MessageMediaReference(message.chatId, message.id),
-            mapped.mediaItems.mapNotNull { it.fileId.takeIf { fileId -> fileId != 0 } }.toSet()
+            // Both ids: a video item's `fileId` is its THUMBNAIL; the content
+            // file lives in `videoFileId`. Indexing only the thumbnail meant
+            // a completed video download never re-mapped the message and the
+            // viewer never learned the file had arrived.
+            mapped.mediaItems
+                .flatMap { listOf(it.fileId, it.videoFileId) }
+                .filter { it != 0 }
+                .toSet()
         )
         return mapped
     }
@@ -3689,6 +3697,24 @@ open class TelegramClient(private val application: Application) {
      * bubble shows its own pending state rather than a placeholder pretending to be
      * the content.
      */
+    /**
+     * Video-content lookup with NO download side effect: reports a path only
+     * when one is already known (on disk, or cached from a download this
+     * session completed). The video branch of the mapper deliberately avoids
+     * [resolveMediaPath] so mapping a conversation never queues every video
+     * for full-size download; this gives that branch the same
+     * download-completion visibility photos already had.
+     */
+    private fun resolvedVideoPath(file: TdApi.File?): String? {
+        if (file == null) return null
+        TelegramMappers.localPath(file)?.let { return it }
+        val cached = photoPaths["file:${file.id}"]
+        if (!cached.isNullOrBlank() && java.io.File(cached).let { it.exists() && it.length() > 0L }) {
+            return cached
+        }
+        return null
+    }
+
     private fun resolveMediaPath(file: TdApi.File?): String? {
         if (file == null) return null
         TelegramMappers.localPath(file)?.let { return it }

@@ -132,6 +132,8 @@ fun MessageBubble(
     onSwipeToReply: (Message) -> Unit,
     onLongPress: (Message) -> Unit,
     onMediaClick: (MediaItem) -> Unit,
+    /** Opens a downloaded document (or starts its download); see [FileAttachmentContent]. */
+    onOpenDocument: (MediaItem) -> Unit = {},
     onReactionClick: (Message, String) -> Unit,
     modifier: Modifier = Modifier,
     onEntityAction: (EntityAction) -> Unit = {},
@@ -498,7 +500,7 @@ fun MessageBubble(
                                                             textHandled = richTextController.handleTap(charOffset)
                                                         }
                                                     }
-                                                    if (!textHandled && (message.type == MessageType.IMAGE || message.type == MessageType.STICKER || message.type == MessageType.VIDEO_NOTE || message.type == MessageType.ANIMATION || message.mediaItems.isNotEmpty())) {
+                                                    if (!textHandled && (message.type == MessageType.IMAGE || message.type == MessageType.STICKER || message.type == MessageType.VIDEO_NOTE || message.type == MessageType.ANIMATION || (message.mediaItems.isNotEmpty() && message.type != MessageType.FILE))) {
                                                         val media = message.mediaItems.firstOrNull()
                                                         if (media != null) {
                                                             if (BuildConfig.DEBUG) {
@@ -589,7 +591,11 @@ fun MessageBubble(
                                     fileName = message.fileName ?: "Document",
                                     fileSize = message.fileSize ?: "",
                                     fileExtension = message.fileExtension ?: "FILE",
-                                    isOutgoing = isOutgoing
+                                    isOutgoing = isOutgoing,
+                                    isDownloading = message.mediaItems.firstOrNull()?.isDownloading == true,
+                                    onClick = message.mediaItems.firstOrNull()
+                                        ?.takeIf { it.fileId != 0 || it.url.isNotBlank() }
+                                        ?.let { media -> { onOpenDocument(media) } }
                                 )
                             }
                             MessageType.IMAGE -> {
@@ -957,7 +963,9 @@ private fun FileAttachmentContent(
     fileName: String,
     fileSize: String,
     fileExtension: String,
-    isOutgoing: Boolean
+    isOutgoing: Boolean,
+    isDownloading: Boolean = false,
+    onClick: (() -> Unit)? = null
 ) {
     val colors = LocalAetherColors.current
     val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
@@ -967,6 +975,17 @@ private fun FileAttachmentContent(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(contentColor.copy(alpha = if (isOutgoing) 0.15f else 0.12f))
+            // A document chip that does nothing is decoration: tapping either
+            // opens the downloaded file or starts its download. A chip with
+            // no content file at all (send failed to produce an id) stays
+            // inert -- no affordance that cannot act.
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier
+                }
+            )
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
