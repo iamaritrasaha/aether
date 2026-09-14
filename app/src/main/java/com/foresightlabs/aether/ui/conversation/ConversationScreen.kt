@@ -127,6 +127,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -179,6 +180,7 @@ import com.foresightlabs.aether.ui.conversation.MessageComposer
 import com.foresightlabs.aether.ui.design.AetherFloatingHeader
 import com.foresightlabs.aether.ui.design.AetherFloatingHeaderDefaults
 import com.foresightlabs.aether.ui.design.AetherGlass
+import com.foresightlabs.aether.ui.design.AetherGlassTokens
 import com.foresightlabs.aether.ui.design.AetherIconButton
 import com.foresightlabs.aether.ui.design.aetherChatAvatar
 import com.foresightlabs.aether.ui.design.LocalSceneHeightCache
@@ -2066,6 +2068,7 @@ fun ConversationScreen(
             visible = showJumpToLatest,
             unreadCount = unreadBadgeCount,
             reducedMotion = reducedMotion,
+            frostState = frostState,
             onClick = {
                 showJumpToLatest = false
                 coroutineScope.launch {
@@ -3039,9 +3042,11 @@ fun ConversationIdentityHeader(
  * - Visual diameter approximately 28-32dp (30dp circular or compact pill)
  * - Accessible touch target of at least 48dp x 48dp
  * - Simple downward chevron
- * - Low-contrast glass surface when idle; slightly stronger on press
+ * - Canonical Aether glass material: transparent frosted glass, specular catch light,
+ *   fine hairline edge, no thick outline, no heavy shadow
  * - Displays a small attached count badge when unread messages exist away from bottom
  * - Smooth fade + scale appear/disappear animation respecting reduced motion
+ * - Responsive press feedback utilizing Aether accent and scale
  */
 @Composable
 fun AetherJumpToLatestControl(
@@ -3049,11 +3054,17 @@ fun AetherJumpToLatestControl(
     unreadCount: Int,
     reducedMotion: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    frostState: AetherFrostState? = null
 ) {
     val colors = LocalAetherColors.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed && !reducedMotion) 0.94f else 1f,
+        animationSpec = if (reducedMotion) snap() else tween(100),
+        label = "jump_to_latest_press_scale"
+    )
 
     AnimatedVisibility(
         visible = visible,
@@ -3091,50 +3102,73 @@ fun AetherJumpToLatestControl(
                 .testTag("jump_to_latest"),
             contentAlignment = Alignment.Center
         ) {
-            val bgColor = if (isPressed) Color(0xE6262632) else Color(0xB3181820)
-            val borderColor = if (isPressed) colors.accent.copy(alpha = 0.5f) else Color(0x28FFFFFF)
-            val iconTint = if (isPressed) colors.textPrimary else colors.textSecondary.copy(alpha = 0.85f)
-
-            // Visual element: 30dp height, subtle glass, no large FAB / no heavy shadow
-            Box(
+            // Visual element: 30dp height, canonical Aether glass disc/capsule
+            AetherGlass(
+                frostState = frostState,
                 modifier = Modifier
                     .height(30.dp)
                     .defaultMinSize(minWidth = 30.dp)
-                    .clip(CircleShape)
-                    .background(bgColor)
-                    .border(0.75.dp, borderColor, CircleShape)
-                    .padding(
-                        start = if (unreadCount > 0) 7.dp else 5.dp,
-                        end = if (unreadCount > 0) 8.dp else 5.dp
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.5.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.KeyboardArrowDown,
-                        contentDescription = null,
-                        tint = iconTint,
-                        modifier = Modifier.size(17.dp)
-                    )
-                    if (unreadCount > 0) {
-                        Box(
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(colors.accent)
-                                .padding(horizontal = 4.5.dp, vertical = 0.5.dp)
-                                .testTag("jump_to_latest_unread_badge"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (unreadCount >= 99) "99+" else unreadCount.toString(),
-                                fontFamily = SpaceGroteskFontFamily,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colors.surface
+                    .graphicsLayer {
+                        scaleX = pressScale
+                        scaleY = pressScale
+                    }
+                    .then(
+                        if (isPressed) {
+                            Modifier.border(
+                                width = AetherGlassTokens.BorderWidth,
+                                color = colors.accent.copy(alpha = 0.45f),
+                                shape = CircleShape
                             )
+                        } else {
+                            Modifier
+                        }
+                    ),
+                shape = CircleShape,
+                elevation = 0.dp
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (isPressed) {
+                                Modifier.background(colors.accentSubtle)
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .padding(
+                            start = if (unreadCount > 0) 7.dp else 5.dp,
+                            end = if (unreadCount > 0) 8.dp else 5.dp
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.5.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = if (isPressed) colors.textPrimary else colors.textSecondary,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        if (unreadCount > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(colors.accent)
+                                    .padding(horizontal = 4.5.dp, vertical = 0.5.dp)
+                                    .testTag("jump_to_latest_unread_badge"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (unreadCount >= 99) "99+" else unreadCount.toString(),
+                                    fontFamily = SpaceGroteskFontFamily,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colors.surface
+                                )
+                            }
                         }
                     }
                 }
