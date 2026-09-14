@@ -56,8 +56,8 @@ android {
     applicationId = "com.foresightlabs.aether"
     minSdk = 24
     targetSdk = 37
-    versionCode = 12
-    versionName = "1.5.6"
+    versionCode = 14
+    versionName = "1.6.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
