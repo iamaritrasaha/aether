@@ -126,10 +126,19 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import com.foresightlabs.aether.ui.design.AetherAccent
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.focus.FocusRequester
@@ -1017,12 +1026,20 @@ fun ConversationScreen(
     LaunchedEffect(replyingToMessage?.id, editingMessage?.id, latestMessageId) {
         composerSessionSettled = false
     }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex to listState.layoutInfo.totalItemsCount }
+    LaunchedEffect(listState, hasSettledInitialPosition, jumpTarget) {
+        snapshotFlow {
+            val total = listState.layoutInfo.totalItemsCount
+            val first = listState.firstVisibleItemIndex
+            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            Triple(first, last, total)
+        }
             .distinctUntilChanged()
-            .collect { (index, totalItems) ->
-                if (index <= 1 && messages.size >= 15) onLoadOlder()
-                if (totalItems > 0 && index >= totalItems - 3) showJumpToLatest = false
+            .collect { (firstIndex, lastIndex, totalItems) ->
+                if (firstIndex <= 1 && messages.size >= 15) onLoadOlder()
+                if (totalItems > 0 && hasSettledInitialPosition && jumpTarget == null) {
+                    val nearBottom = lastIndex >= totalItems - 2
+                    showJumpToLatest = !nearBottom
+                }
                 val visibleMsgs = listState.layoutInfo.visibleItemsInfo
                     .flatMap { info -> rowMessages.getOrNull(info.index).orEmpty() }
                 // The reader has now seen everything incoming in the viewport;
@@ -2045,58 +2062,31 @@ fun ConversationScreen(
             )
         }
 
-        if (showJumpToLatest) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 16.dp)
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xE51B1B22))
-                    .border(1.dp, colors.accentSubtle, CircleShape)
-                    .clickable {
-                        coroutineScope.launch {
-                            if (displayRows.isNotEmpty()) listState.animateScrollToItem(displayRows.lastIndex)
-                            // Landing on the newest message retires the unread
-                            // orientation for the session.
-                            lastSeenIncomingId = (
-                                messages.maxOfOrNull { message ->
-                                    if (!message.isOutgoing) message.id.toLongOrNull() ?: 0L else 0L
-                                } ?: 0L
-                                ).coerceAtLeast(lastSeenIncomingId)
-                            showJumpToLatest = false
-                        }
+        AetherJumpToLatestControl(
+            visible = showJumpToLatest,
+            unreadCount = unreadBadgeCount,
+            reducedMotion = reducedMotion,
+            onClick = {
+                showJumpToLatest = false
+                coroutineScope.launch {
+                    if (displayRows.isNotEmpty()) {
+                        val lastIndex = displayRows.lastIndex
+                        if (reducedMotion) listState.scrollToItem(lastIndex)
+                        else listState.animateScrollToItem(lastIndex)
                     }
-                    .testTag("jump_to_latest"),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.KeyboardArrowDown,
-                    contentDescription = "Jump to latest message",
-                    tint = colors.accentSubtle,
-                    modifier = Modifier.size(25.dp)
-                )
-                if (unreadBadgeCount > 0) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .offset(x = 6.dp, y = (-2).dp)
-                            .clip(AetherEmber.Shapes.Pill)
-                            .background(colors.accent)
-                            .padding(horizontal = 5.dp, vertical = 1.dp)
-                            .testTag("jump_to_latest_unread_badge")
-                    ) {
-                        Text(
-                            text = if (unreadBadgeCount >= 99) "99+" else unreadBadgeCount.toString(),
-                            fontFamily = ManropeFontFamily,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
+                    // Landing on the newest message retires the unread
+                    // orientation for the session.
+                    lastSeenIncomingId = (
+                        messages.maxOfOrNull { message ->
+                            if (!message.isOutgoing) message.id.toLongOrNull() ?: 0L else 0L
+                        } ?: 0L
+                    ).coerceAtLeast(lastSeenIncomingId)
                 }
-            }
-        }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 12.dp)
+        )
 
         // The way back from a reply jump: returns the reader to the exact
         // position the jump took them away from, then disappears.
@@ -2108,7 +2098,7 @@ fun ConversationScreen(
                 androidx.compose.animation.slideOutVertically(tween(ConversationMotion.FAST_MS)) { it / 3 },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = if (showJumpToLatest) 76.dp else 16.dp)
+                .padding(bottom = 14.dp)
         ) {
             Row(
                 modifier = Modifier
@@ -3035,6 +3025,117 @@ fun ConversationIdentityHeader(
                             tint = colors.textSecondary,
                             modifier = Modifier.testTag("pinned_unpin")
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Minimal Aether jump-to-latest control.
+ *
+ * Restrained, lightweight conversation affordance:
+ * - Visual diameter approximately 28-32dp (30dp circular or compact pill)
+ * - Accessible touch target of at least 48dp x 48dp
+ * - Simple downward chevron
+ * - Low-contrast glass surface when idle; slightly stronger on press
+ * - Displays a small attached count badge when unread messages exist away from bottom
+ * - Smooth fade + scale appear/disappear animation respecting reduced motion
+ */
+@Composable
+fun AetherJumpToLatestControl(
+    visible: Boolean,
+    unreadCount: Int,
+    reducedMotion: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalAetherColors.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = if (reducedMotion) {
+            fadeIn(animationSpec = snap())
+        } else {
+            fadeIn(animationSpec = tween(ConversationMotion.FAST_MS)) +
+                scaleIn(initialScale = 0.82f, animationSpec = tween(ConversationMotion.FAST_MS))
+        },
+        exit = if (reducedMotion) {
+            fadeOut(animationSpec = snap())
+        } else {
+            fadeOut(animationSpec = tween(ConversationMotion.FAST_MS)) +
+                scaleOut(targetScale = 0.82f, animationSpec = tween(ConversationMotion.FAST_MS))
+        },
+        modifier = modifier
+    ) {
+        // Outer invisible hit box: at least 48dp x 48dp for accessibility
+        Box(
+            modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = onClick
+                )
+                .semantics {
+                    contentDescription = if (unreadCount > 0) {
+                        "Jump to latest message, $unreadCount unread"
+                    } else {
+                        "Jump to latest message"
+                    }
+                    role = Role.Button
+                }
+                .testTag("jump_to_latest"),
+            contentAlignment = Alignment.Center
+        ) {
+            val bgColor = if (isPressed) Color(0xE6262632) else Color(0xB3181820)
+            val borderColor = if (isPressed) colors.accent.copy(alpha = 0.5f) else Color(0x28FFFFFF)
+            val iconTint = if (isPressed) colors.textPrimary else colors.textSecondary.copy(alpha = 0.85f)
+
+            // Visual element: 30dp height, subtle glass, no large FAB / no heavy shadow
+            Box(
+                modifier = Modifier
+                    .height(30.dp)
+                    .defaultMinSize(minWidth = 30.dp)
+                    .clip(CircleShape)
+                    .background(bgColor)
+                    .border(0.75.dp, borderColor, CircleShape)
+                    .padding(
+                        start = if (unreadCount > 0) 7.dp else 5.dp,
+                        end = if (unreadCount > 0) 8.dp else 5.dp
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.5.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = iconTint,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    if (unreadCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(colors.accent)
+                                .padding(horizontal = 4.5.dp, vertical = 0.5.dp)
+                                .testTag("jump_to_latest_unread_badge"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (unreadCount >= 99) "99+" else unreadCount.toString(),
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colors.surface
+                            )
+                        }
                     }
                 }
             }
