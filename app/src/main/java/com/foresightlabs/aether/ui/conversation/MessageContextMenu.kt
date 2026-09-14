@@ -93,7 +93,13 @@ fun MessageContextMenu(
     canReact: Boolean = true,
     allowSelect: Boolean = true,
     /** Whether THIS message is already bookmarked on this device -- relabels the action. */
-    isBookmarked: Boolean = false
+    isBookmarked: Boolean = false,
+    /**
+     * Applied to the full-screen scrim. The host must lift the menu above every
+     * layer it overlays (zIndex): composed last is NOT drawn last when siblings
+     * carry explicit z-indices.
+     */
+    modifier: Modifier = Modifier
 ) {
     if (message == null || !isVisible) return
 
@@ -109,7 +115,7 @@ fun MessageContextMenu(
     val reactions = listOf("❤️", "🔥", "👍", "😂", "👏", "🚀", "⚡")
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.65f))
             .clickable(

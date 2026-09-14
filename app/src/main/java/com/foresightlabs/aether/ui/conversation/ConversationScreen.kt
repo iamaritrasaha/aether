@@ -2090,8 +2090,12 @@ fun ConversationScreen(
 
         BackHandler(enabled = searchState.isActive) { onCloseSearch() }
 
-        // Context Menu Overlay for Message
+        // Context Menu Overlay for Message. Above every layer of this Box: the
+        // Curtain is zIndex 0, the canvas 1, the header 2 -- without its own
+        // z-index the menu is composed but drawn (and hit-tested) under the
+        // canvas, i.e. invisible and untappable.
         MessageContextMenu(
+            modifier = Modifier.zIndex(3f),
             message = selectedContextMenuMessage,
             capabilities = selectedContextMenuMessage?.let { messageCapabilities[it.id] } ?: MessageCapabilities.Unknown,
             isVisible = isContextMenuVisible,
