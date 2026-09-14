@@ -133,6 +133,13 @@ class CallService : Service() {
 
         val notification = buildNotification(name, isConnected, isVideo)
         try {
+            // Lint reads the RELEASE merged manifest, where this service is
+            // deliberately stripped (calling is compiled out of the Play build,
+            // see src/release/AndroidManifest.xml). Every build that declares
+            // the service types it foregroundServiceType="microphone", and this
+            // line is unreachable in a build without it (CALLS_ENABLED guard
+            // above returns first).
+            @android.annotation.SuppressLint("ForegroundServiceType")
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
             CallDiagnostics.stage(generation, CallStage.SERVICE_STARTED, "video=$isVideo connected=$isConnected")
         } catch (t: Throwable) {
