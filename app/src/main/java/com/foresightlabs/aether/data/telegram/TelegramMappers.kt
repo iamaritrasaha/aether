@@ -46,7 +46,9 @@ object TelegramMappers {
                 hint = codeHint(state.codeInfo),
                 isNumeric = codeIsNumeric(state.codeInfo?.type),
                 timeoutSeconds = state.codeInfo?.timeout ?: 0,
-                nextTypeDescription = nextTypeLabel(state.codeInfo?.nextType)
+                nextTypeDescription = nextTypeLabel(state.codeInfo?.nextType),
+                delivery = codeDelivery(state.codeInfo?.type),
+                nextDelivery = state.codeInfo?.nextType?.let(::codeDelivery)
             )
             is TdApi.AuthorizationStateWaitPassword -> AuthUiState.Password(
                 hint = state.passwordHint?.takeIf { it.isNotBlank() },
@@ -1221,7 +1223,7 @@ object TelegramMappers {
         val type = info?.type ?: return "Enter the verification code from Telegram."
         return when (type) {
             is TdApi.AuthenticationCodeTypeTelegramMessage ->
-                "Telegram sent the code to your other logged-in Telegram session."
+                "We sent the code to your Telegram app on another device. Open Telegram there -- it arrives as a message from Telegram."
             is TdApi.AuthenticationCodeTypeSms ->
                 "We sent an SMS with a code to ${maskedPhone(info.phoneNumber)}."
             is TdApi.AuthenticationCodeTypeSmsWord ->
@@ -1231,16 +1233,33 @@ object TelegramMappers {
             is TdApi.AuthenticationCodeTypeCall ->
                 "Telegram will call ${maskedPhone(info.phoneNumber)} with a code."
             is TdApi.AuthenticationCodeTypeMissedCall ->
-                "Telegram will call ${maskedPhone(info.phoneNumber)} and hang up."
+                "Telegram will call ${maskedPhone(info.phoneNumber)} and hang up. Enter the last ${type.length} digits of the number that called."
             is TdApi.AuthenticationCodeTypeFlashCall ->
                 "Telegram will call ${maskedPhone(info.phoneNumber)} to verify this number."
             is TdApi.AuthenticationCodeTypeFragment ->
                 "Enter the verification code from Fragment."
+            // Firebase SMS needs a Google Play Integrity token that only
+            // Telegram's own apps can produce: Aether would wait forever for
+            // an SMS that is never sent. Say so, and point at the ways in.
             is TdApi.AuthenticationCodeTypeFirebaseAndroid,
             is TdApi.AuthenticationCodeTypeFirebaseIos ->
-                "We sent an SMS with a code to ${maskedPhone(info.phoneNumber)}."
+                "Telegram wants to verify this number through Google Play, which only Telegram's own apps can do. Sign in with a QR code from a device where you're logged in."
             else -> "Enter the verification code from Telegram."
         }
+    }
+
+    fun codeDelivery(type: TdApi.AuthenticationCodeType?): AuthUiState.CodeDelivery = when (type) {
+        is TdApi.AuthenticationCodeTypeTelegramMessage -> AuthUiState.CodeDelivery.TELEGRAM_APP
+        is TdApi.AuthenticationCodeTypeSms -> AuthUiState.CodeDelivery.SMS
+        is TdApi.AuthenticationCodeTypeSmsWord -> AuthUiState.CodeDelivery.SMS_WORD
+        is TdApi.AuthenticationCodeTypeSmsPhrase -> AuthUiState.CodeDelivery.SMS_PHRASE
+        is TdApi.AuthenticationCodeTypeCall -> AuthUiState.CodeDelivery.CALL
+        is TdApi.AuthenticationCodeTypeMissedCall -> AuthUiState.CodeDelivery.MISSED_CALL
+        is TdApi.AuthenticationCodeTypeFlashCall -> AuthUiState.CodeDelivery.FLASH_CALL
+        is TdApi.AuthenticationCodeTypeFragment -> AuthUiState.CodeDelivery.FRAGMENT
+        is TdApi.AuthenticationCodeTypeFirebaseAndroid,
+        is TdApi.AuthenticationCodeTypeFirebaseIos -> AuthUiState.CodeDelivery.FIREBASE_SMS
+        else -> AuthUiState.CodeDelivery.OTHER
     }
 
     private fun nextTypeLabel(nextType: TdApi.AuthenticationCodeType?): String? {

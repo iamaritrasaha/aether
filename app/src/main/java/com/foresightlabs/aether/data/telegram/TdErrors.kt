@@ -27,6 +27,18 @@ object TdErrors {
                 "This phone number is banned on Telegram."
             raw.contains("PHONE_NUMBER_FLOOD", ignoreCase = true) ->
                 "Too many attempts for this phone number. Please wait before requesting another code."
+            // Telegram restricts some code deliveries (Firebase SMS above all) to
+            // its own apps. These say so, and point at what Aether CAN use.
+            raw.contains("UPDATE_APP_TO_LOGIN", ignoreCase = true) ->
+                "Telegram only lets its own apps finish this sign-in for this account. Sign in with a QR code from a device where you're already logged in."
+            raw.contains("SMS_CODE_CREATE_FAILED", ignoreCase = true) ->
+                "Telegram couldn't send an SMS code right now. Check Telegram on your other device, or sign in with a QR code."
+            raw.contains("SEND_CODE_UNAVAILABLE", ignoreCase = true) ->
+                "Telegram has no other way to send a code right now. Use the code you already have, or sign in with a QR code."
+            raw.contains("PHONE_CODE_EMPTY", ignoreCase = true) ->
+                "Enter the verification code."
+            raw.contains("AUTH_RESTART", ignoreCase = true) ->
+                "Telegram restarted this sign-in. Enter your phone number again."
             raw.contains("PHONE_NUMBER_APP_SIGNUP_FORBIDDEN", ignoreCase = true) ->
                 "Signing up is disabled for this application. Please create your account in an official Telegram app first, then sign in here."
             raw.contains("PHONE_CODE_INVALID", ignoreCase = true) ->
@@ -62,6 +74,13 @@ object TdErrors {
             else -> "Couldn't complete that request. ${sanitize(raw)}"
         }
     }
+
+    /**
+     * The error's Telegram constant ("PHONE_CODE_EXPIRED", "FLOOD_WAIT_30"),
+     * safe for a debug log: never the free text, which can echo input back.
+     */
+    fun token(error: TdApi.Error): String =
+        Regex("[A-Z][A-Z0-9_]{2,}").find(error.message.orEmpty())?.value ?: "code_${error.code}"
 
     private fun sanitize(raw: String): String {
         return raw

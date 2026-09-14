@@ -110,7 +110,19 @@ class AuthViewModel @JvmOverloads constructor(
     }
 
     fun resendCode() {
+        // TDLib rejects a resend when Telegram named no next way (and a
+        // Firebase one cannot be received here): never send one it will refuse.
+        val state = authState.value
+        if (state is AuthUiState.Code && !state.canResend) {
+            if (BuildConfig.DEBUG) Log.d("AetherAuth", "RESEND_RESULT=skipped_no_usable_next_type")
+            return
+        }
         runRequest("resendCode") { telegram.resendCode() }
+    }
+
+    /** Back to the phone step from a sign-in Aether cannot finish. */
+    fun startOver() {
+        runRequest("restartSignIn") { telegram.restartSignIn() }
     }
 
     fun submitEmailAddress(email: String) {

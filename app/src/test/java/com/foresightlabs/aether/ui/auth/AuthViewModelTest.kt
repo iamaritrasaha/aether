@@ -49,6 +49,12 @@ class AuthViewModelTest {
         override val authState: StateFlow<AuthUiState> = mutableAuthState.asStateFlow()
 
         var submitPhoneCallCount = 0
+        var resendCallCount = 0
+
+        override suspend fun resendCode(): Result<Unit> {
+            resendCallCount++
+            return Result.success(Unit)
+        }
         var submitCodeCallCount = 0
         var submitPasswordCallCount = 0
 
@@ -239,5 +245,29 @@ class AuthViewModelTest {
         viewModel.submitCode("12345")
         advanceUntilIdle()
         assertEquals(2, fakeClient.submitCodeCallCount)
+    }
+
+    @Test
+    fun resendIsNeverSentWhenTelegramNamedNoUsableNextWay() = runTest(testDispatcher) {
+        val fake = FakeTelegramClient(application)
+        val viewModel = AuthViewModel(application, fake)
+        fake.mutableAuthState.value = AuthUiState.Code("+1", 5, "hint", nextDelivery = null)
+        advanceUntilIdle()
+
+        viewModel.resendCode()
+        advanceUntilIdle()
+        assertEquals("no next type: TDLib would refuse it", 0, fake.resendCallCount)
+
+        fake.mutableAuthState.value = AuthUiState.Code("+1", 5, "hint", nextDelivery = AuthUiState.CodeDelivery.FIREBASE_SMS)
+        advanceUntilIdle()
+        viewModel.resendCode()
+        advanceUntilIdle()
+        assertEquals("a Firebase resend cannot be received by this app", 0, fake.resendCallCount)
+
+        fake.mutableAuthState.value = AuthUiState.Code("+1", 5, "hint", nextDelivery = AuthUiState.CodeDelivery.SMS)
+        advanceUntilIdle()
+        viewModel.resendCode()
+        advanceUntilIdle()
+        assertEquals(1, fake.resendCallCount)
     }
 }

@@ -77,6 +77,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.contentDescription
@@ -134,6 +135,8 @@ fun AuthScreen(
     onResetEmailAddress: () -> Unit = {},
     onRequestPasswordRecovery: () -> Unit = {},
     onUsePasskey: (android.content.Context) -> Unit = {},
+    /** Leaves a sign-in Aether cannot finish and returns to the phone step. */
+    onStartOver: () -> Unit = {},
     passwordRecoveryRequested: Boolean = false,
     initialPhoneEntry: Boolean = false
 ) {
@@ -180,7 +183,7 @@ fun AuthScreen(
                     else (fadeIn(tween(360)) + slideInVertically(tween(420)) { it / 12 }) togetherWith (fadeOut(tween(220)) + slideOutVertically(tween(300)) { -it / 18 })
                 }, label = "auth_room_transform"
             ) {
-                AuthContent(state, showPhoneEntry, busy, error, selectedCountry, { showCountries = true }, { showPhoneEntry = true }, onRequestQrCode, { onUsePasskey(context) }, onSubmitPhone, onSubmitCode, onSubmitPassword, onRegister, onResendCode, onSubmitEmailAddress, onSubmitEmailCode, onResetEmailAddress, onRequestPasswordRecovery, passwordRecoveryRequested)
+                AuthContent(state, showPhoneEntry, busy, error, selectedCountry, { showCountries = true }, { showPhoneEntry = true }, onRequestQrCode, { onUsePasskey(context) }, onSubmitPhone, onSubmitCode, onSubmitPassword, onRegister, onResendCode, onSubmitEmailAddress, onSubmitEmailCode, onResetEmailAddress, onRequestPasswordRecovery, passwordRecoveryRequested, onStartOver)
             }
             Spacer(Modifier.height(20.dp))
             Text(
@@ -223,7 +226,7 @@ private fun AuthIdentity(state: AuthUiState, alpha: Float, reducedMotion: Boolea
 private fun authHeadline(state: AuthUiState): String = when (state) {
     AuthUiState.Initializing -> "Preparing Aether…"
     AuthUiState.MissingCredentials -> "Welcome to Aether"
-    is AuthUiState.Code -> "Check Telegram"
+    is AuthUiState.Code -> codeHeadline(state.delivery)
     is AuthUiState.Password -> if (state.recoveryEmailAddressPattern?.isNotBlank() == true) "Recover access" else "Two-Step Verification"
     is AuthUiState.EmailAddress -> "Verify your email"
     is AuthUiState.EmailCode -> "Check your email"
@@ -231,6 +234,28 @@ private fun authHeadline(state: AuthUiState): String = when (state) {
     is AuthUiState.OtherDevice -> "Sign in with QR"
     is AuthUiState.Unsupported -> "Aether needs another sign-in step"
     else -> "Welcome to Aether"
+}
+
+private fun codeInstruction(state: AuthUiState.Code): String = when {
+    state.isUnreachableForThisApp -> "If a code does reach you another way, you can still enter it here."
+    state.delivery == AuthUiState.CodeDelivery.SMS_WORD -> "Enter the word from the SMS."
+    state.delivery == AuthUiState.CodeDelivery.SMS_PHRASE -> "Enter the phrase from the SMS."
+    state.codeLength != null -> "Enter the ${state.codeLength}-digit code."
+    else -> "Enter the code."
+}
+
+/** Says where to look -- "Check Telegram" only when Telegram itself has the code. */
+private fun codeHeadline(delivery: AuthUiState.CodeDelivery): String = when (delivery) {
+    AuthUiState.CodeDelivery.TELEGRAM_APP -> "Check Telegram"
+    AuthUiState.CodeDelivery.SMS,
+    AuthUiState.CodeDelivery.SMS_WORD,
+    AuthUiState.CodeDelivery.SMS_PHRASE -> "Check your messages"
+    AuthUiState.CodeDelivery.CALL,
+    AuthUiState.CodeDelivery.MISSED_CALL,
+    AuthUiState.CodeDelivery.FLASH_CALL -> "Check your calls"
+    AuthUiState.CodeDelivery.FRAGMENT -> "Check Fragment"
+    AuthUiState.CodeDelivery.FIREBASE_SMS -> "Sign in another way"
+    AuthUiState.CodeDelivery.OTHER -> "Enter your code"
 }
 
 private fun authSupportingCopy(state: AuthUiState): String = when (state) {
@@ -242,7 +267,7 @@ private fun authSupportingCopy(state: AuthUiState): String = when (state) {
     is AuthUiState.EmailCode -> "Enter the code Telegram sent to ${state.addressPattern.ifBlank { "your email" }}."
     is AuthUiState.Registration -> "Finishing registration accepts Telegram's supplied terms."
     is AuthUiState.OtherDevice -> "Open Telegram on a signed-in device to scan this code."
-    is AuthUiState.Unsupported -> "Aether can't complete this sign-in method yet."
+    is AuthUiState.Unsupported -> state.description.ifBlank { "Aether can't complete this sign-in method yet." }
     else -> "Your Telegram conversations, in a quieter place."
 }
 
@@ -261,11 +286,11 @@ private fun authContentKey(state: AuthUiState, phone: Boolean, recovery: Boolean
 }
 
 @Composable
-private fun AuthContent(state: AuthUiState, showPhoneEntry: Boolean, busy: Boolean, error: String?, country: CountryDial, onCountryClick: () -> Unit, onChoosePhone: () -> Unit, onRequestQrCode: () -> Unit, onUsePasskey: () -> Unit, onSubmitPhone: (String) -> Unit, onSubmitCode: (String) -> Unit, onSubmitPassword: (String) -> Unit, onRegister: (String, String) -> Unit, onResendCode: () -> Unit, onSubmitEmailAddress: (String) -> Unit, onSubmitEmailCode: (String) -> Unit, onResetEmailAddress: () -> Unit, onRequestPasswordRecovery: () -> Unit, passwordRecoveryRequested: Boolean) {
+private fun AuthContent(state: AuthUiState, showPhoneEntry: Boolean, busy: Boolean, error: String?, country: CountryDial, onCountryClick: () -> Unit, onChoosePhone: () -> Unit, onRequestQrCode: () -> Unit, onUsePasskey: () -> Unit, onSubmitPhone: (String) -> Unit, onSubmitCode: (String) -> Unit, onSubmitPassword: (String) -> Unit, onRegister: (String, String) -> Unit, onResendCode: () -> Unit, onSubmitEmailAddress: (String) -> Unit, onSubmitEmailCode: (String) -> Unit, onResetEmailAddress: () -> Unit, onRequestPasswordRecovery: () -> Unit, passwordRecoveryRequested: Boolean, onStartOver: () -> Unit = {}) {
     when {
         state is AuthUiState.Phone && !showPhoneEntry -> LandingChoices(busy, onChoosePhone, onRequestQrCode, onUsePasskey)
         state is AuthUiState.Phone -> PhoneStep(busy, error, country, onCountryClick, onSubmitPhone)
-        state is AuthUiState.Code -> CodeStep(state, busy, error, onSubmitCode, onResendCode)
+        state is AuthUiState.Code -> CodeStep(state, busy, error, onSubmitCode, onResendCode, onRequestQrCode)
         state is AuthUiState.Password -> PasswordStep(state, passwordRecoveryRequested, busy, error, onSubmitPassword, onRequestPasswordRecovery)
         state is AuthUiState.EmailAddress -> EmailAddressStep(busy, error, onSubmitEmailAddress)
         state is AuthUiState.EmailCode -> EmailCodeStep(state, busy, error, onSubmitEmailCode, onResendCode, onResetEmailAddress)
@@ -273,7 +298,7 @@ private fun AuthContent(state: AuthUiState, showPhoneEntry: Boolean, busy: Boole
         state is AuthUiState.OtherDevice -> QrStep(state, busy)
         state is AuthUiState.Initializing -> PreparingStep()
         state is AuthUiState.MissingCredentials -> ConfigurationStep()
-        state is AuthUiState.Unsupported -> UnsupportedStep()
+        state is AuthUiState.Unsupported -> UnsupportedStep(state, busy, error, onStartOver)
     }
 }
 
@@ -312,10 +337,13 @@ private fun PhoneStep(busy: Boolean, error: String?, country: CountryDial, onCou
 }
 
 @Composable
-private fun CodeStep(state: AuthUiState.Code, busy: Boolean, error: String?, onSubmit: (String) -> Unit, onResend: () -> Unit) {
+private fun CodeStep(state: AuthUiState.Code, busy: Boolean, error: String?, onSubmit: (String) -> Unit, onResend: () -> Unit, onUseQrCode: () -> Unit) {
     // Saveable: an SMS code typed mid-login survives rotation.
     var code by rememberSaveable { mutableStateOf("") }
-    var timerSeconds by remember(state.timeoutSeconds) { mutableIntStateOf(state.timeoutSeconds) }
+    // Keyed on the whole state: a resend brings a new code info (new type,
+    // new timeout) and the countdown must start over even if the number of
+    // seconds happens to match the last one.
+    var timerSeconds by remember(state) { mutableIntStateOf(state.timeoutSeconds) }
 
     LaunchedEffect(timerSeconds) {
         if (timerSeconds > 0) {
@@ -326,7 +354,9 @@ private fun CodeStep(state: AuthUiState.Code, busy: Boolean, error: String?, onS
 
     CodeEntry(
         title = "Verification code",
-        supporting = state.hint.ifBlank { "Enter the code Telegram sent you." },
+        // The header already says where the code went (state.hint); the step
+        // says what to type -- never the same sentence twice.
+        supporting = codeInstruction(state),
         code = code,
         length = state.codeLength,
         timeoutSeconds = timerSeconds,
@@ -339,8 +369,22 @@ private fun CodeStep(state: AuthUiState.Code, busy: Boolean, error: String?, onS
         },
         onSubmit = { onSubmit(code) },
         resend = onResend,
+        canResend = state.canResend,
         keyboardType = if (state.isNumeric) KeyboardType.Number else KeyboardType.Text
     )
+    // Always offered: the code may be on a device the person does not have to
+    // hand, or Telegram may have picked a delivery Aether cannot receive.
+    TextButton(
+        onClick = onUseQrCode,
+        enabled = !busy,
+        modifier = Modifier.height(48.dp).testTag("auth_code_use_qr")
+    ) {
+        Text(
+            if (state.isUnreachableForThisApp) "Sign in with QR code" else "Sign in with QR code instead",
+            color = if (state.isUnreachableForThisApp) AuthText else AuthSecondary,
+            fontSize = 13.sp
+        )
+    }
 }
 
 @Composable
@@ -376,6 +420,8 @@ private fun CodeEntry(
     onCodeChange: (String) -> Unit,
     onSubmit: () -> Unit,
     resend: () -> Unit,
+    /** False when Telegram offers no other way to send the code: no resend control at all. */
+    canResend: Boolean = true,
     keyboardType: KeyboardType = KeyboardType.Number
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -391,18 +437,21 @@ private fun CodeEntry(
             BasicTextField(value = code, onValueChange = onCodeChange, modifier = Modifier.fillMaxWidth().height(62.dp).focusRequester(focusRequester).alpha(0.02f).semantics { contentDescription = "$title. ${length ?: "Adaptive"} characters." }, textStyle = TextStyle(color = AuthText, fontSize = 20.sp, textAlign = TextAlign.Center), cursorBrush = SolidColor(AetherAuthMist), keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { onSubmit() }), singleLine = true)
         }
         PrimaryAuthButton("Continue", busy, code.isNotEmpty()) { onSubmit() }
-        val canResend = !busy && timeoutSeconds <= 0
-        TextButton(
-            onClick = resend,
-            modifier = Modifier.height(48.dp),
-            enabled = canResend
-        ) {
-            val resendText = when {
-                timeoutSeconds > 0 -> "Resend code in ${timeoutSeconds}s"
-                nextTypeDescription != null -> "Resend code via $nextTypeDescription"
-                else -> "Resend code"
+        if (canResend) {
+            val resendReady = !busy && timeoutSeconds <= 0
+            val via = nextTypeDescription?.let { " via $it" }.orEmpty()
+            TextButton(
+                onClick = resend,
+                modifier = Modifier.height(48.dp).testTag("auth_resend_code"),
+                enabled = resendReady
+            ) {
+                val resendText = if (timeoutSeconds > 0) {
+                    "Send the code$via in %d:%02d".format(timeoutSeconds / 60, timeoutSeconds % 60)
+                } else {
+                    "Send the code$via"
+                }
+                Text(resendText, color = if (resendReady) AuthSecondary else AuthMuted, fontSize = 13.sp)
             }
-            Text(resendText, color = if (canResend) AuthSecondary else AuthMuted, fontSize = 13.sp)
         }
         AuthError(error)
     }
@@ -464,7 +513,18 @@ private fun createQrBitmap(value: String): Bitmap? = runCatching {
 
 @Composable private fun PreparingStep() = Text("Aether is opening a quiet room for your conversations.", color = AuthSecondary, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 320.dp))
 @Composable private fun ConfigurationStep() = Text("Aether is not configured for this release.", color = AuthSecondary, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 320.dp))
-@Composable private fun UnsupportedStep() = Text("Aether can't complete this sign-in method yet.", color = AuthSecondary, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 320.dp))
+/**
+ * A sign-in Aether cannot finish never spins: it says why (Telegram's own
+ * reason when there is one) and offers the way back to a method that works.
+ */
+@Composable
+private fun UnsupportedStep(state: AuthUiState.Unsupported, busy: Boolean, error: String?, onStartOver: () -> Unit) {
+    Column(Modifier.widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("You can start over and sign in with your phone number or a QR code.", color = AuthMuted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 320.dp))
+        Box(Modifier.testTag("auth_start_over")) { PrimaryAuthButton("Start over", busy) { onStartOver() } }
+        AuthError(error)
+    }
+}
 
 @Composable
 private fun InputSurface(value: String, onValueChange: (String) -> Unit, placeholder: String, keyboardType: KeyboardType, imeAction: ImeAction, onImeAction: () -> Unit = {}, visualTransformation: VisualTransformation = VisualTransformation.None, trailing: (@Composable (() -> Unit))? = null, modifier: Modifier = Modifier.fillMaxWidth()) {

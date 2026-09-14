@@ -406,7 +406,28 @@ open class TelegramClient(private val application: Application) {
     }
 
     open suspend fun resendCode(): Result<Unit> {
-        return sendExpectOk(TdApi.ResendAuthenticationCode(null))
+        val result = send(TdApi.ResendAuthenticationCode(null))
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d(TAG, "RESEND_RESULT=${if (result is TdApi.Error) TdErrors.token(result) else "success"}")
+        }
+        return if (result is TdApi.Error) {
+            Result.failure(IllegalStateException(TdErrors.userMessage(result)))
+        } else {
+            Result.success(Unit)
+        }
+    }
+
+    /**
+     * Abandons a sign-in Aether cannot finish -- a method only Telegram's own
+     * apps support -- and returns to the phone step. Refused once signed in:
+     * on an unauthorized session LogOut only resets the authorization, which
+     * is the whole point; on a real session it would end it.
+     */
+    open suspend fun restartSignIn(): Result<Unit> {
+        if (_authState.value is AuthUiState.Ready) {
+            return Result.failure(IllegalStateException("Already signed in."))
+        }
+        return sendExpectOk(TdApi.LogOut())
     }
 
     suspend fun logOut(): Result<Unit> {
@@ -3379,6 +3400,20 @@ open class TelegramClient(private val application: Application) {
     private suspend fun onAuth(state: TdApi.AuthorizationState) {
         if (state !is TdApi.AuthorizationStateWaitTdlibParameters) {
             parametersApplied.complete(Unit)
+        }
+        if (BuildConfig.DEBUG) {
+            // Types and timings only: never the phone number, a code, a
+            // password or an email address.
+            val codeInfo = (state as? TdApi.AuthorizationStateWaitCode)?.codeInfo
+            android.util.Log.d(TAG, buildString {
+                append("AUTH_STATE=").append(state.javaClass.simpleName.removePrefix("AuthorizationState"))
+                if (codeInfo != null) {
+                    append(" CODE_TYPE=").append(codeInfo.type?.javaClass?.simpleName?.removePrefix("AuthenticationCodeType"))
+                    append(" NEXT_CODE_TYPE=").append(codeInfo.nextType?.javaClass?.simpleName?.removePrefix("AuthenticationCodeType") ?: "none")
+                    append(" TIMEOUT=").append(codeInfo.timeout)
+                    append(" CODE_LENGTH=").append(TelegramMappers.codeLength(codeInfo.type) ?: "adaptive")
+                }
+            })
         }
         when (state) {
             is TdApi.AuthorizationStateWaitTdlibParameters -> applyParameters()

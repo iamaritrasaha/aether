@@ -173,6 +173,7 @@ fun AetherApp(
             onResetEmailAddress = authViewModel::resetEmailAddress,
             onRequestPasswordRecovery = authViewModel::requestPasswordRecovery,
             onUsePasskey = authViewModel::usePasskey,
+            onStartOver = authViewModel::startOver,
             passwordRecoveryRequested = authViewModel.passwordRecoveryRequested.collectAsStateWithLifecycle().value
         )
         return

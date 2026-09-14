@@ -142,7 +142,8 @@ class TelegramMappingTest {
       TdApi.AuthenticationCodeInfo("+15551212", TdApi.AuthenticationCodeTypeTelegramMessage(5), TdApi.AuthenticationCodeTypeSms(5), 45)
     )
     val mapped = TelegramMappers.mapAuthState(tgCode) as AuthUiState.Code
-    assertEquals("Telegram sent the code to your other logged-in Telegram session.", mapped.hint)
+    assertTrue(mapped.hint.startsWith("We sent the code to your Telegram app on another device."))
+    assertEquals(AuthUiState.CodeDelivery.TELEGRAM_APP, mapped.delivery)
     assertEquals(45, mapped.timeoutSeconds)
     assertEquals("SMS", mapped.nextTypeDescription)
   }

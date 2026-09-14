@@ -572,8 +572,25 @@ sealed interface AuthUiState {
         val timeoutSeconds: Int = 0,
         val nextTypeDescription: String? = null,
         val isLoading: Boolean = false,
-        val error: String? = null
-    ) : AuthUiState
+        val error: String? = null,
+        /** Where Telegram sent this code -- the screen says exactly that, never a generic "SMS". */
+        val delivery: CodeDelivery = CodeDelivery.OTHER,
+        /** Where a resend would go; null when Telegram offers no other way. */
+        val nextDelivery: CodeDelivery? = null
+    ) : AuthUiState {
+        /**
+         * Only when Telegram names a next way that Aether can actually receive:
+         * TDLib rejects a resend with no next type, and a Firebase-SMS resend
+         * needs a Play Integrity token only Telegram's own apps can produce.
+         */
+        val canResend: Boolean get() = nextDelivery != null && nextDelivery != CodeDelivery.FIREBASE_SMS
+
+        /** Telegram chose a delivery this app cannot receive; the screen offers other ways in. */
+        val isUnreachableForThisApp: Boolean get() = delivery == CodeDelivery.FIREBASE_SMS
+    }
+
+    /** How Telegram delivered (or will deliver) a sign-in code; mirrors TDLib's AuthenticationCodeType. */
+    enum class CodeDelivery { TELEGRAM_APP, SMS, SMS_WORD, SMS_PHRASE, CALL, MISSED_CALL, FLASH_CALL, FRAGMENT, FIREBASE_SMS, OTHER }
     data class Password(
         val hint: String?,
         val hasRecoveryEmailAddress: Boolean = false,
