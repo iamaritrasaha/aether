@@ -58,7 +58,13 @@ enum class CurtainState {
      */
     MESSAGE_ACTIONS,
     /** An outgoing, ringing, connecting, active or reconnecting call with this conversation's person. */
-    CALL;
+    CALL,
+    /** Composing a contact card to send, from the attachment grid's Contact entry. */
+    CONTACT,
+    /** Confirming a static location before it sends, from the attachment grid's Location entry. */
+    LOCATION,
+    /** Naming a venue at the current location before it sends, from the attachment grid's Venue entry. */
+    VENUE;
 
     /** True for every state that exposes more Curtain than the resting composer. */
     val isExpanded: Boolean get() = this != COMPOSER

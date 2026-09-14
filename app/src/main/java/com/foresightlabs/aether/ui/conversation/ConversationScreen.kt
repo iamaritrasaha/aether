@@ -111,18 +111,15 @@ import com.foresightlabs.aether.domain.messages.ConversationRow
 import com.foresightlabs.aether.domain.messages.ConversationRows
 import com.foresightlabs.aether.domain.messages.MessageGrouping
 import com.foresightlabs.aether.ui.conversation.AlbumBubble
-import com.foresightlabs.aether.ui.conversation.ContactShareSheet
 import com.foresightlabs.aether.ui.conversation.MessageInfoSheet
 import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
 import com.foresightlabs.aether.ui.conversation.LiveLocationShareSheet
-import com.foresightlabs.aether.ui.conversation.VenueShareSheet
 import com.foresightlabs.aether.ui.conversation.ScheduledMessagesSheet
 import com.foresightlabs.aether.domain.model.AnimationItem
 import com.foresightlabs.aether.ui.conversation.CurtainState
 import com.foresightlabs.aether.ui.conversation.VideoNoteRecorderSheet
 import androidx.compose.material.icons.filled.Schedule
-import com.foresightlabs.aether.ui.conversation.LocationShareSheet
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.material.icons.filled.Close
@@ -450,12 +447,12 @@ fun ConversationScreen(
     val selectedMessages = remember(messages, selectedIds) {
         messages.filter { it.id in selectedIds }
     }
-    var showContactSheet by remember { mutableStateOf(false) }
-    var showLocationSheet by remember { mutableStateOf(false) }
     var showLiveLocationSheet by remember { mutableStateOf(false) }
-    var showVenueSheet by remember { mutableStateOf(false) }
     var showScheduledSheet by remember { mutableStateOf(false) }
     var curtainState by rememberSaveable { mutableStateOf(CurtainState.COMPOSER) }
+    // Which of Location/Venue a location-permission request was actually for, so
+    // granting it continues into the one the user tapped rather than always Location.
+    var pendingLocationPermissionTarget by remember { mutableStateOf(CurtainState.LOCATION) }
     // Truthful only: derived from the real signalling + media states, never
     // set directly by this screen. See CallStatePresenter for why ACTIVE is
     // unreachable without the native transport reporting CONNECTED.
@@ -853,10 +850,11 @@ fun ConversationScreen(
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        // Continue straight into the share sheet the grant was requested for, rather
-        // than acknowledging the permission and leaving the user to tap again.
+        // Continue straight into the Curtain state the grant was requested for
+        // (Location or Venue), rather than acknowledging the permission and
+        // leaving the user to tap again.
         if (isGranted) {
-            showLocationSheet = true
+            curtainState = pendingLocationPermissionTarget
         } else {
             Toast.makeText(
                 context,
@@ -1372,32 +1370,31 @@ fun ConversationScreen(
                     docPickerLauncher.launch(arrayOf("audio/*"))
                 },
                 onSelectLocation = {
-                    curtainState = CurtainState.COMPOSER
                     val granted = ContextCompat.checkSelfPermission(
                         context,
                         Manifest.permission.ACCESS_COARSE_LOCATION
                     ) == PackageManager.PERMISSION_GRANTED
                     if (granted) {
-                        showLocationSheet = true
+                        curtainState = CurtainState.LOCATION
                     } else {
+                        pendingLocationPermissionTarget = CurtainState.LOCATION
                         locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
                     }
                 },
                 onSelectVenue = {
-                    curtainState = CurtainState.COMPOSER
                     val granted = ContextCompat.checkSelfPermission(
                         context,
                         Manifest.permission.ACCESS_COARSE_LOCATION
                     ) == PackageManager.PERMISSION_GRANTED
                     if (granted) {
-                        showVenueSheet = true
+                        curtainState = CurtainState.VENUE
                     } else {
+                        pendingLocationPermissionTarget = CurtainState.VENUE
                         locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
                     }
                 },
                 onSelectContact = {
-                    curtainState = CurtainState.COMPOSER
-                    showContactSheet = true
+                    curtainState = CurtainState.CONTACT
                 },
                 onSendMessage = { text, formatting ->
                     curtainState = CurtainState.COMPOSER
@@ -1620,6 +1617,28 @@ fun ConversationScreen(
                         replyingToMessageId = null
                     }
                     pendingMedia = null
+                    curtainState = CurtainState.COMPOSER
+                },
+                onCancelContact = { curtainState = CurtainState.COMPOSER },
+                onSendContact = { phone, first, last ->
+                    onSendContact(phone, first, last, replyingToMessage)
+                    replyingToMessageId = null
+                    curtainState = CurtainState.COMPOSER
+                },
+                shareLocationLatitude = resolvedLocation?.first,
+                shareLocationLongitude = resolvedLocation?.second,
+                isResolvingShareLocation = isResolvingLocation,
+                shareLocationError = locationError,
+                onCancelLocation = { curtainState = CurtainState.COMPOSER },
+                onSendLocation = { lat, lon ->
+                    onSendLocation(lat, lon, replyingToMessage)
+                    replyingToMessageId = null
+                    curtainState = CurtainState.COMPOSER
+                },
+                onCancelVenue = { curtainState = CurtainState.COMPOSER },
+                onSendVenue = { lat, lon, title, address ->
+                    onSendVenue(lat, lon, title, address, replyingToMessage)
+                    replyingToMessageId = null
                     curtainState = CurtainState.COMPOSER
                 }
             )
@@ -2051,21 +2070,13 @@ fun ConversationScreen(
             onDismiss = { infoMessage = null }
         )
 
-        if (showContactSheet) {
-            ContactShareSheet(
-                onDismiss = { showContactSheet = false },
-                onSend = { phone, first, last ->
-                    onSendContact(phone, first, last, replyingToMessage)
-                    replyingToMessageId = null
-                    showContactSheet = false
-                }
-            )
-        }
-
-        if (showLocationSheet) {
-            // Resolved only after the sheet is open, so nothing is read from the
-            // sensor until the user has actually asked to share a location.
-            LaunchedEffect(Unit) {
+        // CurtainState.LOCATION and .VENUE both need a fix; resolved only after
+        // either is actually entered, so nothing is read from the sensor before
+        // the user has asked to share a location. See ContactCurtainContent,
+        // LocationCurtainContent, VenueCurtainContent (all direct Curtain content,
+        // wired through MessageComposer's own onSelect* -> curtainState = ...).
+        LaunchedEffect(curtainState) {
+            if (curtainState == CurtainState.LOCATION || curtainState == CurtainState.VENUE) {
                 isResolvingLocation = true
                 locationError = null
                 val fix = lastKnownCoarseLocation(context)
@@ -2077,18 +2088,6 @@ fun ConversationScreen(
                 }
                 isResolvingLocation = false
             }
-            LocationShareSheet(
-                latitude = resolvedLocation?.first,
-                longitude = resolvedLocation?.second,
-                isResolving = isResolvingLocation,
-                error = locationError,
-                onDismiss = { showLocationSheet = false },
-                onSend = { lat, lon ->
-                    onSendLocation(lat, lon, replyingToMessage)
-                    replyingToMessageId = null
-                    showLocationSheet = false
-                }
-            )
         }
 
         if (showLiveLocationSheet) {
@@ -2114,28 +2113,6 @@ fun ConversationScreen(
             )
         }
 
-        if (showVenueSheet) {
-            LaunchedEffect(Unit) {
-                isResolvingLocation = true
-                locationError = null
-                val fix = lastKnownCoarseLocation(context)
-                resolvedLocation = fix
-                locationError = if (fix == null) "No recent location fix is available on this device yet." else null
-                isResolvingLocation = false
-            }
-            VenueShareSheet(
-                latitude = resolvedLocation?.first,
-                longitude = resolvedLocation?.second,
-                isResolving = isResolvingLocation,
-                error = locationError,
-                onDismiss = { showVenueSheet = false },
-                onSendVenue = { lat, lon, title, address ->
-                    onSendVenue(lat, lon, title, address, replyingToMessage)
-                    replyingToMessageId = null
-                    showVenueSheet = false
-                }
-            )
-        }
 
         ScheduledMessagesSheet(
             isVisible = showScheduledSheet,

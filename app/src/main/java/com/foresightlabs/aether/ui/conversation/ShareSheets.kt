@@ -2,13 +2,11 @@ package com.foresightlabs.aether.ui.conversation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -30,23 +28,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.foresightlabs.aether.ui.design.AetherGlass
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
 
 /**
- * Composes a contact card to send.
+ * Composes a contact card to send -- direct Curtain content, the same as
+ * [DeleteConfirmCurtainContent] and [MediaPreviewCurtainContent], reached from the
+ * attachment grid's Contact entry rather than a bottom sheet of its own.
  *
  * Entry is manual by design. Aether does not read the device address book to fill
  * this in, and does not upload it — the only contact details that leave the device
- * are the ones typed here, and the sheet says so before the send button is reachable.
+ * are the ones typed here, and this says so before the send button is reachable.
  */
 @Composable
-fun ContactShareSheet(
+fun ContactCurtainContent(
     onDismiss: () -> Unit,
-    onSend: (phone: String, firstName: String, lastName: String) -> Unit
+    onSend: (phone: String, firstName: String, lastName: String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val colors = LocalAetherColors.current
     var firstName by remember { mutableStateOf("") }
@@ -54,7 +54,7 @@ fun ContactShareSheet(
     var phone by remember { mutableStateOf("") }
     val canSend = phone.isNotBlank() && firstName.isNotBlank()
 
-    ShareSheetScaffold(onDismiss = onDismiss, title = "Send a contact", testTag = "contact_share_sheet") {
+    ShareSheetScaffold(onDismiss = onDismiss, title = "Send a contact", testTag = "contact_share_sheet", modifier = modifier) {
         Text(
             text = "These details will be sent to this chat as a Telegram contact card. " +
                 "Aether does not read or upload your address book.",
@@ -97,23 +97,24 @@ fun ContactShareSheet(
 }
 
 /**
- * Confirms sending a static location.
+ * Confirms sending a static location -- direct Curtain content; see [ContactCurtainContent].
  *
  * The coordinates are shown before anything is sent, because a location is not
  * something that should leave the device on a single unlabelled tap.
  */
 @Composable
-fun LocationShareSheet(
+fun LocationCurtainContent(
     latitude: Double?,
     longitude: Double?,
     isResolving: Boolean,
     error: String?,
     onDismiss: () -> Unit,
-    onSend: (Double, Double) -> Unit
+    onSend: (Double, Double) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val colors = LocalAetherColors.current
 
-    ShareSheetScaffold(onDismiss = onDismiss, title = "Send your location", testTag = "location_share_sheet") {
+    ShareSheetScaffold(onDismiss = onDismiss, title = "Send your location", testTag = "location_share_sheet", modifier = modifier) {
         Text(
             text = when {
                 error != null -> error
@@ -252,20 +253,21 @@ fun LiveLocationShareSheet(
  * Manually enters and sends a venue.
  */
 @Composable
-fun VenueShareSheet(
+fun VenueCurtainContent(
     latitude: Double?,
     longitude: Double?,
     isResolving: Boolean,
     error: String?,
     onDismiss: () -> Unit,
-    onSendVenue: (latitude: Double, longitude: Double, title: String, address: String) -> Unit
+    onSendVenue: (latitude: Double, longitude: Double, title: String, address: String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val colors = LocalAetherColors.current
     var title by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     val canSend = title.isNotBlank() && latitude != null && longitude != null
 
-    ShareSheetScaffold(onDismiss = onDismiss, title = "Send venue", testTag = "venue_share_sheet") {
+    ShareSheetScaffold(onDismiss = onDismiss, title = "Send venue", testTag = "venue_share_sheet", modifier = modifier) {
         Text(
             text = "Enter the place name and address to attach to your current location.",
             fontFamily = ManropeFontFamily,
@@ -315,52 +317,52 @@ fun VenueShareSheet(
     }
 }
 
+/**
+ * The Curtain-native wrapper for a compose-and-send flow (contact, location, venue):
+ * the same plain Column [DeleteConfirmCurtainContent] and [MediaPreviewCurtainContent]
+ * use -- no floating card and no scrim of its own. See [AetherConversationCurtain].
+ */
 @Composable
 private fun ShareSheetScaffold(
     onDismiss: () -> Unit,
     title: String,
     testTag: String,
+    modifier: Modifier = Modifier,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     val colors = LocalAetherColors.current
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { onDismiss() }
-            .padding(horizontal = 24.dp),
-        contentAlignment = Alignment.Center
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .testTag(testTag)
     ) {
-        AetherGlass(
-            frostState = null,
-            shape = AetherEmber.Shapes.L,
-            elevation = 10.dp,
-            emphasis = 0.2f,
+        Text(
+            text = title,
+            fontFamily = SpaceGroteskFontFamily,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            color = colors.textPrimary
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        content()
+        Spacer(modifier = Modifier.height(8.dp))
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) { /* keep taps inside the sheet */ }
-                .padding(20.dp)
-                .testTag(testTag)
+                .height(40.dp)
+                .clip(AetherEmber.Shapes.M)
+                .clickable(onClick = onDismiss)
+                .testTag("${testTag}_cancel"),
+            contentAlignment = Alignment.Center
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = title,
-                    fontFamily = SpaceGroteskFontFamily,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.textPrimary
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                content()
-            }
+            Text(
+                "Cancel",
+                fontFamily = ManropeFontFamily,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.textTertiary
+            )
         }
     }
 }

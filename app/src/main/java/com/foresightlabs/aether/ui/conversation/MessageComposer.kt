@@ -734,6 +734,18 @@ fun MessageComposer(
     onToggleCallCamera: () -> Unit = {},
     onSwitchCallCamera: () -> Unit = {},
     onEndCall: () -> Unit = {},
+    // --- CurtainState.CONTACT / LOCATION / VENUE: attachment-grid share flows ----
+    // See [ContactCurtainContent], [LocationCurtainContent], [VenueCurtainContent].
+    onCancelContact: () -> Unit = {},
+    onSendContact: (phone: String, firstName: String, lastName: String) -> Unit = { _, _, _ -> },
+    shareLocationLatitude: Double? = null,
+    shareLocationLongitude: Double? = null,
+    isResolvingShareLocation: Boolean = false,
+    shareLocationError: String? = null,
+    onCancelLocation: () -> Unit = {},
+    onSendLocation: (latitude: Double, longitude: Double) -> Unit = { _, _ -> },
+    onCancelVenue: () -> Unit = {},
+    onSendVenue: (latitude: Double, longitude: Double, title: String, address: String) -> Unit = { _, _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     // Held as a TextFieldValue so the selection is available for formatting.
@@ -865,6 +877,32 @@ fun MessageComposer(
                 onAction = onMessageAction,
                 onDelete = onMessageActionsDelete,
                 onCancel = onCancelMessageActions,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.CONTACT) {
+            ContactCurtainContent(
+                onDismiss = onCancelContact,
+                onSend = onSendContact,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.LOCATION) {
+            LocationCurtainContent(
+                latitude = shareLocationLatitude,
+                longitude = shareLocationLongitude,
+                isResolving = isResolvingShareLocation,
+                error = shareLocationError,
+                onDismiss = onCancelLocation,
+                onSend = onSendLocation,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.VENUE) {
+            VenueCurtainContent(
+                latitude = shareLocationLatitude,
+                longitude = shareLocationLongitude,
+                isResolving = isResolvingShareLocation,
+                error = shareLocationError,
+                onDismiss = onCancelVenue,
+                onSendVenue = onSendVenue,
                 modifier = Modifier.fillMaxWidth()
             )
         } else if (curtainState == CurtainState.CALL) {
