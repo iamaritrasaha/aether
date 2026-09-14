@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
@@ -86,6 +87,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -173,7 +175,10 @@ fun MessageBubble(
     var replyCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val richTextController = remember(message.id) { AetherRichTextController() }
 
-    val replyThreshold = -180f // Drag left to reply
+    // Drag left to reply. In dp, so the gesture asks the same distance of the
+    // thumb on a phone and on a tablet; past the threshold the bubble resists.
+    val replyThreshold = with(density) { -SwipeReplyThreshold.toPx() }
+    val maxSwipe = with(density) { SwipeReplyMax.toPx() }
     val isOutgoing = message.isOutgoing
     val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
     // Light text on dark surfaces: secondary timestamps/metadata use controlled alpha
@@ -366,25 +371,27 @@ fun MessageBubble(
             )
     ) {
 
-        // Reply indicator on drag
-        val replyIconAlpha = (-offsetX.value / 120f).coerceIn(0f, 1f)
-        val replyIconScale = (-offsetX.value / 120f).coerceIn(0.5f, 1.15f)
+        // Reply indicator on drag: grows with progress toward the threshold and
+        // takes the accent once releasing would reply. Decorative -- TalkBack
+        // gets the Reply custom action on the bubble instead.
+        val swipeProgress = (offsetX.value / replyThreshold).coerceIn(0f, 1f)
+        val replyArmed = offsetX.value <= replyThreshold
 
-        if (offsetX.value < -20f) {
+        if (swipeProgress > 0.1f) {
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 12.dp)
                     .size(36.dp)
-                    .scale(replyIconScale)
+                    .scale(0.5f + 0.5f * swipeProgress + if (replyArmed) 0.12f else 0f)
                     .clip(CircleShape)
-                    .background(Color(0x35FFFFFF)),
+                    .background(if (replyArmed) colors.accent.copy(alpha = 0.85f) else Color(0x35FFFFFF)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Reply,
-                    contentDescription = "Reply",
-                    tint = Color.White.copy(alpha = replyIconAlpha),
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = swipeProgress),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -441,6 +448,25 @@ fun MessageBubble(
                         )
                         .then(focusBorderModifier)
                         .onGloballyPositioned { boxCoordinates = it }
+                        // One accessibility unit per bubble (sender, content,
+                        // time, delivery state read together), with the two
+                        // gestures TalkBack users cannot perform exposed as
+                        // explicit actions. Interactive children (media
+                        // controls, reply quote) stay separately focusable.
+                        .semantics(mergeDescendants = true) {
+                            customActions = listOf(
+                                androidx.compose.ui.semantics.CustomAccessibilityAction("Reply") {
+                                    onSwipeToReply(message)
+                                    true
+                                },
+                                androidx.compose.ui.semantics.CustomAccessibilityAction(
+                                    if (isSelected) "Deselect" else "Select"
+                                ) {
+                                    onLongPress(message)
+                                    true
+                                }
+                            )
+                        }
                         // Single gesture owner for the whole bubble: stationary hold
                         // selects, intentional horizontal movement swipes to reply,
                         // a quick release taps (toggling selection while active, or
@@ -489,13 +515,17 @@ fun MessageBubble(
                                                     if (shouldReply) {
                                                         onSwipeToReply(message)
                                                     }
-                                                    offsetX.animateTo(
-                                                        targetValue = 0f,
-                                                        animationSpec = spring(
-                                                            dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                            stiffness = Spring.StiffnessMedium
+                                                    if (reducedMotion) {
+                                                        offsetX.animateTo(0f, tween(ConversationMotion.FAST_MS))
+                                                    } else {
+                                                        offsetX.animateTo(
+                                                            targetValue = 0f,
+                                                            animationSpec = spring(
+                                                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                                                stiffness = Spring.StiffnessMedium
+                                                            )
                                                         )
-                                                    )
+                                                    }
                                                 }
                                             } else if (!longPressFired) {
                                                 val reply = message.replyPreview
@@ -556,13 +586,26 @@ fun MessageBubble(
 
                                         if (dragLocked) {
                                             change.consume()
-                                            val newOffset = (offsetX.value + delta.x).coerceIn(-240f, 0f)
+                                            // Full follow up to the threshold, then
+                                            // resistance: the bubble says "that's
+                                            // enough" without a hard wall.
+                                            // Only further travel resists; backing
+                                            // off toward cancel is never sticky.
+                                            val resistance =
+                                                if (offsetX.value <= replyThreshold && delta.x < 0f) 0.35f else 1f
+                                            val newOffset = (offsetX.value + delta.x * resistance)
+                                                .coerceIn(-maxSwipe, 0f)
                                             coroutineScope.launch { offsetX.snapTo(newOffset) }
                                             if (!thresholdHapticFired && newOffset <= replyThreshold) {
                                                 thresholdHapticFired = true
                                                 platformView.performHapticFeedback(
                                                     android.view.HapticFeedbackConstants.VIRTUAL_KEY
                                                 )
+                                            } else if (thresholdHapticFired && newOffset > replyThreshold * 0.8f) {
+                                                // Backed off below the threshold: the
+                                                // next crossing ticks again, so the
+                                                // hand always knows which side it is on.
+                                                thresholdHapticFired = false
                                             }
                                         }
                                     }
@@ -906,21 +949,43 @@ fun MessageBubble(
                                             )
                                         }
                                         MessageStatus.FAILED -> {
+                                            // Distinct from "sending" at a glance
+                                            // (an error mark, not a red clock), and
+                                            // a labelled target wide enough to hit.
+                                            // Retry resends the SAME message
+                                            // (ResendMessages), never a duplicate.
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(3.dp),
                                                 modifier = Modifier
                                                     .clip(AetherEmber.Shapes.Pill)
-                                                    .clickable(enabled = onRetry != null) {
+                                                    .clickable(
+                                                        enabled = onRetry != null,
+                                                        onClickLabel = "Retry sending"
+                                                    ) {
                                                         onRetry?.invoke(message)
                                                     }
-                                                    .padding(horizontal = 2.dp)
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    .semantics(mergeDescendants = true) {
+                                                        contentDescription = "Failed to send"
+                                                    }
+                                                    .testTag("message_retry_${message.id}")
                                             ) {
                                                 Icon(
-                                                    imageVector = Icons.Default.Schedule,
-                                                    contentDescription = "Failed, tap to retry",
+                                                    imageVector = Icons.Default.ErrorOutline,
+                                                    contentDescription = null,
                                                     tint = Color(0xFFEF4444),
-                                                    modifier = Modifier.size(12.dp)
+                                                    modifier = Modifier.size(13.dp)
                                                 )
+                                                if (onRetry != null) {
+                                                    Text(
+                                                        text = "Retry",
+                                                        fontFamily = ManropeFontFamily,
+                                                        fontSize = 10.5.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = Color(0xFFEF4444)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -2063,3 +2128,9 @@ private fun VenueAttachmentContent(
 
 private fun formatDuration(seconds: Int): String =
     "%d:%02d".format(seconds / 60, seconds % 60)
+
+/** How far a bubble must travel left before releasing replies to it. */
+private val SwipeReplyThreshold = 64.dp
+
+/** The furthest a bubble follows the finger, resistance included. */
+private val SwipeReplyMax = 96.dp

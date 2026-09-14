@@ -46,6 +46,7 @@ import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -653,6 +654,11 @@ fun MessageComposer(
     onForwardSelected: (List<Message>) -> Unit = {},
     /** Toggles pin state for the one selected message -- see [MessageSelectionRow]'s canPin. */
     onPinSelected: (Message) -> Unit = {},
+    /**
+     * Opens the full message menu (reactions, bookmark, save, link, info) for
+     * a single selection. Null hides the dock's More action.
+     */
+    onMoreSelected: ((Message) -> Unit)? = null,
     onDeleteSelected: (List<Message>) -> Unit = {},
     forwardMessages: List<Message> = emptyList(),
     forwardTargets: List<Chat> = emptyList(),
@@ -1099,6 +1105,7 @@ fun MessageComposer(
                             onCopy = onCopySelected,
                             onForward = onForwardSelected,
                             onPin = onPinSelected,
+                            onMore = onMoreSelected,
                             onDelete = onDeleteSelected,
                             ink = ink,
                             control = control
@@ -1574,6 +1581,8 @@ private fun MessageSelectionRow(
      * Home ([TdApi.ToggleChatIsPinned]) -- this dock never touches the latter.
      */
     onPin: (Message) -> Unit,
+    /** Full menu for one selected message; the dock itself stays the quick path. */
+    onMore: ((Message) -> Unit)? = null,
     onDelete: (List<Message>) -> Unit,
     ink: Color,
     control: Color,
@@ -1632,6 +1641,10 @@ private fun MessageSelectionRow(
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
             color = ink,
+            // A full dock on a narrow phone leaves little room: ellipsize,
+            // never wrap into a row whose height is fixed.
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .weight(1f)
                 .semantics { liveRegion = LiveRegionMode.Polite }
@@ -1707,6 +1720,18 @@ private fun MessageSelectionRow(
                     onClearSelection()
                 },
                 testTag = "selection_action_pin"
+            )
+            Spacer(modifier = Modifier.width(2.dp))
+        }
+
+        // More -- everything the dock has no room for, for one message.
+        if (isSingle && single != null && onMore != null) {
+            SelectionDockActionButton(
+                icon = Icons.Default.MoreHoriz,
+                label = "More actions",
+                tint = control,
+                onClick = { onMore(single) },
+                testTag = "selection_action_more"
             )
             Spacer(modifier = Modifier.width(2.dp))
         }

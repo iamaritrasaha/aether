@@ -24,6 +24,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -110,7 +116,9 @@ fun MessageContextMenu(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { onDismiss() }
-            .padding(horizontal = 24.dp)
+            // Never under the status or navigation bar, whatever the menu's length.
+            .windowInsetsPadding(WindowInsets.systemBars)
+            .padding(horizontal = 24.dp, vertical = 16.dp)
             .testTag("message_context_scrim"),
         contentAlignment = Alignment.Center
     ) {
@@ -123,7 +131,10 @@ fun MessageContextMenu(
             exit = scaleOut(targetScale = 0.96f) + fadeOut()
         ) {
             Column(
-                modifier = Modifier.fillMaxWidth(0.92f),
+                // A phone-width menu on a tablet, not a stretched one.
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .widthIn(max = 440.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // Emoji Reaction Strip
@@ -178,6 +189,9 @@ fun MessageContextMenu(
                     emphasis = 0.25f,
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    // Scrolls when the actions outgrow the space left under the
+                    // reaction tray (small phones, large font scale, landscape).
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     actions.forEachIndexed { index, action ->
                         if (action == MessageAction.DELETE_FOR_ME ||
                             action == MessageAction.DELETE_FOR_EVERYONE
@@ -198,6 +212,7 @@ fun MessageContextMenu(
                                 onDismiss()
                             }
                         )
+                    }
                     }
                 }
             }

@@ -1458,6 +1458,15 @@ fun ConversationScreen(
                 // uses (onPinMessage) -- one message-pin implementation, two
                 // entry points into it.
                 onPinSelected = { msg -> onPinMessage(msg) },
+                // Long-press stays selection; More opens the full, capability-
+                // driven menu (reactions, bookmark, save, link, info) for the
+                // one selected message, which the dock has no room for.
+                onMoreSelected = { msg ->
+                    onRequestCapabilities(msg)
+                    selectedIds = emptySet()
+                    selectedContextMenuMessage = msg
+                    isContextMenuVisible = true
+                },
                 onDeleteSelected = { chosen ->
                     deleteConfirmMessages = chosen
                     curtainState = CurtainState.DELETE_CONFIRM
