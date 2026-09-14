@@ -118,7 +118,6 @@ import com.foresightlabs.aether.ui.conversation.LiveLocationShareSheet
 import com.foresightlabs.aether.ui.conversation.ScheduledMessagesSheet
 import com.foresightlabs.aether.domain.model.AnimationItem
 import com.foresightlabs.aether.ui.conversation.CurtainState
-import com.foresightlabs.aether.ui.conversation.VideoNoteRecorderSheet
 import androidx.compose.material.icons.filled.Schedule
 import android.content.Intent
 import android.provider.Settings
@@ -220,6 +219,7 @@ fun ConversationScreen(
     onSendPhoto: (String, String, Message?, Boolean) -> Unit = { _, _, _, _ -> },
     onSendVideo: (String, String, Int, Message?, Boolean) -> Unit = { _, _, _, _, _ -> },
     onSendDocument: (String, String, Message?) -> Unit = { _, _, _ -> },
+    onSendAudio: (String, String, String, Int, String, Message?) -> Unit = { _, _, _, _, _, _ -> },
     /** Several photos as one Telegram album; see TelegramClient.sendPhotoAlbum. */
     onSendPhotoAlbum: (List<String>, String, Message?) -> Unit = { _, _, _ -> },
     /** A mixed share (photo/video/file), sent as one guarded sequential batch. */
@@ -588,7 +588,6 @@ fun ConversationScreen(
         }
     }
     var isMediaViewerVisible by remember { mutableStateOf(false) }
-    var showVideoNoteRecorder by remember { mutableStateOf(false) }
 
     // Media picked from the gallery or camera is held here for review --
     // including the View once decision -- rather than sent the instant it is
@@ -892,6 +891,30 @@ fun ConversationScreen(
                 if (file != null) {
                     onSendDocument(file.absolutePath, "", replyingToMessage)
                     replyingToMessageId = null
+                    curtainState = CurtainState.COMPOSER
+                }
+            }
+        }
+    }
+
+    val audioPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                val file = withContext(Dispatchers.IO) { copyUriToTempFile(context, uri, "audio_") }
+                if (file != null) {
+                    val metadata = withContext(Dispatchers.IO) { extractAudioMetadata(context, file) }
+                    onSendAudio(
+                        file.absolutePath,
+                        metadata.title,
+                        metadata.performer,
+                        metadata.durationSeconds,
+                        "",
+                        replyingToMessage
+                    )
+                    replyingToMessageId = null
+                    curtainState = CurtainState.COMPOSER
                 }
             }
         }
@@ -1340,10 +1363,7 @@ fun ConversationScreen(
                     curtainState = CurtainState.COMPOSER
                 },
                 onSelectGallery = {
-                    curtainState = CurtainState.COMPOSER
-                    photoPickerLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                    )
+                    curtainState = CurtainState.GALLERY
                 },
                 onSelectCamera = {
                     curtainState = CurtainState.COMPOSER
@@ -1358,16 +1378,13 @@ fun ConversationScreen(
                     }
                 },
                 onSelectVideoNote = {
-                    curtainState = CurtainState.COMPOSER
-                    showVideoNoteRecorder = true
+                    curtainState = CurtainState.VIDEO_NOTE
                 },
                 onSelectFile = {
-                    curtainState = CurtainState.COMPOSER
-                    docPickerLauncher.launch(arrayOf("*/*"))
+                    curtainState = CurtainState.FILES
                 },
                 onSelectAudio = {
-                    curtainState = CurtainState.COMPOSER
-                    docPickerLauncher.launch(arrayOf("audio/*"))
+                    curtainState = CurtainState.MUSIC
                 },
                 onSelectLocation = {
                     val granted = ContextCompat.checkSelfPermission(
@@ -1480,8 +1497,7 @@ fun ConversationScreen(
                 },
                 onVoiceRecordCancelTap = { endRecording(send = false) },
                 onOpenVideoNote = {
-                    curtainState = CurtainState.COMPOSER
-                    showVideoNoteRecorder = true
+                    curtainState = CurtainState.VIDEO_NOTE
                 },
                 selectedMessages = selectedMessages,
                 capabilities = messageCapabilities,
@@ -1638,6 +1654,84 @@ fun ConversationScreen(
                 onCancelVenue = { curtainState = CurtainState.COMPOSER },
                 onSendVenue = { lat, lon, title, address ->
                     onSendVenue(lat, lon, title, address, replyingToMessage)
+                    replyingToMessageId = null
+                    curtainState = CurtainState.COMPOSER
+                },
+                onOpenGalleryPicker = {
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                    )
+                },
+                onSendGalleryMedia = { uris ->
+                    if (uris.size == 1) {
+                        val uri = uris.first()
+                        val isVideo = context.contentResolver.getType(uri)?.startsWith("video/") == true
+                        coroutineScope.launch {
+                            val file = withContext(Dispatchers.IO) {
+                                copyUriToTempFile(context, uri, if (isVideo) "video_" else "photo_")
+                            }
+                            if (file != null) {
+                                pendingMedia = PendingMedia(file.absolutePath, isVideo = isVideo)
+                                curtainState = CurtainState.MEDIA_PREVIEW
+                            }
+                        }
+                    } else if (uris.isNotEmpty()) {
+                        coroutineScope.launch {
+                            val copiedFiles = withContext(Dispatchers.IO) {
+                                uris.mapNotNull { uri ->
+                                    val isVid = context.contentResolver.getType(uri)?.startsWith("video/") == true
+                                    val prefix = if (isVid) "video_" else "photo_"
+                                    copyUriToTempFile(context, uri, prefix)?.let { file ->
+                                        Pair(file.absolutePath, isVid)
+                                    }
+                                }
+                            }
+                            if (copiedFiles.isNotEmpty()) {
+                                val allPhotos = copiedFiles.all { !it.second }
+                                if (allPhotos) {
+                                    onSendPhotoAlbum(copiedFiles.map { it.first }, "", replyingToMessage)
+                                } else {
+                                    copiedFiles.forEach { (path, isVid) ->
+                                        if (isVid) {
+                                            onSendVideo(path, "", 0, replyingToMessage, false)
+                                        } else {
+                                            onSendPhoto(path, "", replyingToMessage, false)
+                                        }
+                                    }
+                                }
+                                replyingToMessageId = null
+                                curtainState = CurtainState.COMPOSER
+                            }
+                        }
+                    }
+                },
+                onOpenFilesPicker = {
+                    docPickerLauncher.launch(arrayOf("*/*"))
+                },
+                onOpenAudioPicker = {
+                    audioPickerLauncher.launch(arrayOf("audio/*"))
+                },
+                onSendMusicTrack = { uri, title, artist, durationSec ->
+                    coroutineScope.launch {
+                        val file = withContext(Dispatchers.IO) {
+                            copyUriToTempFile(context, uri, "audio_")
+                        }
+                        if (file != null) {
+                            onSendAudio(
+                                file.absolutePath,
+                                title,
+                                artist,
+                                durationSec,
+                                "",
+                                replyingToMessage
+                            )
+                            replyingToMessageId = null
+                            curtainState = CurtainState.COMPOSER
+                        }
+                    }
+                },
+                onSendVideoNote = { filePath, duration, length ->
+                    onSendVideoNote(filePath, duration, length, replyingToMessage)
                     replyingToMessageId = null
                     curtainState = CurtainState.COMPOSER
                 }
@@ -2123,8 +2217,14 @@ fun ConversationScreen(
             onDelete = { msg -> onDeleteMessage(msg, false) }
         )
 
-        BackHandler(enabled = curtainState != CurtainState.COMPOSER) {
-            if (curtainState == CurtainState.FORWARDING) {
+        BackHandler(enabled = (curtainState != CurtainState.COMPOSER) || (isRecordingAudio && voiceRecordLocked)) {
+            if (isRecordingAudio && voiceRecordLocked) {
+                endRecording(send = false)
+            } else if (curtainState.isAttachmentChild) {
+                curtainState = CurtainState.ATTACHMENTS
+            } else if (curtainState == CurtainState.ATTACHMENTS) {
+                curtainState = CurtainState.COMPOSER
+            } else if (curtainState == CurtainState.FORWARDING) {
                 if (isImeVisible) {
                     keyboardController?.hide()
                     focusManager.clearFocus()
@@ -2145,16 +2245,6 @@ fun ConversationScreen(
                 curtainState = CurtainState.COMPOSER
             }
         }
-
-        VideoNoteRecorderSheet(
-            isVisible = showVideoNoteRecorder,
-            onDismiss = { showVideoNoteRecorder = false },
-            onSendVideoNote = { filePath, duration, length ->
-                onSendVideoNote(filePath, duration, length, replyingToMessage)
-                replyingToMessageId = null
-                showVideoNoteRecorder = false
-            }
-        )
 
         if (isSelecting) {
             // Back leaves selection before it leaves the conversation.
@@ -2296,10 +2386,43 @@ internal fun sendSharedAttachments(
     onSendMixedBatch(items.map { it.path to it.kind }, share.caption, replyingTo)
 }
 
+private data class AudioMetadata(
+    val title: String,
+    val performer: String,
+    val durationSeconds: Int
+)
+
+private fun queryFileName(context: android.content.Context, uri: Uri): String? {
+    if (uri.scheme == "content") {
+        try {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) {
+                        return cursor.getString(idx)
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+    }
+    return uri.lastPathSegment
+}
+
 private fun copyUriToTempFile(context: android.content.Context, uri: Uri, prefix: String): File? {
     return try {
-        val extension = context.contentResolver.getType(uri)?.substringAfterLast('/') ?: "tmp"
-        val tempFile = File.createTempFile(prefix, ".$extension", context.cacheDir)
+        val originalName = queryFileName(context, uri)
+        val extension = if (originalName != null && originalName.contains('.')) {
+            originalName.substringAfterLast('.')
+        } else {
+            context.contentResolver.getType(uri)?.substringAfterLast('/') ?: "tmp"
+        }
+        val safeFileName = if (!originalName.isNullOrBlank()) {
+            originalName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        } else {
+            "${prefix}${System.currentTimeMillis()}.$extension"
+        }
+        val targetDir = File(context.cacheDir, "curtain_uploads/${System.currentTimeMillis()}").apply { mkdirs() }
+        val tempFile = File(targetDir, safeFileName)
         context.contentResolver.openInputStream(uri)?.use { input ->
             FileOutputStream(tempFile).use { output ->
                 input.copyTo(output)
@@ -2308,6 +2431,32 @@ private fun copyUriToTempFile(context: android.content.Context, uri: Uri, prefix
         tempFile
     } catch (e: Exception) {
         null
+    }
+}
+
+private fun extractAudioMetadata(context: android.content.Context, file: File): AudioMetadata {
+    return try {
+        val retriever = android.media.MediaMetadataRetriever()
+        retriever.setDataSource(file.absolutePath)
+        val title = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)
+            ?: file.nameWithoutExtension
+        val artist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            ?: retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_AUTHOR)
+            ?: ""
+        val durationMs = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        val durationSec = (durationMs / 1000).toInt()
+        retriever.release()
+        AudioMetadata(
+            title = title,
+            performer = artist,
+            durationSeconds = durationSec
+        )
+    } catch (_: Exception) {
+        AudioMetadata(
+            title = file.nameWithoutExtension,
+            performer = "",
+            durationSeconds = 0
+        )
     }
 }
 

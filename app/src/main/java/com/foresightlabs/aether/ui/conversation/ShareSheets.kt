@@ -46,7 +46,8 @@ import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
 fun ContactCurtainContent(
     onDismiss: () -> Unit,
     onSend: (phone: String, firstName: String, lastName: String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onBack: () -> Unit = onDismiss
 ) {
     val colors = LocalAetherColors.current
     var firstName by remember { mutableStateOf("") }
@@ -54,7 +55,7 @@ fun ContactCurtainContent(
     var phone by remember { mutableStateOf("") }
     val canSend = phone.isNotBlank() && firstName.isNotBlank()
 
-    ShareSheetScaffold(onDismiss = onDismiss, title = "Send a contact", testTag = "contact_share_sheet", modifier = modifier) {
+    ShareSheetScaffold(onDismiss = onDismiss, onBack = onBack, title = "Send a contact", testTag = "contact_share_sheet", modifier = modifier) {
         Text(
             text = "These details will be sent to this chat as a Telegram contact card. " +
                 "Aether does not read or upload your address book.",
@@ -110,11 +111,12 @@ fun LocationCurtainContent(
     error: String?,
     onDismiss: () -> Unit,
     onSend: (Double, Double) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onBack: () -> Unit = onDismiss
 ) {
     val colors = LocalAetherColors.current
 
-    ShareSheetScaffold(onDismiss = onDismiss, title = "Send your location", testTag = "location_share_sheet", modifier = modifier) {
+    ShareSheetScaffold(onDismiss = onDismiss, onBack = onBack, title = "Send your location", testTag = "location_share_sheet", modifier = modifier) {
         Text(
             text = when {
                 error != null -> error
@@ -162,7 +164,8 @@ fun LiveLocationShareSheet(
     isResolving: Boolean,
     error: String?,
     onDismiss: () -> Unit,
-    onSendLive: (latitude: Double, longitude: Double, durationSec: Int) -> Unit
+    onSendLive: (latitude: Double, longitude: Double, durationSec: Int) -> Unit,
+    onBack: () -> Unit = onDismiss
 ) {
     val colors = LocalAetherColors.current
     var selectedDuration by remember { mutableStateOf(900) } // 15 mins default
@@ -173,7 +176,7 @@ fun LiveLocationShareSheet(
         28800 to "8 hours"
     )
 
-    ShareSheetScaffold(onDismiss = onDismiss, title = "Share live location", testTag = "live_location_share_sheet") {
+    ShareSheetScaffold(onDismiss = onDismiss, onBack = onBack, title = "Share live location", testTag = "live_location_share_sheet") {
         Text(
             text = when {
                 error != null -> error
@@ -260,14 +263,15 @@ fun VenueCurtainContent(
     error: String?,
     onDismiss: () -> Unit,
     onSendVenue: (latitude: Double, longitude: Double, title: String, address: String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onBack: () -> Unit = onDismiss
 ) {
     val colors = LocalAetherColors.current
     var title by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     val canSend = title.isNotBlank() && latitude != null && longitude != null
 
-    ShareSheetScaffold(onDismiss = onDismiss, title = "Send venue", testTag = "venue_share_sheet", modifier = modifier) {
+    ShareSheetScaffold(onDismiss = onDismiss, onBack = onBack, title = "Send venue", testTag = "venue_share_sheet", modifier = modifier) {
         Text(
             text = "Enter the place name and address to attach to your current location.",
             fontFamily = ManropeFontFamily,
@@ -328,6 +332,7 @@ private fun ShareSheetScaffold(
     title: String,
     testTag: String,
     modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     val colors = LocalAetherColors.current
@@ -337,32 +342,44 @@ private fun ShareSheetScaffold(
             .padding(horizontal = 16.dp, vertical = 10.dp)
             .testTag(testTag)
     ) {
-        Text(
-            text = title,
-            fontFamily = SpaceGroteskFontFamily,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Bold,
-            color = colors.textPrimary
-        )
+        if (onBack != null) {
+            AttachmentCurtainHeader(
+                title = title,
+                onBack = onBack,
+                onCancel = onDismiss,
+                backTestTag = "${testTag}_back",
+                cancelTestTag = "${testTag}_cancel"
+            )
+        } else {
+            Text(
+                text = title,
+                fontFamily = SpaceGroteskFontFamily,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.textPrimary
+            )
+        }
         Spacer(modifier = Modifier.height(10.dp))
         content()
-        Spacer(modifier = Modifier.height(8.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(40.dp)
-                .clip(AetherEmber.Shapes.M)
-                .clickable(onClick = onDismiss)
-                .testTag("${testTag}_cancel"),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                "Cancel",
-                fontFamily = ManropeFontFamily,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = colors.textTertiary
-            )
+        if (onBack == null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
+                    .clip(AetherEmber.Shapes.M)
+                    .clickable(onClick = onDismiss)
+                    .testTag("${testTag}_cancel"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Cancel",
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colors.textTertiary
+                )
+            }
         }
     }
 }

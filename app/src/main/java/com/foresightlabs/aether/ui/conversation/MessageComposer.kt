@@ -613,7 +613,7 @@ fun MessageComposer(
     curtainState: CurtainState = CurtainState.COMPOSER,
     onCurtainStateChange: (CurtainState) -> Unit = {},
     onToggleAttachment: () -> Unit = {
-        if (curtainState == CurtainState.ATTACHMENTS) {
+        if (curtainState == CurtainState.ATTACHMENTS || curtainState.isAttachmentChild) {
             onCurtainStateChange(CurtainState.COMPOSER)
         } else {
             onCurtainStateChange(CurtainState.ATTACHMENTS)
@@ -746,6 +746,12 @@ fun MessageComposer(
     onSendLocation: (latitude: Double, longitude: Double) -> Unit = { _, _ -> },
     onCancelVenue: () -> Unit = {},
     onSendVenue: (latitude: Double, longitude: Double, title: String, address: String) -> Unit = { _, _, _, _ -> },
+    onOpenGalleryPicker: () -> Unit = {},
+    onOpenFilesPicker: () -> Unit = {},
+    onOpenAudioPicker: () -> Unit = {},
+    onSendGalleryMedia: (List<android.net.Uri>) -> Unit = {},
+    onSendMusicTrack: (uri: android.net.Uri, title: String, artist: String, durationSec: Int) -> Unit = { _, _, _, _ -> },
+    onSendVideoNote: (filePath: String, durationSec: Int, length: Int) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     // Held as a TextFieldValue so the selection is available for formatting.
@@ -814,7 +820,7 @@ fun MessageComposer(
     val hint = Color(0xFF77777F)
 
     val plusRotation by animateFloatAsState(
-        targetValue = if (curtainState == CurtainState.ATTACHMENTS) 45f else 0f,
+        targetValue = if (curtainState == CurtainState.ATTACHMENTS || curtainState.isAttachmentChild) 45f else 0f,
         animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
         label = "plus_to_cross_rotation"
     )
@@ -879,10 +885,41 @@ fun MessageComposer(
                 onCancel = onCancelMessageActions,
                 modifier = Modifier.fillMaxWidth()
             )
+        } else if (curtainState == CurtainState.GALLERY) {
+            GalleryCurtainContent(
+                onBack = { onCurtainStateChange(CurtainState.ATTACHMENTS) },
+                onCancel = { onCurtainStateChange(CurtainState.COMPOSER) },
+                onOpenPicker = onOpenGalleryPicker,
+                onSendSelectedMedia = onSendGalleryMedia,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.FILES) {
+            FilesCurtainContent(
+                onBack = { onCurtainStateChange(CurtainState.ATTACHMENTS) },
+                onCancel = { onCurtainStateChange(CurtainState.COMPOSER) },
+                onBrowseFiles = onOpenFilesPicker,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.MUSIC) {
+            MusicCurtainContent(
+                onBack = { onCurtainStateChange(CurtainState.ATTACHMENTS) },
+                onCancel = { onCurtainStateChange(CurtainState.COMPOSER) },
+                onBrowseAudio = onOpenAudioPicker,
+                onSendTrack = onSendMusicTrack,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.VIDEO_NOTE) {
+            VideoNoteCurtainContent(
+                onBack = { onCurtainStateChange(CurtainState.ATTACHMENTS) },
+                onCancel = { onCurtainStateChange(CurtainState.COMPOSER) },
+                onSendVideoNote = onSendVideoNote,
+                modifier = Modifier.fillMaxWidth()
+            )
         } else if (curtainState == CurtainState.CONTACT) {
             ContactCurtainContent(
                 onDismiss = onCancelContact,
                 onSend = onSendContact,
+                onBack = { onCurtainStateChange(CurtainState.ATTACHMENTS) },
                 modifier = Modifier.fillMaxWidth()
             )
         } else if (curtainState == CurtainState.LOCATION) {
@@ -893,6 +930,7 @@ fun MessageComposer(
                 error = shareLocationError,
                 onDismiss = onCancelLocation,
                 onSend = onSendLocation,
+                onBack = { onCurtainStateChange(CurtainState.ATTACHMENTS) },
                 modifier = Modifier.fillMaxWidth()
             )
         } else if (curtainState == CurtainState.VENUE) {
@@ -903,6 +941,7 @@ fun MessageComposer(
                 error = shareLocationError,
                 onDismiss = onCancelVenue,
                 onSendVenue = onSendVenue,
+                onBack = { onCurtainStateChange(CurtainState.ATTACHMENTS) },
                 modifier = Modifier.fillMaxWidth()
             )
         } else if (curtainState == CurtainState.CALL) {
@@ -1188,8 +1227,8 @@ fun MessageComposer(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Add,
-                                    contentDescription = if (curtainState == CurtainState.ATTACHMENTS) "Close attachments" else "Attach media",
-                                    tint = if (curtainState == CurtainState.ATTACHMENTS) ink else control,
+                                    contentDescription = if (curtainState == CurtainState.ATTACHMENTS || curtainState.isAttachmentChild) "Close attachments" else "Attach media",
+                                    tint = if (curtainState == CurtainState.ATTACHMENTS || curtainState.isAttachmentChild) ink else control,
                                     modifier = Modifier
                                         .size(22.dp)
                                         .graphicsLayer { rotationZ = plusRotation }

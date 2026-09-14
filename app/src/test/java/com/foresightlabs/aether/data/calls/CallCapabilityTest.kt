@@ -29,12 +29,13 @@ class CallCapabilityTest {
     }
 
     @Test
-    fun `standard debug build compiles calling in`() {
+    fun `debug build capability matches build configuration`() {
         // Debug-only: under testReleaseUnitTest this must SKIP, not assert --
         // the release variant's assertions live in the test below.
         assumeTrue("release variant assertions live in the test below", BuildConfig.DEBUG)
-        assertTrue(BuildConfig.CALLING_ENABLED)
-        assertTrue(AetherFeatureFlags.CALLS_ENABLED)
+        assertEquals(BuildConfig.CALLING_ENABLED, AetherFeatureFlags.CALLS_ENABLED)
+        assertEquals(BuildConfig.AETHER_CALLS_ENABLED, AetherFeatureFlags.AETHER_CALLS_ENABLED)
+        assertEquals(BuildConfig.TELEGRAM_CALLS_ENABLED, AetherFeatureFlags.TELEGRAM_CALLS_ENABLED)
     }
 
     @Test

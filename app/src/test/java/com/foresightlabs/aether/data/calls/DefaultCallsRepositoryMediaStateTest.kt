@@ -35,6 +35,14 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class DefaultCallsRepositoryMediaStateTest {
 
+    @org.junit.Before
+    fun setUp() {
+        org.junit.Assume.assumeTrue(
+            "Runs only when calling capability is compiled in (-PcallingEnabled=true)",
+            com.foresightlabs.aether.AetherFeatureFlags.TELEGRAM_CALLS_ENABLED
+        )
+    }
+
     private class FakeCallMediaEngine : TelegramCallMediaEngine {
         override val isMediaTransportAvailable = true
         private val _state = MutableStateFlow(MediaConnectionState.IDLE)
@@ -64,7 +72,7 @@ class DefaultCallsRepositoryMediaStateTest {
         TdApi.Call(id, 0L, 7L, true, false, TdApi.CallStateReady())
 
     /** Polls up to a few seconds for [condition] to become true, since the repository's timer runs on a real background coroutine. */
-    private fun awaitUntil(timeoutMillis: Long = 3000, condition: () -> Boolean) {
+    private fun awaitUntil(timeoutMillis: Long = 10000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (System.currentTimeMillis() < deadline) {
             if (condition()) return

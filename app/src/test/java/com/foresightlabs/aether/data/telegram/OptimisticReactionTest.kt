@@ -97,6 +97,24 @@ class OptimisticReactionTest {
     }
 
     @Test
+    fun switchingReactionsOptimisticallyClearsPreviousUserReaction() {
+        val initial = listOf(Reaction("👍", 1, userReacted = true), Reaction("🔥", 2, userReacted = false))
+        client.upsertConversation(1L, listOf(message(1, initial)), prepend = false)
+
+        val previous = client.applyOptimisticReaction(1L, 1L, "❤️", adding = true)
+
+        assertEquals(initial, previous)
+        val reactions = client.messagesFlow(1L).value.single().reactions
+        assertTrue("Previous single user reaction should be removed", reactions.none { it.emoji == "👍" })
+        val fire = reactions.first { it.emoji == "🔥" }
+        assertEquals(2, fire.count)
+        assertTrue(!fire.userReacted)
+        val heart = reactions.first { it.emoji == "❤️" }
+        assertEquals(1, heart.count)
+        assertTrue(heart.userReacted)
+    }
+
+    @Test
     fun applyingToAMessageThatIsNotLoadedReturnsNullAndTouchesNothing() {
         client.upsertConversation(1L, listOf(message(1)), prepend = false)
 

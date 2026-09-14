@@ -31,13 +31,10 @@ if (hasFcmConfig) {
   apply(plugin = "com.google.gms.google-services")
 }
 
-// Calling capability: development/internal builds keep calling compiled in;
-// the Play release compiles it out (UI entry points, invite polling, call
-// notifications, the call foreground service and the release manifest
-// surface). Override with -PcallingEnabled=true for an installable
-// release-like internal build.
-val callingEnabled = (project.findProperty("callingEnabled") as? String)?.toBooleanStrictOrNull() ?: true
-val releaseCallingEnabled = (project.findProperty("callingEnabled") as? String)?.toBooleanStrictOrNull() ?: false
+// Calling capability: normal debug and Play release builds compile calling out
+// (CALLING_ENABLED = false). Calling is strictly opt-in for call development debug
+// builds via -PcallingEnabled=true. Release builds hard-force calling off unconditionally.
+val callingEnabled = (project.findProperty("callingEnabled") as? String)?.toBooleanStrictOrNull() ?: false
 
 val signingProperties = Properties().apply {
   val configuredPath = System.getenv("AETHER_SIGNING_PROPERTIES")
@@ -69,14 +66,20 @@ android {
     // Hash is injected for TDLib initialization only. Never log or display it.
     buildConfigField("String", "TELEGRAM_API_HASH", "\"${telegramApiHash.replace("\"", "\\\"")}\"")
     buildConfigField("boolean", "HAS_TELEGRAM_CREDENTIALS", (telegramApiId.isNotEmpty() && telegramApiHash.isNotEmpty()).toString())
-        // Development Aether Call Service (see call-service/README.md). The
-        // LiveKit API secret NEVER lives here -- the app holds only this LAN
-        // URL and receives short-lived participant tokens from the service.
-        buildConfigField("String", "AETHER_CALL_SERVICE_URL", "\"${if (project.hasProperty("aetherCallServiceUrl")) project.property("aetherCallServiceUrl") else "http://192.168.0.30:8080"}\"")
+    // Development Aether Call Service (see call-service/README.md). Active only
+    // when calling is enabled for local call development.
+    val devCallServiceUrl = if (callingEnabled && project.hasProperty("aetherCallServiceUrl")) {
+      project.property("aetherCallServiceUrl")
+    } else if (callingEnabled) {
+      "http://192.168.0.30:8080"
+    } else {
+      ""
+    }
+    buildConfigField("String", "AETHER_CALL_SERVICE_URL", "\"$devCallServiceUrl\"")
     buildConfigField("String", "TDLIB_COMMIT", "\"89ebded9571b7bb589ec1bd05e585fffa4c580e2\"")
     buildConfigField("boolean", "HAS_FCM_CONFIG", hasFcmConfig.toString())
-    // Calling capability (see AetherFeatureFlags.CALLS_ENABLED): true for
-    // development/internal builds, false for the Play release.
+    // Calling capability (see AetherFeatureFlags.CALLS_ENABLED): false for
+    // normal debug and release; true only with explicit -PcallingEnabled=true.
     buildConfigField("boolean", "CALLING_ENABLED", callingEnabled.toString())
     buildConfigField("boolean", "AETHER_CALLS_ENABLED", callingEnabled.toString())
     buildConfigField("boolean", "TELEGRAM_CALLS_ENABLED", callingEnabled.toString())
@@ -97,16 +100,12 @@ android {
 
   buildTypes {
     release {
-      // The Play release compiles calling out entirely (AetherFeatureFlags).
-      // -PcallingEnabled=true produces an installable release-like internal
-      // build with calling available.
-      buildConfigField("boolean", "CALLING_ENABLED", releaseCallingEnabled.toString())
-      buildConfigField("boolean", "AETHER_CALLS_ENABLED", releaseCallingEnabled.toString())
-      buildConfigField("boolean", "TELEGRAM_CALLS_ENABLED", releaseCallingEnabled.toString())
-      // The local LAN dev endpoint must never ship: release defaults to an
-      // empty URL (calling is off anyway); an internal release-like build
-      // passes -PaetherCallServiceUrl together with -PcallingEnabled=true.
-      buildConfigField("String", "AETHER_CALL_SERVICE_URL", "\"${project.findProperty("aetherCallServiceUrl") ?: ""}\"")
+      // The Play release hard-forces calling out entirely (AetherFeatureFlags).
+      // Calling is never compiled into release builds under any circumstances.
+      buildConfigField("boolean", "CALLING_ENABLED", "false")
+      buildConfigField("boolean", "AETHER_CALLS_ENABLED", "false")
+      buildConfigField("boolean", "TELEGRAM_CALLS_ENABLED", "false")
+      buildConfigField("String", "AETHER_CALL_SERVICE_URL", "\"\"")
       isCrunchPngs = false
       isMinifyEnabled = true
       isShrinkResources = true

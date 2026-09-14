@@ -1246,6 +1246,9 @@ private fun ConversationRoute(
             onSendPhoto = { path, caption, reply, viewOnce -> viewModel.sendPhoto(path, caption, reply?.id, viewOnce) },
             onSendVideo = { path, caption, duration, reply, viewOnce -> viewModel.sendVideo(path, caption, duration, reply?.id, viewOnce) },
             onSendDocument = { path, caption, reply -> viewModel.sendDocument(path, caption, reply?.id) },
+            onSendAudio = { path, title, performer, duration, caption, reply ->
+                viewModel.sendAudio(path, title, performer, duration, caption, reply?.id)
+            },
             onSendPhotoAlbum = { paths, caption, reply -> viewModel.sendPhotoAlbum(paths, caption, reply?.id) },
             onSendMixedBatch = { items, caption, reply -> viewModel.sendSharedBatch(items, caption, reply?.id) },
             onResolveMessage = { id -> viewModel.resolveReplyEditTarget(id) },

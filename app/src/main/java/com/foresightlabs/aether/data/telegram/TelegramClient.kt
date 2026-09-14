@@ -1052,6 +1052,27 @@ open class TelegramClient(private val application: Application) {
         return sendContent(chatId, content, replyToMessageId, forumTopicId)
     }
 
+    suspend fun sendAudio(
+        chatId: Long,
+        audioPath: String,
+        title: String = "",
+        performer: String = "",
+        duration: Int = 0,
+        caption: String = "",
+        replyToMessageId: Long? = null,
+        forumTopicId: Int? = null
+    ): Result<TdApi.Message> {
+        val content = TdApi.InputMessageAudio(
+            TdApi.InputFileLocal(audioPath),
+            null,
+            duration,
+            title,
+            performer,
+            TdApi.FormattedText(caption, emptyArray())
+        )
+        return sendContent(chatId, content, replyToMessageId, forumTopicId)
+    }
+
     suspend fun sendAnimation(
         chatId: Long,
         animationPath: String,
@@ -2558,12 +2579,24 @@ open class TelegramClient(private val application: Application) {
                 if (message.id != targetId) return@map message
                 previous = message.reactions
                 val updated = if (adding) {
-                    if (message.reactions.any { it.emoji == emoji }) {
-                        message.reactions.map {
-                            if (it.emoji == emoji) it.copy(count = it.count + 1, userReacted = true) else it
+                    val cleaned = message.reactions.mapNotNull {
+                        if (it.emoji != emoji && it.userReacted) {
+                            val newCount = it.count - 1
+                            if (newCount <= 0) null else it.copy(count = newCount, userReacted = false)
+                        } else {
+                            it
+                        }
+                    }
+                    if (cleaned.any { it.emoji == emoji }) {
+                        cleaned.map {
+                            if (it.emoji == emoji) {
+                                it.copy(count = if (it.userReacted) it.count else it.count + 1, userReacted = true)
+                            } else {
+                                it
+                            }
                         }
                     } else {
-                        message.reactions + Reaction(emoji, 1, true)
+                        cleaned + Reaction(emoji, 1, true)
                     }
                 } else {
                     message.reactions.mapNotNull {

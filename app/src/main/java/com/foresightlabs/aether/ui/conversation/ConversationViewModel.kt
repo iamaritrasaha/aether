@@ -601,6 +601,29 @@ class ConversationViewModel(
         }
     }
 
+    fun sendAudio(
+        audioPath: String,
+        title: String = "",
+        performer: String = "",
+        duration: Int = 0,
+        caption: String = "",
+        replyToId: String? = null
+    ) {
+        viewModelScope.launch {
+            val result = telegram.sendAudio(
+                chatId = activeChatId,
+                audioPath = audioPath,
+                title = title,
+                performer = performer,
+                duration = duration,
+                caption = caption,
+                replyToMessageId = replyToId?.toLongOrNull(),
+                forumTopicId = forumTopicId
+            )
+            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+        }
+    }
+
     fun sendAnimation(animationPath: String, caption: String = "", replyToId: String? = null) {
         viewModelScope.launch {
             val result = telegram.sendAnimation(

@@ -40,6 +40,14 @@ import com.foresightlabs.aether.ui.theme.aetherDuration
 enum class CurtainState {
     COMPOSER,
     ATTACHMENTS,
+    /** Choosing photos and videos from gallery inside the Curtain. */
+    GALLERY,
+    /** Selecting documents and files inside the Curtain. */
+    FILES,
+    /** Selecting and previewing audio/music files inside the Curtain. */
+    MUSIC,
+    /** Recording round video notes inside the Curtain. */
+    VIDEO_NOTE,
     EMOJI,
     STICKERS,
     GIFS,
@@ -70,6 +78,21 @@ enum class CurtainState {
     val isExpanded: Boolean get() = this != COMPOSER
 
     val isPicker: Boolean get() = this == EMOJI || this == STICKERS || this == GIFS
+
+    /** True for states reached directly from the attachment grid root. */
+    val isAttachmentChild: Boolean get() = this in AttachmentChildren
+
+    companion object {
+        val AttachmentChildren = setOf(
+            GALLERY,
+            FILES,
+            MUSIC,
+            VIDEO_NOTE,
+            CONTACT,
+            LOCATION,
+            VENUE
+        )
+    }
 }
 
 /**

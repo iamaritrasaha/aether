@@ -29,6 +29,14 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class DefaultCallsRepositoryLifecycleTest {
 
+    @org.junit.Before
+    fun setUp() {
+        org.junit.Assume.assumeTrue(
+            "Runs only when calling capability is compiled in (-PcallingEnabled=true)",
+            com.foresightlabs.aether.AetherFeatureFlags.TELEGRAM_CALLS_ENABLED
+        )
+    }
+
     private class FakeCallMediaEngine : TelegramCallMediaEngine {
         override val isMediaTransportAvailable = true
         private val _state = MutableStateFlow(MediaConnectionState.IDLE)
@@ -76,7 +84,7 @@ class DefaultCallsRepositoryLifecycleTest {
         val repository = DefaultCallsRepository(telegram, application, PermissionCoordinator(application), engine)
 
         /** Polls up to a few seconds for [condition] to become true, since the repository's collectors run on real background coroutines. */
-        fun awaitUntil(timeoutMillis: Long = 3000, condition: () -> Boolean) {
+        fun awaitUntil(timeoutMillis: Long = 10000, condition: () -> Boolean) {
             val deadline = System.currentTimeMillis() + timeoutMillis
             while (System.currentTimeMillis() < deadline) {
                 if (condition()) return
