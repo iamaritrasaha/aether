@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.Check
@@ -150,6 +151,8 @@ fun MessageBubble(
     isSelected: Boolean = false,
     isSelectionActive: Boolean = false,
     isBeingEdited: Boolean = false,
+    /** Aether-local bookmark state for this message; see [com.foresightlabs.aether.data.local.BookmarkStore]. */
+    isBookmarked: Boolean = false,
     /** Non-null only while a multi-selection is running. */
     onSelectToggle: (() -> Unit)? = null,
     onStopLiveLocation: ((Message) -> Unit)? = null,
@@ -738,6 +741,7 @@ fun MessageBubble(
                                             isSelectionActive = isSelectionActive
                                         )
                                         if (message.isViewOnce) ViewOnceBadge(modifier = Modifier.align(Alignment.TopEnd))
+                                        if (isBookmarked) BookmarkBadge(modifier = Modifier.align(Alignment.TopStart))
                                     }
                                 }
                             }
@@ -754,6 +758,7 @@ fun MessageBubble(
                                             isSelectionActive = isSelectionActive
                                         )
                                         if (message.isViewOnce) ViewOnceBadge(modifier = Modifier.align(Alignment.TopEnd))
+                                        if (isBookmarked) BookmarkBadge(modifier = Modifier.align(Alignment.TopStart))
                                     }
                                 }
                             }
@@ -903,6 +908,16 @@ fun MessageBubble(
                                         fontSize = 10.5.sp,
                                         color = metaColor,
                                         modifier = Modifier.padding(end = 4.dp)
+                                    )
+                                }
+                                if (isBookmarked) {
+                                    Icon(
+                                        imageVector = Icons.Default.Bookmark,
+                                        contentDescription = "Bookmarked",
+                                        tint = metaColor,
+                                        modifier = Modifier
+                                            .size(11.dp)
+                                            .padding(end = 3.dp)
                                     )
                                 }
                                 Text(
@@ -1214,6 +1229,25 @@ private fun ViewOnceBadge(modifier: Modifier = Modifier) {
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White
+        )
+    }
+}
+
+/** Corner marker for a bookmarked photo/video bubble; see [com.foresightlabs.aether.data.local.BookmarkStore]. */
+@Composable
+private fun BookmarkBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .padding(6.dp)
+            .clip(CircleShape)
+            .background(Color(0xB0000000))
+            .padding(5.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Default.Bookmark,
+            contentDescription = "Bookmarked",
+            tint = Color.White,
+            modifier = Modifier.size(12.dp)
         )
     }
 }

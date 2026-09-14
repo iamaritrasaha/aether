@@ -54,7 +54,6 @@ enum class MessageAction {
     REPLACE_MEDIA,
     PIN,
     UNPIN,
-    SAVE,
     COPY_LINK,
     INFO,
 
@@ -111,7 +110,6 @@ object MessageActionPolicy {
         if (capabilities.canBePinned) {
             add(if (message.isPinned) MessageAction.UNPIN else MessageAction.PIN)
         }
-        if (capabilities.canBeSaved && isSaveableMedia(message)) add(MessageAction.SAVE)
         if (capabilities.canGetLink) add(MessageAction.COPY_LINK)
         if (capabilities.canGetReadDate || capabilities.canGetViewers) add(MessageAction.INFO)
         add(MessageAction.BOOKMARK)
@@ -162,7 +160,6 @@ object MessageActionPolicy {
     private val MultiSelectOrder = listOf(
         MessageAction.COPY,
         MessageAction.FORWARD,
-        MessageAction.SAVE,
         MessageAction.DELETE_FOR_ME,
         MessageAction.DELETE_FOR_EVERYONE
     )

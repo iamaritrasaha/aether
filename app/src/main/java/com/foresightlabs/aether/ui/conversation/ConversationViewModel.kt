@@ -723,19 +723,39 @@ class ConversationViewModel(
         }
     }
 
+    /** Messages with a reaction toggle currently in flight -- a second tap on the same
+     * message is ignored until the first round-trips, so a fast double-tap (typically
+     * the user retrying because nothing visibly happened yet) can't race the server's
+     * response and leave the bubble in a state neither tap actually asked for. */
+    private val reactionsInFlight = mutableSetOf<String>()
+
     /**
      * Adds or removes this account's reaction.
      *
      * The direction comes from the message as Telegram last reported it, so tapping
      * a reaction the account already gave removes it rather than adding a second.
+     * The bubble updates immediately (optimistic), then either stays as-is once
+     * Telegram confirms it, or is rolled back to its prior state if the request fails.
      */
     fun addReaction(message: Message, emoji: String) {
+        if (message.id in reactionsInFlight) return
+        val messageId = message.id.toLongOrNull() ?: return
+        val alreadyChosen = message.reactions
+            .any { it.emoji == emoji && it.userReacted }
+        reactionsInFlight += message.id
+        val previousReactions = telegram.applyOptimisticReaction(activeChatId, messageId, emoji, adding = !alreadyChosen)
         viewModelScope.launch {
-            val messageId = message.id.toLongOrNull() ?: return@launch
-            val alreadyChosen = message.reactions
-                .any { it.emoji == emoji && it.userReacted }
-            val result = telegram.toggleReaction(activeChatId, messageId, emoji, alreadyChosen)
-            result.exceptionOrNull()?.message?.let { _sendError.value = it }
+            try {
+                val result = telegram.toggleReaction(activeChatId, messageId, emoji, alreadyChosen)
+                result.exceptionOrNull()?.let { error ->
+                    _sendError.value = error.message
+                    if (previousReactions != null) {
+                        telegram.revertReaction(activeChatId, messageId, previousReactions)
+                    }
+                }
+            } finally {
+                reactionsInFlight -= message.id
+            }
         }
     }
 

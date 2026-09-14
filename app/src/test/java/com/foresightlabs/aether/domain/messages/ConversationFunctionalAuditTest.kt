@@ -34,25 +34,17 @@ class ConversationFunctionalAuditTest {
     )
 
     @Test
-    fun testMessageActionPolicySaveOnlyForMedia() {
+    fun testMessageActionPolicyOffersRealSupportedActions() {
         val textMessage = createTestMessage(id = "1", text = "Hello world", isOutgoing = false, type = MessageType.TEXT)
-        val imageMessage = createTestMessage(id = "2", text = "", isOutgoing = false, type = MessageType.IMAGE)
         val capabilities = MessageCapabilities(
             canBeReplied = true,
             canBeCopied = true,
             canBeForwarded = true,
-            canBeSaved = true,
             canGetLink = true
         )
 
         val textActions = MessageActionPolicy.actionsFor(textMessage, capabilities, allowSelect = true)
-        val imageActions = MessageActionPolicy.actionsFor(imageMessage, capabilities, allowSelect = true)
 
-        // Text message should NOT have SAVE
-        assertFalse(textActions.contains(MessageAction.SAVE))
-        // Image message SHOULD have SAVE
-        assertTrue(imageActions.contains(MessageAction.SAVE))
-        // Real supported actions must be present
         assertTrue(textActions.contains(MessageAction.REPLY))
         assertTrue(textActions.contains(MessageAction.COPY))
         assertTrue(textActions.contains(MessageAction.FORWARD))

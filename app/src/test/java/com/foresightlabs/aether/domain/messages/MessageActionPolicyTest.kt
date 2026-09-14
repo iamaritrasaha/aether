@@ -165,22 +165,6 @@ class MessageActionPolicyTest {
         assertFalse(MessageAction.COPY in actions)
     }
 
-    @Test
-    fun saveIsOfferedOnlyForMediaThatCanBeSaved() {
-        assertFalse(
-            MessageAction.SAVE in MessageActionPolicy.actionsFor(
-                message(type = MessageType.TEXT),
-                MessageCapabilities(canBeSaved = true)
-            )
-        )
-        assertTrue(
-            MessageAction.SAVE in MessageActionPolicy.actionsFor(
-                message(type = MessageType.IMAGE),
-                MessageCapabilities(canBeSaved = true)
-            )
-        )
-    }
-
     // --- multi-selection is an intersection ----------------------------------
 
     @Test

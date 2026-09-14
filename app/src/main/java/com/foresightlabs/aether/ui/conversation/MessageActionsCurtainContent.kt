@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.Info
@@ -258,7 +257,6 @@ private val MessageAction.title: String
         MessageAction.REPLACE_MEDIA -> "Replace media"
         MessageAction.PIN -> "Pin message"
         MessageAction.UNPIN -> "Unpin message"
-        MessageAction.SAVE -> "Save to downloads"
         MessageAction.COPY_LINK -> "Copy link"
         MessageAction.INFO -> "Message info"
         MessageAction.SELECT -> "Select"
@@ -276,7 +274,6 @@ private val MessageAction.icon: ImageVector
         MessageAction.EDIT -> Icons.Default.Edit
         MessageAction.REPLACE_MEDIA -> Icons.Default.Edit
         MessageAction.PIN, MessageAction.UNPIN -> Icons.Default.PushPin
-        MessageAction.SAVE -> Icons.Default.Download
         MessageAction.COPY_LINK -> Icons.Default.Link
         MessageAction.INFO -> Icons.Default.Info
         MessageAction.SELECT -> Icons.Default.CheckCircle

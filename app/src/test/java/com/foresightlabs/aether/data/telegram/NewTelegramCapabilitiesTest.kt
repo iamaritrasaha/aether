@@ -193,35 +193,4 @@ class NewTelegramCapabilitiesTest {
         assertFalse(MessageAction.REPLACE_MEDIA in actionsDisallowed)
     }
 
-    @Test
-    fun videoNoteIsRecognizedAsSaveableMedia() {
-        val videoNoteMsg = Message(
-            id = "2",
-            chatId = "100",
-            senderId = "42",
-            senderName = "Me",
-            text = "",
-            timestamp = "12:00",
-            isOutgoing = true,
-            type = MessageType.VIDEO_NOTE
-        )
-
-        val caps = MessageCapabilities(
-            canBeEdited = true,
-            canEditMedia = true,
-            canBeDeletedOnlyForSelf = true,
-            canBeDeletedForAllUsers = true,
-            canBeForwarded = true,
-            canBeReplied = true,
-            canBePinned = true,
-            canBeCopied = true,
-            canBeSaved = true,
-            canGetLink = true,
-            canGetReadDate = true,
-            canGetViewers = true
-        )
-
-        val actions = MessageActionPolicy.actionsFor(videoNoteMsg, caps)
-        assertTrue(MessageAction.SAVE in actions)
-    }
 }

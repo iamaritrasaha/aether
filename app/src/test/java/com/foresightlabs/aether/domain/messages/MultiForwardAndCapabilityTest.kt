@@ -91,28 +91,6 @@ class MultiForwardAndCapabilityTest {
     }
 
     @Test
-    fun audioMessagesAreRecognizedAsDistinctSaveableMedia() {
-        val audioMsg = sampleMessage("10", text = "Audio track", type = MessageType.AUDIO)
-        val actions = MessageActionPolicy.actionsFor(
-            audioMsg,
-            MessageCapabilities(canBeSaved = true)
-        )
-        assertTrue(MessageAction.SAVE in actions)
-    }
-
-    @Test
-    fun animationAndStickerMessagesAreRecognizedAsSaveableMedia() {
-        val stickerMsg = sampleMessage("11", text = "🔥", type = MessageType.STICKER)
-        val animMsg = sampleMessage("12", text = "GIF", type = MessageType.ANIMATION)
-
-        val stickerActions = MessageActionPolicy.actionsFor(stickerMsg, MessageCapabilities(canBeSaved = true))
-        val animActions = MessageActionPolicy.actionsFor(animMsg, MessageCapabilities(canBeSaved = true))
-
-        assertTrue(MessageAction.SAVE in stickerActions)
-        assertTrue(MessageAction.SAVE in animActions)
-    }
-
-    @Test
     fun chatFoldersHaveMainAndCustomTypes() {
         val mainFolder = ChatFolder.Main
         val workFolder = ChatFolder(id = 2, title = "Work")

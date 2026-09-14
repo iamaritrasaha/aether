@@ -873,10 +873,14 @@ fun ConversationScreen(
     ) { uri: Uri? ->
         if (uri != null) {
             val isVideo = context.contentResolver.getType(uri)?.startsWith("video/") == true
-            val file = copyUriToTempFile(context, uri, if (isVideo) "video_" else "photo_")
-            if (file != null) {
-                pendingMedia = PendingMedia(file.absolutePath, isVideo = isVideo)
-                curtainState = CurtainState.MEDIA_PREVIEW
+            coroutineScope.launch {
+                val file = withContext(Dispatchers.IO) {
+                    copyUriToTempFile(context, uri, if (isVideo) "video_" else "photo_")
+                }
+                if (file != null) {
+                    pendingMedia = PendingMedia(file.absolutePath, isVideo = isVideo)
+                    curtainState = CurtainState.MEDIA_PREVIEW
+                }
             }
         }
     }
@@ -885,10 +889,12 @@ fun ConversationScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            val file = copyUriToTempFile(context, uri, "doc_")
-            if (file != null) {
-                onSendDocument(file.absolutePath, "", replyingToMessage)
-                replyingToMessageId = null
+            coroutineScope.launch {
+                val file = withContext(Dispatchers.IO) { copyUriToTempFile(context, uri, "doc_") }
+                if (file != null) {
+                    onSendDocument(file.absolutePath, "", replyingToMessage)
+                    replyingToMessageId = null
+                }
             }
         }
     }
@@ -897,18 +903,20 @@ fun ConversationScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            val file = copyUriToTempFile(context, uri, "replace_")
-            if (file != null && replacingMediaMessage != null) {
-                val mediaType = when (replacingMediaMessage!!.type) {
-                    MessageType.IMAGE -> MessageType.IMAGE
-                    MessageType.VIDEO -> MessageType.VIDEO
-                    MessageType.ANIMATION -> MessageType.ANIMATION
-                    MessageType.AUDIO -> MessageType.AUDIO
-                    MessageType.FILE -> MessageType.FILE
-                    else -> MessageType.IMAGE
+            coroutineScope.launch {
+                val file = withContext(Dispatchers.IO) { copyUriToTempFile(context, uri, "replace_") }
+                if (file != null && replacingMediaMessage != null) {
+                    val mediaType = when (replacingMediaMessage!!.type) {
+                        MessageType.IMAGE -> MessageType.IMAGE
+                        MessageType.VIDEO -> MessageType.VIDEO
+                        MessageType.ANIMATION -> MessageType.ANIMATION
+                        MessageType.AUDIO -> MessageType.AUDIO
+                        MessageType.FILE -> MessageType.FILE
+                        else -> MessageType.IMAGE
+                    }
+                    onReplaceMedia(replacingMediaMessage!!, file.absolutePath, mediaType)
+                    replacingMediaMessage = null
                 }
-                onReplaceMedia(replacingMediaMessage!!, file.absolutePath, mediaType)
-                replacingMediaMessage = null
             }
         }
     }
@@ -1242,7 +1250,6 @@ fun ConversationScreen(
             }
             MessageAction.INFO -> infoMessage = target
             MessageAction.COPY_LINK -> onCopyMessageLink(target)
-            MessageAction.SAVE -> Unit
         }
     }
 
@@ -1782,6 +1789,7 @@ fun ConversationScreen(
                     isSelected = msg.id in selectedIds,
                     isSelectionActive = isSelecting,
                     isBeingEdited = msg.id == editingMessage?.id,
+                    isBookmarked = msg.id in bookmarkedMessageIds,
                     onSelectToggle = if (isSelecting) {
                         {
                             onRequestCapabilities(msg)

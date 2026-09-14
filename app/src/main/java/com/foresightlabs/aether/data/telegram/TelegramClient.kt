@@ -24,6 +24,7 @@ import com.foresightlabs.aether.domain.model.ForumTopicSummary
 import com.foresightlabs.aether.domain.model.ConnectionStatus
 import com.foresightlabs.aether.domain.model.Message
 import com.foresightlabs.aether.domain.model.MessageType
+import com.foresightlabs.aether.domain.model.Reaction
 import com.foresightlabs.aether.domain.model.ReplyPreview
 import com.foresightlabs.aether.domain.model.StickerItem
 import com.foresightlabs.aether.domain.model.StickerSetInfo
@@ -2540,6 +2541,49 @@ open class TelegramClient(private val application: Application) {
 
     fun removeMessages(chatId: Long, ids: Set<String>) {
         conversationFlows[chatId]?.update { list -> list.filterNot { it.id in ids } }
+    }
+
+    /**
+     * Reflects a reaction toggle in the local message list immediately, before
+     * [toggleReaction] round-trips to the server, so the bubble updates on tap
+     * instead of waiting on the network. Returns the message's prior reaction
+     * list for [revertReaction] to restore if the request fails; null if the
+     * message wasn't found (nothing to revert).
+     */
+    fun applyOptimisticReaction(chatId: Long, messageId: Long, emoji: String, adding: Boolean): List<Reaction>? {
+        val targetId = messageId.toString()
+        var previous: List<Reaction>? = null
+        conversationFlows[chatId]?.update { list ->
+            list.map { message ->
+                if (message.id != targetId) return@map message
+                previous = message.reactions
+                val updated = if (adding) {
+                    if (message.reactions.any { it.emoji == emoji }) {
+                        message.reactions.map {
+                            if (it.emoji == emoji) it.copy(count = it.count + 1, userReacted = true) else it
+                        }
+                    } else {
+                        message.reactions + Reaction(emoji, 1, true)
+                    }
+                } else {
+                    message.reactions.mapNotNull {
+                        if (it.emoji != emoji) return@mapNotNull it
+                        val newCount = it.count - 1
+                        if (newCount <= 0) null else it.copy(count = newCount, userReacted = false)
+                    }
+                }
+                message.copy(reactions = updated)
+            }
+        }
+        return previous
+    }
+
+    /** Restores a message's reaction list to what [applyOptimisticReaction] returned, after a failed toggle. */
+    fun revertReaction(chatId: Long, messageId: Long, previous: List<Reaction>) {
+        val targetId = messageId.toString()
+        conversationFlows[chatId]?.update { list ->
+            list.map { message -> if (message.id == targetId) message.copy(reactions = previous) else message }
+        }
     }
 
     private val conversationFlows = ConcurrentHashMap<Long, MutableStateFlow<List<Message>>>()
