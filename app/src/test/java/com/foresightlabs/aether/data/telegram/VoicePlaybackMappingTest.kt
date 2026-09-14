@@ -121,10 +121,10 @@ class VoicePlaybackMappingTest {
     }
 
     @Test
-    fun aFullSizedLocalFileCountsWithoutTdlibsCompletionFlag() {
+    fun aFullSizedLocalFileIsStillIncompleteWithoutTdlibsCompletionFlag() {
         val picked = tmp.newFile("picked.jpg").apply { writeBytes(ByteArray(2_048) { 3 }) }
         val outgoing = file(9, picked.absolutePath, size = 2_048L, completed = false, active = false)
-        assertTrue("a file picked on this device, before upload, is whole", TelegramMappers.isFullyLocal(outgoing))
-        assertEquals(picked.absolutePath, TelegramMappers.localPath(outgoing))
+        assertFalse("filesystem bytes never substitute for TDLib completion", TelegramMappers.isFullyLocal(outgoing))
+        assertEquals(null, TelegramMappers.localPath(outgoing))
     }
 }

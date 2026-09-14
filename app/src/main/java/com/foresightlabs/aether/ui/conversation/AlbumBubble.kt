@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.foresightlabs.aether.domain.messages.ConversationEntry
+import com.foresightlabs.aether.data.telegram.TelegramFileManager
 import com.foresightlabs.aether.domain.model.MediaItem
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.LocalAetherColors
@@ -49,6 +50,7 @@ fun AlbumBubble(
     album: ConversationEntry.Album,
     contentColor: Color,
     onMediaClick: (MediaItem) -> Unit,
+    fileManager: TelegramFileManager? = null,
     modifier: Modifier = Modifier
 ) {
     val tiles = album.messages.flatMap { it.mediaItems }
@@ -69,6 +71,7 @@ fun AlbumBubble(
                 )
                 tiles.size == 1 -> AlbumTile(
                     item = tiles.first(),
+                    fileManager = fileManager,
                     onClick = onMediaClick,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -81,6 +84,7 @@ fun AlbumBubble(
                     tiles.forEach { item ->
                         AlbumTile(
                             item = item,
+                            fileManager = fileManager,
                             onClick = onMediaClick,
                             modifier = Modifier
                                 .weight(1f)
@@ -94,6 +98,7 @@ fun AlbumBubble(
                 ) {
                     AlbumTile(
                         item = tiles[0],
+                        fileManager = fileManager,
                         onClick = onMediaClick,
                         modifier = Modifier
                             .weight(2f)
@@ -105,6 +110,7 @@ fun AlbumBubble(
                     ) {
                         AlbumTile(
                             item = tiles[1],
+                            fileManager = fileManager,
                             onClick = onMediaClick,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -112,6 +118,7 @@ fun AlbumBubble(
                         )
                         AlbumTile(
                             item = tiles[2],
+                            fileManager = fileManager,
                             onClick = onMediaClick,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -119,7 +126,7 @@ fun AlbumBubble(
                         )
                     }
                 }
-                else -> AlbumGrid(tiles = tiles, onMediaClick = onMediaClick)
+                else -> AlbumGrid(tiles = tiles, fileManager = fileManager, onMediaClick = onMediaClick)
             }
         }
 
@@ -150,7 +157,7 @@ fun AlbumBubble(
 }
 
 @Composable
-private fun AlbumGrid(tiles: List<MediaItem>, onMediaClick: (MediaItem) -> Unit) {
+private fun AlbumGrid(tiles: List<MediaItem>, fileManager: TelegramFileManager?, onMediaClick: (MediaItem) -> Unit) {
     // At most four tiles are drawn; the rest are counted on the last one, which is
     // how a nine-photo album stays a readable cluster.
     val visible = tiles.take(4)
@@ -171,6 +178,7 @@ private fun AlbumGrid(tiles: List<MediaItem>, onMediaClick: (MediaItem) -> Unit)
                     ) {
                         AlbumTile(
                             item = item,
+                            fileManager = fileManager,
                             onClick = onMediaClick,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -202,21 +210,23 @@ private fun AlbumGrid(tiles: List<MediaItem>, onMediaClick: (MediaItem) -> Unit)
 @Composable
 private fun AlbumTile(
     item: MediaItem,
+    fileManager: TelegramFileManager?,
     onClick: (MediaItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val resolvedItem = observeTelegramMedia(item, fileManager) ?: item
     Box(
         modifier = modifier
             .clip(AetherEmber.Shapes.S)
-            .clickable { onClick(item) }
+            .clickable { onClick(resolvedItem) }
     ) {
         // item.url is always the thumbnail for a video tile -- the actual
         // playable file only loads once the viewer opens, same as a full-size
         // video bubble; this preserves that a video in an album stays VIDEO,
         // never silently becomes a photo tile.
         AsyncImage(
-            model = item.url,
-            contentDescription = item.caption.ifBlank { if (item.isVideo) "Video" else "Photo" },
+            model = resolvedItem.url,
+            contentDescription = resolvedItem.caption.ifBlank { if (resolvedItem.isVideo) "Video" else "Photo" },
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )

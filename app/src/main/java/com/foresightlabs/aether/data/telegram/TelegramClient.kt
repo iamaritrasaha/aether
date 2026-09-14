@@ -70,19 +70,8 @@ open class TelegramClient(private val application: Application) {
     private val users = ConcurrentHashMap<Long, TdApi.User>()
     private val typing = ConcurrentHashMap<Long, String>()
     private val photoPaths = ConcurrentHashMap<String, String>()
-    /** Canonical TDLib file snapshots. Message-embedded File objects are stale. */
-    private val latestFiles = LatestFileRegistry()
-    private val requestedFiles = ConcurrentHashMap<Int, Boolean>()
-    /** File ids TDLib is currently, actively downloading -- tracked so a later
-     * UpdateFile that is neither active nor completed can be told apart from
-     * "never started" (nothing to report) versus "genuinely stopped without
-     * finishing" (a real download failure worth a retry affordance). */
-    private val activeDownloads = ConcurrentHashMap<Int, Boolean>()
-    /** File ids whose download stopped without completing. Cleared on retry or
-     * on a fresh completion; consulted so [resolveMediaPath] does not spin in
-     * an automatic retry loop against a file TDLib has already given up on. */
-    private val failedDownloads = ConcurrentHashMap<Int, Boolean>()
-    private val mediaReferenceIndex = MediaReferenceIndex()
+    /** The account-scoped owner of every TDLib file snapshot and transfer state. */
+    val files = TelegramFileManager(scope, ::send)
     private val chatAvatarFileByChat = ConcurrentHashMap<Long, Int>()
     private val chatsByAvatarFile = ConcurrentHashMap<Int, MutableSet<Long>>()
     private val userAvatarFileByUser = ConcurrentHashMap<Long, Int>()
@@ -529,99 +518,33 @@ open class TelegramClient(private val application: Application) {
         return messages.mapNotNull { td -> td?.let(::mapUiMessage) }.reversed()
     }
 
-    /**
-     * Result of a local-first history page request.
-     *
-     * [endOfHistory] is only meaningful when a network-capable request was actually
-     * attempted (i.e. only when the caller allowed network AND local history ran
-     * out) — TDLib may legitimately hand back fewer than the requested count while
-     * more history still exists, so a short page never implies completeness on its
-     * own. [oldestId] is the next pagination boundary regardless of how the page
-     * was satisfied.
-     */
-    data class HistoryPage(
-        val messages: List<Message>,
-        val oldestId: Long,
-        val usedNetwork: Boolean,
-        val endOfHistory: Boolean
-    )
+    data class HistoryBatch(val messages: List<Message>, val returnedCount: Int)
 
-    /**
-     * One page of chat history, local-first.
-     *
-     * Two independent reasons a single call can't be trusted at face value:
-     *
-     * 1. TDLib's onlyLocal=true call can legitimately return fewer than [limit]
-     *    messages even though its local database holds more — its own local
-     *    pagination isn't guaranteed to fill a page in one shot.
-     * 2. GetChatHistory with offset=0 starts *at* fromMessageId, not after it —
-     *    the boundary message itself may legitimately reappear in the next
-     *    round's batch. That is overlap, not a new/older message, and must not
-     *    be counted as progress or it would silently re-add the same message
-     *    forever. Aether tolerates the overlap by deduping on stable message id
-     *    and explicitly excluding the requested boundary id from the "did this
-     *    round make progress" count.
-     *
-     * So each round computes newUniqueCount (messages neither already collected
-     * nor equal to the id we just requested from) and only advances the cursor
-     * to the oldest of those. A round with newUniqueCount == 0 means the local
-     * database has nothing further at this boundary — it stops immediately
-     * rather than re-requesting the same boundary. Only once local rounds are
-     * exhausted (by that condition, by hitting [limit], or by the defensive
-     * round cap) and [allowNetwork] is true does this fall through to one
-     * network-capable request to close the remaining gap — so an initial,
-     * non-blocking render can pass allowNetwork=false and never wait on the
-     * network merely to show what's already cached.
-     */
-    private suspend fun collectHistoryPage(
+    /** One TDLib history request. Pagination policy belongs to the chat manager. */
+    suspend fun loadHistoryBatch(
         chatId: Long,
         fromMessageId: Long,
         limit: Int,
-        allowNetwork: Boolean,
+        onlyLocal: Boolean,
         reason: String
-    ): HistoryPage {
-        val collected = HistoryPageAccumulator<TdApi.Message> { it.id }
-        var boundary = fromMessageId
-        var rounds = 0
-        while (collected.size < limit && rounds < MAX_LOCAL_FILL_ROUNDS) {
-            rounds++
-            val requestBoundary = boundary
-            val remaining = limit - collected.size
-            val localResult = send(TdApi.GetChatHistory(chatId, requestBoundary, 0, remaining, true))
-            val batch = (localResult as? TdApi.Messages)?.messages?.filterNotNull() ?: emptyList()
-            val progress = collected.merge(batch, requestBoundary)
-            val boundaryAfter = if (progress.newUniqueCount > 0) progress.oldestId else requestBoundary
-            logHistoryRequest(chatId, "LOCAL", reason, requestBoundary, remaining, batch.size, progress.newUniqueCount, boundaryAfter, (localResult as? TdApi.Messages)?.totalCount ?: -1)
-            // newUnique == 0 means the local database has nothing further at
-            // this boundary (LOCAL CACHE EXHAUSTED AT THIS BOUNDARY) -- not
-            // proof the server has no more history. Stop local rounds here
-            // rather than re-requesting the same boundary.
-            if (progress.newUniqueCount == 0) break
-            boundary = progress.oldestId
-        }
-        var usedNetwork = false
-        var endOfHistory = false
-        if (collected.size < limit && allowNetwork) {
-            usedNetwork = true
-            val requestBoundary = boundary
-            val remaining = limit - collected.size
-            val networkResult = send(TdApi.GetChatHistory(chatId, requestBoundary, 0, remaining, false))
-            val batch = (networkResult as? TdApi.Messages)?.messages?.filterNotNull() ?: emptyList()
-            val progress = collected.merge(batch, requestBoundary)
-            val boundaryAfter = if (progress.newUniqueCount > 0) progress.oldestId else requestBoundary
-            logHistoryRequest(chatId, "NETWORK_CAPABLE", reason, requestBoundary, remaining, batch.size, progress.newUniqueCount, boundaryAfter, (networkResult as? TdApi.Messages)?.totalCount ?: -1)
-            if (progress.newUniqueCount == 0) {
-                // Chosen client-side exhaustion rule, not a TDLib guarantee: a
-                // network-capable request that adds no new unique older
-                // message is treated as the practical end of this chat's
-                // history for pagination purposes.
-                endOfHistory = true
-            } else {
-                boundary = progress.oldestId
-            }
-        }
-        val messages = collected.values.mapNotNull(::mapUiMessage).reversed()
-        return HistoryPage(messages, boundary, usedNetwork, endOfHistory)
+    ): HistoryBatch {
+        require(limit > 0)
+        val result = send(TdApi.GetChatHistory(chatId, fromMessageId, 0, limit, onlyLocal))
+        if (result is TdApi.Error) throw IllegalStateException(TdErrors.userMessage(result))
+        val raw = (result as? TdApi.Messages)?.messages?.filterNotNull().orEmpty()
+        val mapped = raw.map(::mapUiMessage).reversed()
+        logHistoryRequest(
+            chatId,
+            if (onlyLocal) "LOCAL" else "SERVER_CAPABLE",
+            reason,
+            fromMessageId,
+            limit,
+            raw.size,
+            mapped.map { it.id }.distinct().size,
+            mapped.firstOrNull()?.id?.toLongOrNull() ?: fromMessageId,
+            (result as? TdApi.Messages)?.totalCount ?: -1
+        )
+        return HistoryBatch(mapped, raw.size)
     }
 
     private fun logHistoryRequest(
@@ -643,19 +566,6 @@ open class TelegramClient(private val application: Application) {
                 "newUnique=$newUniqueCount boundaryAfter=$boundaryAfter approxTotal=$approxTotalCount"
         )
     }
-
-    /**
-     * Local-first page of chat history. See [collectHistoryPage] for the fill
-     * algorithm; [allowNetwork] should be false for a non-blocking initial render
-     * and true for user-driven pagination that is allowed to wait on the network.
-     */
-    suspend fun loadHistory(
-        chatId: Long,
-        fromMessageId: Long,
-        limit: Int = 40,
-        allowNetwork: Boolean = true,
-        reason: String = "PAGINATION"
-    ): HistoryPage = collectHistoryPage(chatId, fromMessageId, limit, allowNetwork, reason)
 
     suspend fun openChat(chatId: Long) {
         send(TdApi.OpenChat(chatId))
@@ -2465,8 +2375,7 @@ open class TelegramClient(private val application: Application) {
     }
 
     suspend fun downloadFile(fileId: Int, priority: Int = 16) {
-        if (requestedFiles.putIfAbsent(fileId, true) != null) return
-        send(TdApi.DownloadFile(fileId, priority, 0, 0, false))
+        files.download(fileId, priority)
     }
 
     /**
@@ -2479,10 +2388,7 @@ open class TelegramClient(private val application: Application) {
      */
     fun retryMediaDownload(fileId: Int) {
         if (fileId == 0) return
-        failedDownloads.remove(fileId)
-        requestedFiles.remove(fileId)
-        activeDownloads[fileId] = true
-        scope.launch { downloadFile(fileId, priority = 32) }
+        scope.launch { files.retry(fileId) }
     }
 
     /**
@@ -2499,14 +2405,12 @@ open class TelegramClient(private val application: Application) {
             if (file != null && !uploading && file.remote?.isUploadingCompleted == true && file.local?.path?.isNotBlank() == true) {
                 photoPaths.remove("file:$fileId")
                 send(TdApi.DeleteFile(fileId))
+                files.invalidate(fileId)
             }
-            failedDownloads.remove(fileId)
-            requestedFiles[fileId] = true
-            activeDownloads[fileId] = true
             if (BuildConfig.DEBUG) {
                 android.util.Log.d(TAG, "MEDIA_REDOWNLOAD fileId=$fileId droppedLocal=${file != null && !uploading}")
             }
-            send(TdApi.DownloadFile(fileId, 32, 0, 0, false))
+            files.retry(fileId)
         }
     }
 
@@ -2518,10 +2422,7 @@ open class TelegramClient(private val application: Application) {
      */
     fun requestFullMediaDownload(fileId: Int) {
         if (fileId == 0) return
-        failedDownloads.remove(fileId)
-        activeDownloads[fileId] = true
-        requestedFiles[fileId] = true
-        scope.launch { send(TdApi.DownloadFile(fileId, 32, 0, 0, false)) }
+        scope.launch { files.retry(fileId) }
     }
 
     fun messagesFlow(chatId: Long): StateFlow<List<Message>> {
@@ -2971,6 +2872,10 @@ open class TelegramClient(private val application: Application) {
                 }
             }
             is TdApi.UpdateMessageEdited -> {
+                rawMessages[MessageKey(update.chatId, update.messageId)]?.let { raw ->
+                    raw.editDate = update.editDate
+                    raw.replyMarkup = update.replyMarkup
+                }
                 conversationFlows[update.chatId]?.update { list ->
                     list.map {
                         if (it.id == update.messageId.toString()) it.copy(isEdited = update.editDate > 0) else it
@@ -3000,7 +2905,6 @@ open class TelegramClient(private val application: Application) {
                 update.messageIds.forEach { messageId ->
                     if (rawMessages[MessageKey(update.chatId, messageId)] != null) {
                         rawMessages.remove(MessageKey(update.chatId, messageId))
-                        mediaReferenceIndex.remove(MessageMediaReference(update.chatId, messageId))
                     }
                     unavailableReplyTargets.add(ReplyTarget(update.chatId, messageId))
                     refreshReplyingMessages(ReplyTarget(update.chatId, messageId))
@@ -3536,66 +3440,34 @@ open class TelegramClient(private val application: Application) {
     }
 
     private fun onFile(file: TdApi.File) {
-        latestFiles.update(file)
-        val canonical = latestFiles.get(file.id) ?: file
+        val previousPath = files.file(file.id)?.local?.path
+        files.update(file)
+        val canonical = files.file(file.id) ?: file
         val local = canonical.local
         val path = local?.path
         // Only a COMPLETE file may reach the UI as playable/openable: during a
         // download `path` names the partial part. See TelegramMappers.isFullyLocal.
-        val isComplete = TelegramMappers.isFullyLocal(canonical)
+        val hasValidatedCompletedFile = TelegramMappers.isFullyLocal(canonical)
         if (BuildConfig.DEBUG) {
             android.util.Log.d(
                 TAG,
-                "MEDIA_FILE_UPDATE fileId=${file.id} complete=$isComplete " +
+                "MEDIA_FILE_UPDATE fileId=${file.id} validatedLocal=$hasValidatedCompletedFile " +
                     "localPathPresent=${!path.isNullOrBlank()} active=${local?.isDownloadingActive == true} " +
                     "tdlibCompleted=${local?.isDownloadingCompleted == true} downloaded=${local?.downloadedSize ?: 0} " +
+                    "pathChanged=${previousPath != null && previousPath != path} " +
                     "size=${canonical.size} expectedSize=${canonical.expectedSize} " +
                     "ext=${path?.substringAfterLast('.', "")?.lowercase()?.take(5).orEmpty()}"
             )
         }
-        when {
-            isComplete && !path.isNullOrBlank() -> {
-                photoPaths["file:${canonical.id}"] = path
-                failedDownloads.remove(canonical.id)
-                activeDownloads.remove(canonical.id)
-            }
-            local?.isDownloadingActive == true -> {
-                activeDownloads[canonical.id] = true
-                failedDownloads.remove(canonical.id)
-            }
-            activeDownloads.remove(canonical.id) != null -> {
-                // Was actively downloading and now is neither active nor
-                // completed -- TDLib genuinely stopped without finishing, not
-                // merely "hasn't started yet".
-                failedDownloads[canonical.id] = true
-                requestedFiles.remove(canonical.id)
-            }
-        }
+        if (hasValidatedCompletedFile && !path.isNullOrBlank()) photoPaths["file:${canonical.id}"] = path
         val affectedUsers = usersByAvatarFile[canonical.id].orEmpty()
         affectedUsers.forEach { userId ->
             if (userId == myUserId) publishMe()
         }
         if (affectedUsers.isNotEmpty() || chatsByAvatarFile[canonical.id].orEmpty().isNotEmpty()) publishChats()
 
-        // A file update belongs only to the messages in this reverse index. This
-        // keeps an image download from walking every loaded conversation.
-        val affectedByChat = mediaReferenceIndex.referencesFor(canonical.id).groupBy { it.chatId }
-        affectedByChat.forEach { (chatId, references) ->
-            val ids = references.map { it.messageId }.toSet()
-            conversationFlows[chatId]?.update { current ->
-                current.map { existing ->
-                    val messageId = existing.id.toLongOrNull()
-                    if (messageId == null || messageId !in ids) {
-                        existing
-                    } else {
-                        rawMessages[MessageKey(chatId, messageId)]?.let { raw ->
-                            mapUiMessage(raw).copy(presentationKey = existing.presentationKey)
-                        } ?: existing
-                    }
-                }
-            }
-            references.forEach { publishMessageEvent(chatId, it.messageId, MessageMotionEventType.MEDIA_UPDATED) }
-        }
+        // UpdateFile is independently observable through [files]. Messages are
+        // deliberately not re-mapped: media consumers subscribe by file id.
     }
 
     private fun requestChatPhoto(chat: TdApi.Chat) {
@@ -3871,7 +3743,7 @@ open class TelegramClient(private val application: Application) {
      * UpdateNewMessage, so a stale embedded File otherwise survives forever.
      */
     private fun canonicalizeMessageFiles(message: TdApi.Message): TdApi.Message {
-        fun file(value: TdApi.File?): TdApi.File? = latestFiles.resolve(value)
+        fun file(value: TdApi.File?): TdApi.File? = files.resolve(value)
         fun thumbnail(value: TdApi.Thumbnail?) {
             val current = value?.file ?: return
             file(current)?.let { value.file = it }
@@ -3941,20 +3813,9 @@ open class TelegramClient(private val application: Application) {
             lastReadOutboxMessageId = lastRead,
             reply = replyPreview(canonical),
             resolvePath = ::resolveMediaPath,
-            isDownloadFailed = { failedDownloads[it] == true },
+            isDownloadFailed = { files.get(it) is TelegramFileManager.State.Failed },
             resolveContentPath = ::resolvedVideoPath,
-            isDownloadActive = { activeDownloads[it] == true }
-        )
-        mediaReferenceIndex.replace(
-            MessageMediaReference(canonical.chatId, canonical.id),
-            // Both ids: a video item's `fileId` is its THUMBNAIL; the content
-            // file lives in `videoFileId`. Indexing only the thumbnail meant
-            // a completed video download never re-mapped the message and the
-            // viewer never learned the file had arrived.
-            mapped.mediaItems
-                .flatMap { listOf(it.fileId, it.videoFileId) }
-                .filter { it != 0 }
-                .toSet()
+            isDownloadActive = { files.get(it) is TelegramFileManager.State.Downloading }
         )
         return mapped
     }
@@ -3976,17 +3837,17 @@ open class TelegramClient(private val application: Application) {
      */
     private fun resolvedVideoPath(file: TdApi.File?): String? {
         if (file == null) return null
-        return TelegramMappers.localPath(latestFiles.resolve(file))
+        return TelegramMappers.localPath(files.resolve(file))
     }
 
     private fun resolveMediaPath(file: TdApi.File?): String? {
         if (file == null) return null
-        val canonical = latestFiles.resolve(file) ?: file
+        val canonical = files.resolve(file) ?: file
         TelegramMappers.localPath(canonical)?.let { return it }
         // A file TDLib already gave up on is not retried automatically -- that
         // would spin forever against a dead file. The UI offers a real retry
         // affordance instead; see retryMediaDownload.
-        if (failedDownloads[file.id] != true &&
+        if (files.get(file.id) !is TelegramFileManager.State.Failed &&
             canonical.local?.canBeDownloaded == true &&
             canonical.local?.isDownloadingActive != true
         ) {
@@ -4077,11 +3938,9 @@ open class TelegramClient(private val application: Application) {
         users.clear()
         typing.clear()
         photoPaths.clear()
-        latestFiles.clear()
-        requestedFiles.clear()
+        files.clear()
         conversationFlows.clear()
         rawMessages.clear()
-        mediaReferenceIndex.clear()
         chatAvatarFileByChat.clear()
         chatsByAvatarFile.clear()
         userAvatarFileByUser.clear()
@@ -4092,8 +3951,6 @@ open class TelegramClient(private val application: Application) {
         // File ids, story data, and group metadata are all specific to the
         // account that just lost its session -- a fresh login gets a fresh
         // TDLib database and none of these ids or entities remain meaningful.
-        activeDownloads.clear()
-        failedDownloads.clear()
         activeStories.clear()
         storiesCache.clear()
         supergroups.clear()
@@ -4139,17 +3996,6 @@ open class TelegramClient(private val application: Application) {
 
         /** Low: a preview thumbnail must never outrank the media the user opened. */
         private const val THUMBNAIL_PRIORITY = 8
-        // Defensive-only guard for the local-fill loop in collectHistoryPage().
-        // The loop's real stopping conditions are "collected enough" and "a
-        // round added zero new unique messages" -- both fire well before this
-        // in normal operation, since local db batches are typically dozens of
-        // messages, not one at a time. This cap exists only to bound the
-        // pathological case where local rounds keep making some progress (so
-        // the zero-new-unique check never fires) without ever reaching the
-        // page size; it is generous relative to typical page sizes so it does
-        // not cut off local history that is still genuinely being found and
-        // force an unnecessary network round-trip.
-        private const val MAX_LOCAL_FILL_ROUNDS = 20
         // Bounds how long awaitPushFetchCompletion (run from PushFetchWorker,
         // only for the error-406 case) waits for UpdateHavePendingNotifications
         // to clear before returning -- long enough for a normal fetch to

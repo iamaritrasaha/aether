@@ -6,6 +6,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.foresightlabs.aether.data.telegram.TelegramDataSource
+import com.foresightlabs.aether.data.telegram.TelegramFileManager
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,7 +34,11 @@ import kotlinx.coroutines.launch
  * composition; audio focus is handled by ExoPlayer itself via
  * [handleAudioFocus][ExoPlayer.setAudioAttributes].
  */
-class AudioPlaybackController(private val context: Context) {
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+class AudioPlaybackController(
+    private val context: Context,
+    private val telegramFiles: TelegramFileManager? = null
+) {
 
     /** Where the one active note is. No [Playback] at all means idle. */
     enum class Status { DOWNLOADING, PLAYING, PAUSED, FAILED }
@@ -83,11 +90,15 @@ class AudioPlaybackController(private val context: Context) {
      * the old item would reopen a path that no longer exists.
      */
     private var activePath: String? = null
+    private var activeTelegramFileId: Int? = null
     private var activeClip: LongRange? = null
 
     /** The file the current player was built on; exposed so tests can see a rebuild. */
     @androidx.annotation.VisibleForTesting
     internal val activeFilePath: String? get() = activePath.takeIf { player != null }
+
+    @androidx.annotation.VisibleForTesting
+    internal val activeFileId: Int? get() = activeTelegramFileId.takeIf { player != null }
 
     private val _playback = MutableStateFlow<Playback?>(null)
 
@@ -133,6 +144,25 @@ class AudioPlaybackController(private val context: Context) {
      */
     fun toggleClip(key: String, filePath: String, clipMs: LongRange) {
         togglePlayback(key, filePath, requestDownload = null, requestFreshCopy = null, clipMs = clipMs)
+    }
+
+    /** Plays Telegram media by stable TDLib file id through [TelegramDataSource]. */
+    fun toggleTelegram(key: String, fileId: Int, requestFreshCopy: (() -> Unit)? = null) {
+        val manager = telegramFiles ?: run {
+            fail(key, errorCode = null)
+            return
+        }
+        val current = _playback.value?.takeIf { it.key == key }
+        val p = player
+        if (current?.isFailed == true && requestFreshCopy != null) requestFreshCopy()
+        if (current != null && p != null && !current.isFailed && activeTelegramFileId == fileId) {
+            if (p.isPlaying) p.pause() else {
+                if (p.playbackState == Player.STATE_ENDED) p.seekTo(0)
+                p.play()
+            }
+            return
+        }
+        startTelegram(key, fileId, manager)
     }
 
     private fun togglePlayback(
@@ -218,6 +248,7 @@ class AudioPlaybackController(private val context: Context) {
         releasePlayer()
         activeKey = key
         activePath = path
+        activeTelegramFileId = null
         activeClip = clipMs
         val item = MediaItem.Builder()
             .setUri(Uri.fromFile(File(path)))
@@ -233,7 +264,7 @@ class AudioPlaybackController(private val context: Context) {
             }
             .build()
         log("AUDIO_PREPARE key=$key ${describe(path)} clipped=${clipMs != null}")
-        val p = ExoPlayer.Builder(context).build().apply {
+        val p = buildPlayer().apply {
             setAudioAttributes(
                 androidx.media3.common.AudioAttributes.Builder()
                     .setUsage(androidx.media3.common.C.USAGE_MEDIA)
@@ -265,6 +296,49 @@ class AudioPlaybackController(private val context: Context) {
         player = p
         publishNow()
         startTicker()
+    }
+
+    private fun startTelegram(key: String, fileId: Int, manager: TelegramFileManager) {
+        releasePlayer()
+        activeKey = key
+        activeTelegramFileId = fileId
+        _playback.value = Playback(key, Status.DOWNLOADING, 0L, 0L)
+        val item = MediaItem.fromUri(TelegramDataSource.uri(fileId))
+        log("AUDIO_PREPARE key=$key fileId=$fileId source=tdlib")
+        val mediaSourceFactory = DefaultMediaSourceFactory(TelegramDataSource.Factory(manager))
+        val p = ExoPlayer.Builder(context).setMediaSourceFactory(mediaSourceFactory).build().apply {
+            setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_SPEECH)
+                    .build(),
+                true
+            )
+            setMediaItem(item)
+            repeatMode = Player.REPEAT_MODE_OFF
+            addListener(playerListener(key, fileId))
+            prepare()
+            play()
+        }
+        player = p
+        startTicker()
+    }
+
+    private fun buildPlayer(): ExoPlayer = ExoPlayer.Builder(context).build()
+
+    private fun playerListener(key: String, fileId: Int? = null) = object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            log("AUDIO_PLAYER_STATE key=$key fileId=${fileId ?: 0} state=${stateName(playbackState)}")
+            if (playbackState == Player.STATE_ENDED) publish(ended = true)
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            publishNow()
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            handlePlayerError(key, error.errorCode, error.errorCodeName, error.cause?.javaClass?.simpleName)
+        }
     }
 
     /**
@@ -322,6 +396,7 @@ class AudioPlaybackController(private val context: Context) {
         player = null
         activeKey = null
         activePath = null
+        activeTelegramFileId = null
         activeClip = null
         _playback.value = null
     }

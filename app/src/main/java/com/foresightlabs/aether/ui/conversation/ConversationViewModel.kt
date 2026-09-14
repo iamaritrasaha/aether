@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.foresightlabs.aether.AetherApplication
 import com.foresightlabs.aether.BuildConfig
 import com.foresightlabs.aether.data.telegram.TelegramClient
+import com.foresightlabs.aether.data.telegram.ConversationHistoryManager
 import com.foresightlabs.aether.data.telegram.TelegramMappers
 import com.foresightlabs.aether.domain.text.AetherEntity
 import com.foresightlabs.aether.domain.text.AetherText
@@ -41,8 +42,6 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 enum class ConversationHistoryState {
     IDLE,
@@ -75,6 +74,7 @@ class ConversationViewModel(
     )
 
     private val telegram = (application as AetherApplication).telegram
+    val telegramFiles get() = telegram.files
 
     // Calls have exactly one entry point. Reaching past this into TelegramClient
     // would skip the media-availability check and ring someone for nothing.
@@ -263,10 +263,8 @@ class ConversationViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val viewedIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-    private var oldestId: Long = 0L
-    private val historyMutex = Mutex()
+    private var historyManager: ConversationHistoryManager? = null
     private var historyGeneration = 0L
-    private var initialTopUpJob: Job? = null
     private var opened = false
     private var typingJob: Job? = null
     private var sendInFlight = false
@@ -310,6 +308,11 @@ class ConversationViewModel(
                 }
             }
         }
+        // The history owner mirrors the one coherent list after every live
+        // message mutation; routine updates never trigger a history reload.
+        viewModelScope.launch {
+            messages.collect { current -> historyManager?.sync(current) }
+        }
         viewModelScope.launch { start() }
     }
 
@@ -320,11 +323,9 @@ class ConversationViewModel(
 
     private suspend fun start() {
         val generation = ++historyGeneration
-        initialTopUpJob?.cancel()
-        historyMutex.withLock {
-            oldestId = 0L
-            _historyState.value = ConversationHistoryState.LOADING_INITIAL
-        }
+        historyManager?.destroy()
+        historyManager = null
+        _historyState.value = ConversationHistoryState.LOADING_INITIAL
         _isResolving.value = true
         _resolveError.value = null
         try {
@@ -406,133 +407,52 @@ class ConversationViewModel(
      * that this page was thin, so any shortfall is topped up in the background
      * afterward rather than blocking the first render on it.
      */
-    private suspend fun loadInitial(generation: Long) = historyMutex.withLock {
-        if (generation != historyGeneration) return@withLock
+    private suspend fun loadInitial(generation: Long) {
+        if (generation != historyGeneration) return
         val topic = forumTopicId
-        if (topic != null) {
-            // GetForumTopicHistory has no onlyLocal option in this TDLib build,
-            // so a forum topic's initial load stays network-capable.
-            val page = telegram.loadTopicHistory(activeChatId, topic, 0L, HISTORY_PAGE_SIZE)
-            if (page.isNotEmpty()) {
-                oldestId = page.first().id.toLongOrNull() ?: 0L
-                telegram.upsertConversation(activeChatId, page, prepend = true)
+        val chatId = activeChatId
+        val manager = ConversationHistoryManager(
+            pageSize = HISTORY_PAGE_SIZE,
+            localFirst = topic == null,
+            load = { boundary, limit, onlyLocal, reason ->
+                if (topic != null) {
+                    telegram.loadTopicHistory(chatId, topic, boundary, limit)
+                } else {
+                    telegram.loadHistoryBatch(chatId, boundary, limit, onlyLocal, reason).messages
+                }
+            },
+            current = { telegram.messagesFlow(chatId).value },
+            publish = { page ->
+                telegram.upsertConversation(chatId, page, prepend = true)
                 markVisible(page.map { it.id })
-            }
-            // A short page is not proof of exhaustion. Continue until TDLib
-            // returns an empty page, which avoids stopping early on sparse topics.
-            _historyState.value = if (page.isEmpty()) {
-                ConversationHistoryState.END_REACHED
-            } else {
-                ConversationHistoryState.LOADED
-            }
-            return
-        }
-        val local = telegram.loadHistory(
-            activeChatId,
-            0L,
-            HISTORY_PAGE_SIZE,
-            allowNetwork = false,
-            reason = "INITIAL"
-        )
-        if (local.messages.isNotEmpty()) {
-            oldestId = local.oldestId
-            telegram.upsertConversation(activeChatId, local.messages, prepend = true)
-            markVisible(local.messages.map { it.id })
-        }
-        if (local.messages.size >= HISTORY_PAGE_SIZE) {
-            _historyState.value = ConversationHistoryState.LOADED
-            return
-        }
-        // Local cache didn't fill the first page. Top up over the network in the
-        // background: whatever was just rendered from cache stays on screen the
-        // whole time -- upsertConversation merges by id, it never clears the list.
-        initialTopUpJob = viewModelScope.launch {
-            historyMutex.withLock {
-                if (generation != historyGeneration) return@withLock
-                try {
-                    val filled = telegram.loadHistory(
-                        activeChatId,
-                        oldestId,
-                        HISTORY_PAGE_SIZE - local.messages.size,
-                        allowNetwork = true,
-                        reason = "INITIAL_TOPUP"
-                    )
-                    if (generation != historyGeneration) return@withLock
-                    if (filled.messages.isNotEmpty()) {
-                        oldestId = filled.oldestId
-                        telegram.upsertConversation(activeChatId, filled.messages, prepend = true)
-                    }
-                    _historyState.value = if (filled.endOfHistory) {
-                        ConversationHistoryState.END_REACHED
-                    } else {
-                        ConversationHistoryState.LOADED
-                    }
-                } catch (error: Exception) {
-                    if (generation == historyGeneration) {
-                        _historyState.value = ConversationHistoryState.FAILED
-                        if (BuildConfig.DEBUG) Log.d("AetherTd", "HISTORY_TOPUP_FAILED class=${error::class.java.simpleName}")
-                    }
+            },
+            onState = { state ->
+                _historyState.value = when (state) {
+                    ConversationHistoryManager.State.INITIAL,
+                    ConversationHistoryManager.State.LOADING -> ConversationHistoryState.LOADING_INITIAL
+                    ConversationHistoryManager.State.LOADING_OLDER -> ConversationHistoryState.LOADING_OLDER
+                    ConversationHistoryManager.State.READY -> ConversationHistoryState.LOADED
+                    ConversationHistoryManager.State.END_REACHED -> ConversationHistoryState.END_REACHED
+                    ConversationHistoryManager.State.FAILED -> ConversationHistoryState.FAILED
+                    ConversationHistoryManager.State.DESTROYED -> _historyState.value
                 }
             }
-        }
+        )
+        historyManager = manager
+        manager.initialize()
     }
 
     fun loadOlder() {
-        if (_historyState.value == ConversationHistoryState.FAILED && oldestId == 0L) {
-            // There is no pagination cursor when the initial network fill failed
-            // before returning any page. Restart the initial request instead of
-            // presenting a retry control that can never make progress.
+        val manager = historyManager
+        if (manager == null || (_historyState.value == ConversationHistoryState.FAILED && manager.oldestMessageId == 0L)) {
             retryResolve()
             return
         }
         if (_historyState.value == ConversationHistoryState.END_REACHED ||
-            _historyState.value == ConversationHistoryState.LOADING_OLDER ||
-            oldestId == 0L
+            _historyState.value == ConversationHistoryState.LOADING_OLDER
         ) return
-        val topic = forumTopicId
-        val generation = historyGeneration
         viewModelScope.launch {
-            historyMutex.withLock {
-                if (generation != historyGeneration ||
-                    _historyState.value == ConversationHistoryState.END_REACHED
-                ) return@withLock
-                _historyState.value = ConversationHistoryState.LOADING_OLDER
-                try {
-                    if (topic != null) {
-                        val page = telegram.loadTopicHistory(activeChatId, topic, oldestId, HISTORY_PAGE_SIZE)
-                        if (page.isEmpty()) {
-                            _historyState.value = ConversationHistoryState.END_REACHED
-                        } else {
-                            oldestId = page.first().id.toLongOrNull() ?: oldestId
-                            telegram.upsertConversation(activeChatId, page, prepend = true)
-                            _historyState.value = ConversationHistoryState.LOADED
-                        }
-                    } else {
-                        val page = telegram.loadHistory(
-                            activeChatId,
-                            oldestId,
-                            HISTORY_PAGE_SIZE,
-                            allowNetwork = true,
-                            reason = "PAGINATION"
-                        )
-                        if (generation != historyGeneration) return@withLock
-                        if (page.messages.isNotEmpty()) {
-                            oldestId = page.oldestId
-                            telegram.upsertConversation(activeChatId, page.messages, prepend = true)
-                        }
-                        _historyState.value = if (page.endOfHistory) {
-                            ConversationHistoryState.END_REACHED
-                        } else {
-                            ConversationHistoryState.LOADED
-                        }
-                    }
-                } catch (error: Exception) {
-                    if (generation == historyGeneration) {
-                        _historyState.value = ConversationHistoryState.FAILED
-                        if (BuildConfig.DEBUG) Log.d("AetherTd", "HISTORY_OLDER_FAILED class=${error::class.java.simpleName}")
-                    }
-                }
-            }
+            manager.loadOlder()
         }
     }
 
@@ -1567,9 +1487,7 @@ class ConversationViewModel(
             val window = runCatching { telegram.loadHistoryAround(activeChatId, id) }.getOrDefault(emptyList())
             if (window.isNotEmpty()) {
                 telegram.upsertConversation(activeChatId, window, prepend = true)
-                window.firstOrNull()?.id?.toLongOrNull()?.let { first ->
-                    if (first < oldestId || oldestId == 0L) oldestId = first
-                }
+                historyManager?.include(window)
             }
             // GetChatHistory answers with the neighbourhood even when the
             // message itself is gone, so landing is decided by membership --
@@ -1610,7 +1528,7 @@ class ConversationViewModel(
     override fun onCleared() {
         super.onCleared()
         historyGeneration++
-        initialTopUpJob?.cancel()
+        historyManager?.destroy()
         if (!opened) return
 
         // The draft is stored server-side rather than in a private Aether table, so

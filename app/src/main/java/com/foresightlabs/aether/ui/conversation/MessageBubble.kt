@@ -108,6 +108,8 @@ import com.airbnb.lottie.compose.LottieConstants
 import com.airbnb.lottie.compose.rememberLottieComposition
 import com.foresightlabs.aether.BuildConfig
 import com.foresightlabs.aether.data.media.TgsDecompressor
+import com.foresightlabs.aether.data.telegram.TelegramFileManager
+import com.foresightlabs.aether.data.telegram.TelegramMappers
 import com.foresightlabs.aether.domain.messages.ConversationMotion
 import com.foresightlabs.aether.domain.messages.MessageMotionEvent
 import com.foresightlabs.aether.domain.model.MediaItem
@@ -141,6 +143,8 @@ fun MessageBubble(
     onOpenDocument: (MediaItem) -> Unit = {},
     /** The conversation's one audio-playback spot (voice notes, audio messages). */
     audioPlayback: AudioPlaybackController,
+    /** Canonical account file state; message paths are only initial snapshots. */
+    fileManager: TelegramFileManager? = null,
     /** Requests a media file's download (voice/audio tap-to-download). */
     onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
     /** Drops a local copy that would not play and downloads it again. */
@@ -169,6 +173,7 @@ fun MessageBubble(
     /** Group chats label the speaker once per run; 1:1 conversations never do. */
     showSenderName: Boolean = false
 ) {
+    val primaryMedia = observeTelegramMedia(message.mediaItems.firstOrNull(), fileManager)
     val coroutineScope = rememberCoroutineScope()
     val colors = LocalAetherColors.current
     val haptic = LocalHapticFeedback.current
@@ -566,7 +571,7 @@ fun MessageBubble(
                                                         }
                                                     }
                                                     if (!textHandled && (message.type == MessageType.IMAGE || message.type == MessageType.STICKER || message.type == MessageType.VIDEO_NOTE || message.type == MessageType.ANIMATION || (message.mediaItems.isNotEmpty() && message.type != MessageType.FILE))) {
-                                                        val media = message.mediaItems.firstOrNull()
+                                                        val media = primaryMedia
                                                         if (media != null) {
                                                             if (BuildConfig.DEBUG) {
                                                                 android.util.Log.d("AetherTd", "MEDIA_TAP msgId=${message.id} fileId=${media.fileId} hasLocalFile=${media.hasLocalFile} isDownloading=${media.isDownloading} isUploading=${media.isUploading}")
@@ -674,7 +679,7 @@ fun MessageBubble(
                         // Message Content by Type
                         when (message.type) {
                             MessageType.VOICE -> {
-                                val voiceMedia = message.mediaItems.firstOrNull()
+                                val voiceMedia = primaryMedia
                                 val voiceKey = "voice:${voiceMedia?.id ?: message.id}"
                                 // Observed, not read: a bare StateFlow.value read here
                                 // never recomposed the bubble, so play/pause, progress
@@ -696,12 +701,9 @@ fun MessageBubble(
                                             )
                                         }
                                         val fileId = voiceMedia?.fileId?.takeIf { it != 0 }
-                                        audioPlayback.toggle(
-                                            voiceKey,
-                                            voiceMedia?.url,
-                                            fileId?.let { id -> { onRequestMediaDownload(id, false) } },
-                                            fileId?.let { id -> { onRedownloadMedia(id) } }
-                                        )
+                                        if (fileId != null) {
+                                            audioPlayback.toggleTelegram(voiceKey, fileId) { onRedownloadMedia(fileId) }
+                                        }
                                     },
                                     onSeek = { fraction ->
                                         voiceMedia?.let { audioPlayback.seekToFraction(voiceKey, fraction) }
@@ -712,7 +714,7 @@ fun MessageBubble(
                                 )
                             }
                             MessageType.AUDIO -> {
-                                val audioMedia = message.mediaItems.firstOrNull()
+                                val audioMedia = primaryMedia
                                 val audioKey = "audio:${audioMedia?.id ?: message.id}"
                                 val activePlayback = audioPlayback.playback.collectAsState().value
                                 AudioAttachmentContent(
@@ -724,12 +726,9 @@ fun MessageBubble(
                                     playback = activePlayback?.takeIf { it.key == audioKey },
                                     onTogglePlay = {
                                         val fileId = audioMedia?.fileId?.takeIf { it != 0 }
-                                        audioPlayback.toggle(
-                                            audioKey,
-                                            audioMedia?.url,
-                                            fileId?.let { id -> { onRequestMediaDownload(id, false) } },
-                                            fileId?.let { id -> { onRedownloadMedia(id) } }
-                                        )
+                                        if (fileId != null) {
+                                            audioPlayback.toggleTelegram(audioKey, fileId) { onRedownloadMedia(fileId) }
+                                        }
                                     }
                                 )
                             }
@@ -739,14 +738,14 @@ fun MessageBubble(
                                     fileSize = message.fileSize ?: "",
                                     fileExtension = message.fileExtension ?: "FILE",
                                     isOutgoing = isOutgoing,
-                                    isDownloading = message.mediaItems.firstOrNull()?.isDownloading == true,
-                                    onClick = message.mediaItems.firstOrNull()
+                                    isDownloading = primaryMedia?.isDownloading == true,
+                                    onClick = primaryMedia
                                         ?.takeIf { it.fileId != 0 || it.url.isNotBlank() }
                                         ?.let { media -> { onOpenDocument(media) } }
                                 )
                             }
                             MessageType.IMAGE -> {
-                                val firstMedia = message.mediaItems.firstOrNull()
+                                val firstMedia = primaryMedia
                                 if (firstMedia != null) {
                                     Box {
                                         ImageAttachmentContent(
@@ -762,7 +761,7 @@ fun MessageBubble(
                                 }
                             }
                             MessageType.VIDEO -> {
-                                val firstMedia = message.mediaItems.firstOrNull()
+                                val firstMedia = primaryMedia
                                 if (firstMedia != null) {
                                     Box {
                                         VideoAttachmentContent(
@@ -779,7 +778,7 @@ fun MessageBubble(
                                 }
                             }
                             MessageType.STICKER -> {
-                                val stickerMedia = message.mediaItems.firstOrNull()
+                                val stickerMedia = primaryMedia
                                 StickerContent(
                                     media = stickerMedia,
                                     emoji = message.text,
@@ -790,7 +789,7 @@ fun MessageBubble(
                                 )
                             }
                             MessageType.VIDEO_NOTE -> {
-                                val videoMedia = message.mediaItems.firstOrNull()
+                                val videoMedia = primaryMedia
                                 VideoNoteContent(
                                     media = videoMedia,
                                     durationSec = message.voiceDurationSec,
@@ -799,7 +798,7 @@ fun MessageBubble(
                                 )
                             }
                             MessageType.ANIMATION -> {
-                                val animMedia = message.mediaItems.firstOrNull()
+                                val animMedia = primaryMedia
                                 AnimationAttachmentContent(
                                     media = animMedia,
                                     caption = message.text,
@@ -2184,6 +2183,55 @@ private fun VenueAttachmentContent(
 
 private fun formatDuration(seconds: Int): String =
     "%d:%02d".format(seconds / 60, seconds % 60)
+
+/** Rebuilds only this media presentation when its own TDLib file ids change. */
+@Composable
+internal fun observeTelegramMedia(
+    snapshot: MediaItem?,
+    files: TelegramFileManager?
+): MediaItem? {
+    if (snapshot == null || files == null) return snapshot
+    val mainState = snapshot.fileId.takeIf { it != 0 }
+        ?.let { files.observe(it).collectAsState().value }
+    val videoState = snapshot.videoFileId.takeIf { it != 0 }
+        ?.let { files.observe(it).collectAsState().value }
+
+    var resolved = snapshot
+    resolved = when (mainState) {
+        is TelegramFileManager.State.Downloaded -> resolved.copy(
+            url = mainState.path,
+            hasLocalFile = true,
+            isDownloading = false,
+            downloadFailed = false
+        )
+        is TelegramFileManager.State.Downloading -> resolved.copy(
+            url = "",
+            hasLocalFile = false,
+            isDownloading = true,
+            downloadFailed = false
+        )
+        is TelegramFileManager.State.Failed -> resolved.copy(
+            url = "",
+            hasLocalFile = false,
+            isDownloading = false,
+            downloadFailed = true
+        )
+        is TelegramFileManager.State.NotDownloaded -> {
+            val uploadPath = TelegramMappers.localUploadPath(mainState.file)
+            resolved.copy(
+                url = uploadPath.orEmpty(),
+                hasLocalFile = uploadPath != null,
+                isDownloading = false,
+                downloadFailed = false
+            )
+        }
+        null -> resolved
+    }
+    return when (videoState) {
+        is TelegramFileManager.State.Downloaded -> resolved.copy(videoLocalPath = videoState.path)
+        else -> if (snapshot.videoFileId != 0) resolved.copy(videoLocalPath = "") else resolved
+    }
+}
 
 /** How far a bubble must travel left before releasing replies to it. */
 private val SwipeReplyThreshold = 64.dp

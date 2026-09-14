@@ -1167,11 +1167,29 @@ object TelegramMappers {
         return Base64.encodeToString(data, Base64.NO_WRAP)
     }
 
-    /** The path of [file]'s bytes when ALL of them are on disk; see [isFullyLocal]. */
+    /**
+     * The completed TDLib download path, after separately validating the path.
+     * A non-empty partial path or non-zero downloadedSize is never completion.
+     */
     fun localPath(file: TdApi.File?): String? {
         val path = file?.local?.path
         if (path.isNullOrBlank()) return null
-        return path.takeIf { isFullyLocal(file) }
+        return when {
+            isFullyLocal(file) -> path
+            localUploadPath(file) != null -> path
+            else -> null
+        }
+    }
+
+    /**
+     * A device-local upload source is available content, but never a completed
+     * TDLib download. Keep this classification separate from [isFullyLocal].
+     */
+    fun localUploadPath(file: TdApi.File?): String? {
+        val local = file?.local ?: return null
+        val path = local.path.takeIf { it.isNotBlank() } ?: return null
+        if (local.canBeDownloaded || file.remote?.isUploadingCompleted == true) return null
+        return path.takeIf { File(it).let { candidate -> candidate.isFile && candidate.length() > 0L } }
     }
 
     /**
@@ -1181,26 +1199,14 @@ object TelegramMappers {
      * available PART, so "a non-empty file exists there" is not enough: a
      * voice note taken for playable at that moment played a fragment (or
      * nothing) and kept the part's path after TDLib moved the finished file.
-     * A file TDLib has not marked complete still counts when nothing is
-     * downloading it and it is as large as the file is -- a photo picked from
-     * the gallery, before its upload, is exactly that.
+     * Completion is exclusively TDLib's isDownloadingCompleted flag. Filesystem
+     * checks happen only after that canonical state is true.
      */
     fun isFullyLocal(file: TdApi.File?): Boolean {
         val local = file?.local ?: return false
         if (local.path.isNullOrBlank()) return false
-        val onDisk = File(local.path).takeIf { it.exists() }?.length() ?: return false
-        if (onDisk <= 0L) return false
-        val expected = if (file.size > 0L) file.size else file.expectedSize
-        if (local.isDownloadingCompleted) {
-            // Completion is necessary, but a stale path or a missing/short final
-            // file is not playable truth. downloadedPrefixSize is the strongest
-            // TDLib-side byte truth available for the final local file.
-            val downloaded = maxOf(local.downloadedSize, local.downloadedPrefixSize)
-            return (expected <= 0L || onDisk >= expected) &&
-                (downloaded <= 0L || expected <= 0L || downloaded >= expected)
-        }
-        if (local.isDownloadingActive) return false
-        return expected <= 0L || onDisk >= expected
+        if (!local.isDownloadingCompleted) return false
+        return File(local.path).let { it.isFile && it.length() > 0L }
     }
 
     fun initials(name: String): String {

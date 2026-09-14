@@ -246,6 +246,8 @@ fun ConversationScreen(
     onVoiceRecordingEnded: () -> Unit = {},
     /** Tests inject one; otherwise the conversation's own, kept by a ViewModel across rotation. */
     voiceNoteController: VoiceNoteController? = null,
+    /** Account-scoped TDLib file truth used by media bubbles and Media3. */
+    telegramFiles: com.foresightlabs.aether.data.telegram.TelegramFileManager? = null,
     onEditMessage: (Message, String) -> Unit = { _, _ -> },
     onAddReaction: (Message, String) -> Unit = { _, _ -> },
     onPinMessage: (Message) -> Unit = {},
@@ -601,13 +603,14 @@ fun ConversationScreen(
 
     // Held by id, not by value: a UpdateFile arriving while the viewer is open
     var selectedMediaItem by remember { mutableStateOf<MediaItem?>(null) }
-    val selectedMediaForViewer = remember(selectedMediaItem, messages) {
+    val selectedMediaSnapshot = remember(selectedMediaItem, messages) {
         selectedMediaItem?.let { current ->
             messages.firstNotNullOfOrNull { m ->
                 m.mediaItems.find { it.id == current.id || (current.fileId != 0 && it.fileId == current.fileId) }
             } ?: current
         }
     }
+    val selectedMediaForViewer = observeTelegramMedia(selectedMediaSnapshot, telegramFiles)
     var isMediaViewerVisible by remember { mutableStateOf(false) }
 
     // Media picked from the gallery or camera is held here for review --
@@ -697,24 +700,11 @@ fun ConversationScreen(
     // The conversation's single audio player: one voice note / audio message
     // audible at a time, real position/duration driving the bubble UI,
     // released when the conversation leaves composition.
-    val audioPlayback = remember { com.foresightlabs.aether.ui.conversation.AudioPlaybackController(context) }
+    val audioPlayback = remember(telegramFiles) {
+        com.foresightlabs.aether.ui.conversation.AudioPlaybackController(context, telegramFiles)
+    }
     androidx.compose.runtime.DisposableEffect(audioPlayback) {
         onDispose { audioPlayback.release() }
-    }
-    // A note whose download was requested from its play button starts playing
-    // the moment the completed download re-maps the message and the path
-    // arrives in the bubble's media item.
-    val audioPendingPathArrival by audioPlayback.pendingDownloadKey.collectAsState()
-    LaunchedEffect(audioPendingPathArrival, messages) {
-        val key = audioPendingPathArrival ?: return@LaunchedEffect
-        val note = messages.firstNotNullOfOrNull { it.mediaItems.firstOrNull { m -> key == "voice:${m.id}" || key == "audio:${m.id}" } }
-        when {
-            note == null -> Unit
-            note.hasLocalFile -> audioPlayback.onPathArrived(key, note.url)
-            // The download we armed autoplay for has failed: disarm, so a
-            // later unrelated re-map can never start this note playing.
-            note.downloadFailed -> audioPlayback.onDownloadFailed(key)
-        }
     }
 
     // --- Voice notes ------------------------------------------------------------
@@ -1878,6 +1868,7 @@ fun ConversationScreen(
                 if (entry is ConversationEntry.Album) {
                     AlbumEntryRow(
                         album = entry,
+                        fileManager = telegramFiles,
                         onLongPress = {
                             onRequestCapabilities(entry.anchor)
                             messageActionsTargetId = entry.anchor.id
@@ -1932,6 +1923,7 @@ fun ConversationScreen(
                     },
                     onOpenDocument = { media -> openDocument(media) },
                     audioPlayback = audioPlayback,
+                    fileManager = telegramFiles,
                     onRequestMediaDownload = onRequestMediaDownload,
                     onRedownloadMedia = onRedownloadMedia,
                     onReactionClick = { targetMsg, emoji ->
@@ -2316,7 +2308,8 @@ fun ConversationScreen(
                 isMediaViewerVisible = false
                 selectedMediaItem = null
             },
-            onRequestDownload = onRequestMediaDownload
+            onRequestDownload = onRequestMediaDownload,
+            fileManager = telegramFiles
         )
 
         ConversationErrorBanner(
@@ -2498,6 +2491,7 @@ private fun extractAudioMetadata(context: android.content.Context, file: File): 
 @Composable
 private fun AlbumEntryRow(
     album: ConversationEntry.Album,
+    fileManager: com.foresightlabs.aether.data.telegram.TelegramFileManager?,
     onLongPress: () -> Unit,
     onMediaClick: (MediaItem) -> Unit,
     modifier: Modifier = Modifier
@@ -2524,6 +2518,7 @@ private fun AlbumEntryRow(
         ) {
             AlbumBubble(
                 album = album,
+                fileManager = fileManager,
                 contentColor = contentColor,
                 onMediaClick = onMediaClick
             )

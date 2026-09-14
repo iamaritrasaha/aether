@@ -65,6 +65,7 @@ import androidx.core.content.FileProvider
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.foresightlabs.aether.domain.model.MediaItem
+import com.foresightlabs.aether.data.telegram.TelegramFileManager
 import com.foresightlabs.aether.ui.theme.AetherEmber
 import com.foresightlabs.aether.ui.theme.ManropeFontFamily
 import java.io.File
@@ -97,7 +98,8 @@ fun MediaViewer(
     senderName: String,
     isVisible: Boolean,
     onClose: () -> Unit,
-    onRequestDownload: (fileId: Int, isRetry: Boolean) -> Unit = { _, _ -> }
+    onRequestDownload: (fileId: Int, isRetry: Boolean) -> Unit = { _, _ -> },
+    fileManager: TelegramFileManager? = null
 ) {
     var currentItem by remember { mutableStateOf<MediaItem?>(null) }
     if (mediaItem != null) {
@@ -155,7 +157,7 @@ fun MediaViewer(
     // requested until the viewer that actually plays it is open, so scrolling
     // past video messages never triggers a full download.
     LaunchedEffect(activeItem.id, activeItem.isVideo, activeItem.videoFileId, activeItem.videoLocalPath) {
-        if (activeItem.isVideo && activeItem.videoLocalPath.isBlank() && activeItem.videoFileId != 0) {
+        if (fileManager == null && activeItem.isVideo && activeItem.videoLocalPath.isBlank() && activeItem.videoFileId != 0) {
             if (com.foresightlabs.aether.BuildConfig.DEBUG) {
                 android.util.Log.d("AetherTd", "MEDIA_VIEWER_VIDEO_DOWNLOAD_REQUEST fileId=${activeItem.videoFileId}")
             }
@@ -301,7 +303,16 @@ fun MediaViewer(
                         ?.let { File(it) }
                         ?.takeIf { it.exists() && it.length() > 0L }
                 }
-                if (videoFile != null) {
+                if (activeItem.videoFileId != 0 && fileManager != null) {
+                    com.foresightlabs.aether.ui.conversation.VideoNotePlayer(
+                        filePath = "",
+                        telegramFileId = activeItem.videoFileId,
+                        fileManager = fileManager,
+                        modifier = Modifier.fillMaxSize(),
+                        autoPlay = true,
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    )
+                } else if (videoFile != null) {
                     com.foresightlabs.aether.ui.conversation.VideoNotePlayer(
                         filePath = videoFile.absolutePath,
                         modifier = Modifier.fillMaxSize(),

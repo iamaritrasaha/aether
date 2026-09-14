@@ -34,12 +34,15 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
 import com.foresightlabs.aether.BuildConfig
+import com.foresightlabs.aether.data.telegram.TelegramDataSource
+import com.foresightlabs.aether.data.telegram.TelegramFileManager
 import java.io.File
 
 /**
@@ -140,6 +143,8 @@ fun LoopingVideoSticker(
 @Composable
 fun VideoNotePlayer(
     filePath: String,
+    telegramFileId: Int = 0,
+    fileManager: TelegramFileManager? = null,
     modifier: Modifier = Modifier,
     autoPlay: Boolean = false,
     onEnded: () -> Unit = {},
@@ -148,11 +153,18 @@ fun VideoNotePlayer(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val uri = remember(filePath) { Uri.fromFile(File(filePath)) }
+    val useTelegramSource = telegramFileId != 0 && fileManager != null
+    val uri = remember(filePath, telegramFileId, useTelegramSource) {
+        if (useTelegramSource) TelegramDataSource.uri(telegramFileId) else Uri.fromFile(File(filePath))
+    }
     var isPlaying by remember { mutableStateOf(autoPlay) }
 
-    val exoPlayer = remember(uri) {
-        ExoPlayer.Builder(context).build().apply {
+    val exoPlayer = remember(uri, fileManager) {
+        val builder = ExoPlayer.Builder(context)
+        if (useTelegramSource) {
+            builder.setMediaSourceFactory(DefaultMediaSourceFactory(TelegramDataSource.Factory(fileManager!!)))
+        }
+        builder.build().apply {
             setMediaItem(MediaItem.fromUri(uri))
             repeatMode = Player.REPEAT_MODE_OFF
             volume = 1f
@@ -160,7 +172,7 @@ fun VideoNotePlayer(
             addListener(object : Player.Listener {
                 override fun onRenderedFirstFrame() {
                     if (BuildConfig.DEBUG) {
-                        Log.d("AetherTd", "VIDEO_FIRST_FRAME_RENDERED path=$filePath elapsedRealtime=${SystemClock.elapsedRealtime()}")
+                        Log.d("AetherTd", "VIDEO_FIRST_FRAME_RENDERED fileId=$telegramFileId source=${if (useTelegramSource) "tdlib" else "local"} elapsedRealtime=${SystemClock.elapsedRealtime()}")
                     }
                 }
 

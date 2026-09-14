@@ -18,7 +18,7 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class TelegramFilePropagationTest {
     @Test
-    fun updateFileRemapsAnAlreadyVisibleVoiceMessageWithoutResendingTheMessage() = runBlocking {
+    fun updateFilePublishesCanonicalStateWithoutResendingOrRemappingTheMessage() = runBlocking {
         val finalFile = File.createTempFile("telegram-voice-final", ".ogg")
         finalFile.writeBytes(ByteArray(256) { 1 })
         try {
@@ -60,9 +60,12 @@ class TelegramFilePropagationTest {
             assertFalse(before.hasLocalFile)
 
             client.handleUpdate(TdApi.UpdateFile(completedFile))
-            val after = client.messagesFlow(42L).value.single().mediaItems.single()
-            assertTrue(after.hasLocalFile)
-            assertEquals(finalFile.absolutePath, after.url)
+            val canonical = client.files.observe(701).value
+            assertTrue(canonical is TelegramFileManager.State.Downloaded)
+            assertEquals(finalFile.absolutePath, (canonical as TelegramFileManager.State.Downloaded).path)
+            // UpdateFile does not need a Message remap. Compose consumers observe
+            // the file state above by id; the immutable message snapshot may stay stale.
+            assertFalse(client.messagesFlow(42L).value.single().mediaItems.single().hasLocalFile)
         } finally {
             finalFile.delete()
         }

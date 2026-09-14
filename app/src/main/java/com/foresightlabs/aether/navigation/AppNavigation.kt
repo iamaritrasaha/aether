@@ -1238,6 +1238,7 @@ private fun ConversationRoute(
     ) {
         ConversationScreen(
             chat = header, messages = messages, canSend = canSend, onBack = onBack,
+            telegramFiles = viewModel.telegramFiles,
             onNavigateToProfile = onNavigateToProfile,
             onNavigateToChatAppearance = { header?.id?.toLongOrNull()?.let(onNavigateToChatAppearance) },
             onTogglePin = viewModel::toggleChatPinned,

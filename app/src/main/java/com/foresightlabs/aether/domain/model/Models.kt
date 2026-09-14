@@ -194,7 +194,13 @@ data class MediaItem(
     val videoFileId: Int = 0,
     /** Local path of the video content, when already downloaded; blank otherwise. */
     val videoLocalPath: String = ""
-)
+) {
+    /** Stable TDLib id of the content opened/downloaded by the user. */
+    val mainFileId: Int get() = if (isVideo && videoFileId != 0) videoFileId else fileId
+
+    /** Stable TDLib preview id, kept separate from video content identity. */
+    val thumbnailFileId: Int get() = if (isVideo) fileId else 0
+}
 
 @Immutable
 data class ReplyPreview(
