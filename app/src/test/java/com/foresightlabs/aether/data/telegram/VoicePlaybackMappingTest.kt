@@ -93,6 +93,21 @@ class VoicePlaybackMappingTest {
     }
 
     @Test
+    fun completedFlagWithMissingFinalBytesIsNotPlayable() {
+        val missing = file(
+            44,
+            tmp.root.resolve("does_not_exist.ogg").absolutePath,
+            size = 100,
+            completed = true,
+            active = false
+        )
+        val item = present(voiceNote(missing)).mediaItems.single()
+
+        assertFalse("TDLib completion without final bytes is not playable", item.hasLocalFile)
+        assertEquals("", item.url)
+    }
+
+    @Test
     fun theClientsLiveDownloadStateBeatsTheStaleSnapshot() {
         val pending = voiceNote(file(42, "", size = 4_000L, completed = false, active = true))
         assertFalse(

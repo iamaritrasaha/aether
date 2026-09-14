@@ -37,7 +37,10 @@ class NewTelegramCapabilitiesTest {
 
     @Test
     fun messageVideoNoteMapsProperly() {
-        val localFile = TdApi.LocalFile("/path/to/videonote.mp4", true, true, false, true, 0, 0, 0)
+        val videoPath = java.io.File.createTempFile("videonote_", ".mp4").apply {
+            writeBytes(ByteArray(1024) { 1 })
+        }
+        val localFile = TdApi.LocalFile(videoPath.absolutePath, true, true, false, true, 0, 0, 0)
         val file = TdApi.File(101, 1024, 1024, localFile, null)
         val videoNote = TdApi.VideoNote().apply {
             duration = 15
@@ -67,7 +70,8 @@ class NewTelegramCapabilitiesTest {
         assertEquals(MessageType.VIDEO_NOTE, mapped.type)
         assertEquals(15, mapped.voiceDurationSec)
         assertEquals(1, mapped.mediaItems.size)
-        assertEquals("/path/to/videonote.mp4", mapped.mediaItems.first().url)
+        assertEquals(videoPath.absolutePath, mapped.mediaItems.first().url)
+        videoPath.delete()
     }
 
     @Test

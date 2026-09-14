@@ -530,7 +530,7 @@ object TelegramMappers {
                     height = height.coerceAtLeast(1),
                     fileId = file.id,
                     hasLocalFile = path != null,
-                    isDownloading = local?.isDownloadingActive == true,
+                    isDownloading = isDownloadActive(file.id) ?: (local?.isDownloadingActive == true),
                     downloadFailed = isDownloadFailed(file.id),
                     isUploading = remote?.isUploadingActive == true,
                     uploadProgress = uploadProgress,
@@ -781,7 +781,10 @@ object TelegramMappers {
                     voiceDurationSec = videoNote?.duration ?: 0,
                     voiceWaveform = decodeWaveform(videoNote?.waveform),
                     mediaItems = mediaItem(
-                        videoNote?.video ?: videoNote?.thumbnail?.file,
+                        // The thumbnail is only a preview. It is not the
+                        // playable video-note content and must never be
+                        // handed to the video player as a fallback path.
+                        videoNote?.video,
                         "",
                         videoNote?.length ?: 240,
                         videoNote?.length ?: 240
@@ -1185,11 +1188,18 @@ object TelegramMappers {
     fun isFullyLocal(file: TdApi.File?): Boolean {
         val local = file?.local ?: return false
         if (local.path.isNullOrBlank()) return false
-        if (local.isDownloadingCompleted) return true
-        if (local.isDownloadingActive) return false
         val onDisk = File(local.path).takeIf { it.exists() }?.length() ?: return false
         if (onDisk <= 0L) return false
         val expected = if (file.size > 0L) file.size else file.expectedSize
+        if (local.isDownloadingCompleted) {
+            // Completion is necessary, but a stale path or a missing/short final
+            // file is not playable truth. downloadedPrefixSize is the strongest
+            // TDLib-side byte truth available for the final local file.
+            val downloaded = maxOf(local.downloadedSize, local.downloadedPrefixSize)
+            return (expected <= 0L || onDisk >= expected) &&
+                (downloaded <= 0L || expected <= 0L || downloaded >= expected)
+        }
+        if (local.isDownloadingActive) return false
         return expected <= 0L || onDisk >= expected
     }
 

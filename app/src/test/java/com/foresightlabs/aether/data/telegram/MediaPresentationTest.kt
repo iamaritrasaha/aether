@@ -5,6 +5,7 @@ import org.drinkless.tdlib.TdApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Test
 
 /**
@@ -16,17 +17,28 @@ import org.junit.Test
  */
 class MediaPresentationTest {
 
-    private fun downloadedFile(id: Int, path: String, size: Long = 1_048_576L) =
-        TdApi.File().apply {
+    private val fixtureFiles = mutableListOf<java.io.File>()
+
+    @After
+    fun deleteFixtureFiles() {
+        fixtureFiles.forEach { it.delete() }
+    }
+
+    private fun downloadedFile(id: Int, path: String, size: Long = 1_048_576L): TdApi.File {
+        val fixture = java.io.File.createTempFile("tdlib_downloaded_${id}_", ".bin")
+        fixture.outputStream().use { it.write(ByteArray(size.toInt())) }
+        fixtureFiles += fixture
+        return TdApi.File().apply {
             this.id = id
             this.size = size
             expectedSize = size
             local = TdApi.LocalFile().apply {
-                this.path = path
+                this.path = fixture.absolutePath
                 isDownloadingCompleted = true
             }
             remote = TdApi.RemoteFile()
         }
+    }
 
     private fun pendingFile(id: Int) = TdApi.File().apply {
         this.id = id
@@ -54,7 +66,7 @@ class MediaPresentationTest {
         assertEquals(MessageType.IMAGE, presentation.type)
         assertEquals("Sunset", presentation.text)
         assertEquals(1, presentation.mediaItems.size)
-        assertEquals("/data/large.jpg", presentation.mediaItems.single().url)
+        assertEquals(large.photo.local.path, presentation.mediaItems.single().url)
         assertEquals(1280, presentation.mediaItems.single().width)
     }
 

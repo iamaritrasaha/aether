@@ -1,6 +1,7 @@
 package com.foresightlabs.aether.data.telegram
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Test
 import com.foresightlabs.aether.data.telegram.ChatOrdering
 import com.foresightlabs.aether.data.telegram.TelegramMappers
@@ -10,6 +11,13 @@ import com.foresightlabs.aether.domain.model.MessageType
 import org.drinkless.tdlib.TdApi
 
 class TelegramMappingTest {
+  private val fixtureFiles = mutableListOf<java.io.File>()
+
+  @After
+  fun deleteFixtureFiles() {
+    fixtureFiles.forEach { it.delete() }
+  }
+
   @Test
   fun chatTypeMapsPrivateGroupChannelAndSaved() {
     val me = 42L
@@ -245,7 +253,13 @@ class TelegramMappingTest {
     TdApi.File().apply {
       this.id = id
       local = TdApi.LocalFile().apply {
-        path = localPath
+        path = if (downloaded && localPath.isNotBlank()) {
+          java.io.File.createTempFile("tdlib_file_${id}_", ".bin").also { fixtureFiles += it }.apply {
+            writeBytes(byteArrayOf(1))
+          }.absolutePath
+        } else {
+          localPath
+        }
         isDownloadingCompleted = downloaded
       }
       remote = TdApi.RemoteFile()
@@ -353,7 +367,7 @@ class TelegramMappingTest {
       }
     }
     val presentation = TelegramMappers.mapPresentation(content, messageId = 1L, resolvePath = { null })
-    assertEquals("/data/aether/video22.mp4", presentation.mediaItems.single().videoLocalPath)
+    assertEquals(content.video.video.local.path, presentation.mediaItems.single().videoLocalPath)
   }
 
   @Test
@@ -381,6 +395,41 @@ class TelegramMappingTest {
     // by their shared mediaAlbumId; it never re-derives or merges their types.
     assertEquals(MessageType.IMAGE, photoPresentation.type)
     assertEquals(MessageType.VIDEO, videoPresentation.type)
+  }
+
+  @Test
+  fun videoNoteUsesItsContentFileAndNeverItsThumbnailAsThePlayableFile() {
+    val content = TdApi.MessageVideoNote().apply {
+      videoNote = TdApi.VideoNote().apply {
+        thumbnail = TdApi.Thumbnail().apply { file = tdFile(91) }
+        video = tdFile(92, localPath = "/data/aether/video-note.mp4", downloaded = true)
+      }
+    }
+
+    val presentation = TelegramMappers.mapPresentation(
+      content,
+      messageId = 3L,
+      resolvePath = { TelegramMappers.localPath(it) }
+    )
+    val item = presentation.mediaItems.single()
+
+    assertEquals(92, item.fileId)
+    assertEquals(content.videoNote.video.local.path, item.url)
+  }
+
+  @Test
+  fun videoNoteWithoutContentFileDoesNotPretendItsThumbnailIsPlayable() {
+    val content = TdApi.MessageVideoNote().apply {
+      videoNote = TdApi.VideoNote().apply {
+        thumbnail = TdApi.Thumbnail().apply {
+          file = tdFile(93, localPath = "/data/aether/video-note-thumb.jpg", downloaded = true)
+        }
+      }
+    }
+
+    val presentation = TelegramMappers.mapPresentation(content, messageId = 4L, resolvePath = { null })
+
+    assertTrue(presentation.mediaItems.isEmpty())
   }
 
   // --- the two-resolver contract and the playable-content indexing -----------
@@ -419,7 +468,7 @@ class TelegramMappingTest {
     val presentation = TelegramMappers.mapPresentation(content, messageId = 1L, resolvePath = { null })
     val item = presentation.mediaItems.single()
     assertEquals(31, item.fileId)
-    assertEquals("/data/aether/voice31.ogg", item.url)
+    assertEquals(content.voiceNote.voice.local.path, item.url)
     assertTrue(item.hasLocalFile)
   }
 
@@ -453,7 +502,7 @@ class TelegramMappingTest {
     assertEquals(MessageType.FILE, presentation.type)
     val item = presentation.mediaItems.single()
     assertEquals(51, item.fileId)
-    assertEquals("/data/aether/report.pdf", item.url)
+    assertEquals(content.document.document.local.path, item.url)
     assertTrue(item.hasLocalFile)
   }
 }
