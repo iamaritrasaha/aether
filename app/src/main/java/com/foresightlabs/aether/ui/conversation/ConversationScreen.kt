@@ -3102,12 +3102,18 @@ fun AetherJumpToLatestControl(
                 .testTag("jump_to_latest"),
             contentAlignment = Alignment.Center
         ) {
-            // Visual element: 30dp height, canonical Aether glass disc/capsule
+            // Visual element: ~30dp height, 30dp circular disc when 0 unread, compact capsule when >0
             AetherGlass(
                 frostState = frostState,
                 modifier = Modifier
                     .height(30.dp)
-                    .defaultMinSize(minWidth = 30.dp)
+                    .then(
+                        if (unreadCount > 0) {
+                            Modifier.defaultMinSize(minWidth = 30.dp)
+                        } else {
+                            Modifier.size(30.dp)
+                        }
+                    )
                     .graphicsLayer {
                         scaleX = pressScale
                         scaleY = pressScale
@@ -3128,17 +3134,21 @@ fun AetherJumpToLatestControl(
             ) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .then(
+                            if (unreadCount > 0) {
+                                Modifier
+                                    .height(30.dp)
+                                    .padding(start = 7.dp, end = 8.dp)
+                            } else {
+                                Modifier.size(30.dp)
+                            }
+                        )
                         .then(
                             if (isPressed) {
                                 Modifier.background(colors.accentSubtle)
                             } else {
                                 Modifier
                             }
-                        )
-                        .padding(
-                            start = if (unreadCount > 0) 7.dp else 5.dp,
-                            end = if (unreadCount > 0) 8.dp else 5.dp
                         ),
                     contentAlignment = Alignment.Center
                 ) {
