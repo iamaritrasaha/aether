@@ -659,6 +659,15 @@ fun MessageComposer(
      * a single selection. Null hides the dock's More action.
      */
     onMoreSelected: ((Message) -> Unit)? = null,
+    // --- CurtainState.MESSAGE_ACTIONS: one message's reactions and actions -------
+    /** The message the actions are for; the state renders nothing without one. */
+    messageActionsTarget: Message? = null,
+    messageActionsIsBookmarked: Boolean = false,
+    onMessageActionReaction: (String) -> Unit = {},
+    onMessageAction: (com.foresightlabs.aether.domain.messages.MessageAction) -> Unit = {},
+    /** Hands the message to the Curtain's delete confirmation. */
+    onMessageActionsDelete: () -> Unit = {},
+    onCancelMessageActions: () -> Unit = {},
     onDeleteSelected: (List<Message>) -> Unit = {},
     forwardMessages: List<Message> = emptyList(),
     forwardTargets: List<Chat> = emptyList(),
@@ -845,6 +854,17 @@ fun MessageComposer(
                 onCancel = onCancelDelete,
                 onDeleteForMe = onConfirmDeleteForMe,
                 onDeleteForEveryone = onConfirmDeleteForEveryone,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (curtainState == CurtainState.MESSAGE_ACTIONS && messageActionsTarget != null) {
+            MessageActionsCurtainContent(
+                message = messageActionsTarget,
+                capabilities = capabilities[messageActionsTarget.id] ?: MessageCapabilities.Unknown,
+                isBookmarked = messageActionsIsBookmarked,
+                onReaction = onMessageActionReaction,
+                onAction = onMessageAction,
+                onDelete = onMessageActionsDelete,
+                onCancel = onCancelMessageActions,
                 modifier = Modifier.fillMaxWidth()
             )
         } else if (curtainState == CurtainState.CALL) {

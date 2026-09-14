@@ -48,8 +48,15 @@ enum class CurtainState {
     MEDIA_PREVIEW,
     /** Reviewing what another application shared into this conversation, before it sends. */
     SHARE_PREVIEW,
-    /** Confirming a pending delete (from the selection dock or the message context menu) before it's sent to TDLib. */
+    /** Confirming a pending delete (from the selection dock or the message actions) before it's sent to TDLib. */
     DELETE_CONFIRM,
+    /**
+     * Everything that can be done with ONE message -- reactions and the
+     * capability-driven actions -- opened from the selection dock's More or an
+     * album's long-press. A Curtain state, not a floating menu: the actions
+     * rise from the same surface the dock lives in.
+     */
+    MESSAGE_ACTIONS,
     /** An outgoing, ringing, connecting, active or reconnecting call with this conversation's person. */
     CALL;
 

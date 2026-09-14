@@ -171,7 +171,6 @@ import com.foresightlabs.aether.ui.design.AetherAvatar
 import com.foresightlabs.aether.ui.common.MediaViewer
 import com.foresightlabs.aether.ui.conversation.MessageBubble
 import com.foresightlabs.aether.ui.conversation.MessageComposer
-import com.foresightlabs.aether.ui.conversation.MessageContextMenu
 import com.foresightlabs.aether.ui.design.AetherFloatingHeader
 import com.foresightlabs.aether.ui.design.AetherFloatingHeaderDefaults
 import com.foresightlabs.aether.ui.design.AetherGlass
@@ -386,7 +385,9 @@ fun ConversationScreen(
     val editingMessage = editingMessageId?.let { id ->
         messages.firstOrNull { it.id == id } ?: replyEditState.outOfWindow[id]
     }
-    var selectedContextMenuMessage by remember { mutableStateOf<Message?>(null) }
+    // The one message CurtainState.MESSAGE_ACTIONS is about. Saveable with the
+    // Curtain state itself, so rotation keeps the actions open on the same message.
+    var messageActionsTargetId by rememberSaveable { mutableStateOf<String?>(null) }
     var forwardingMessages by remember { mutableStateOf<List<Message>>(emptyList()) }
     var replyQuote by remember { mutableStateOf<ReplyQuote?>(null) }
     var infoMessage by remember { mutableStateOf<Message?>(null) }
@@ -579,7 +580,6 @@ fun ConversationScreen(
         stashedReturnAnchor = null
         returnAnchor = null
     }
-    var isContextMenuVisible by remember { mutableStateOf(false) }
 
     // Held by id, not by value: a UpdateFile arriving while the viewer is open
     var selectedMediaItem by remember { mutableStateOf<MediaItem?>(null) }
@@ -1180,6 +1180,72 @@ fun ConversationScreen(
     val composerAlpha = composerProgress
     val composerTranslationY = if (sceneProgress == null) 0f else with(density) { (14.dp.toPx() * (1f - composerProgress)) }
 
+    // --- CurtainState.MESSAGE_ACTIONS -----------------------------------------
+    // The target resolves from the loaded window; one that leaves it (deleted,
+    // history reloaded) closes the state instead of acting on a stale copy.
+    val messageActionsTarget = messageActionsTargetId?.let { id -> messages.firstOrNull { it.id == id } }
+    LaunchedEffect(curtainState, messageActionsTarget == null) {
+        if (curtainState == CurtainState.MESSAGE_ACTIONS && messageActionsTarget == null) {
+            messageActionsTargetId = null
+            curtainState = CurtainState.COMPOSER
+        }
+    }
+
+    fun closeMessageActions() {
+        messageActionsTargetId = null
+        if (curtainState == CurtainState.MESSAGE_ACTIONS) curtainState = CurtainState.COMPOSER
+    }
+
+    // The Curtain closes first; an action that opens its own Curtain state
+    // (Forward) then takes over from there.
+    fun performMessageAction(target: Message, action: MessageAction) {
+        closeMessageActions()
+        when (action) {
+            MessageAction.REPLY -> {
+                replyingToMessageId = target.id
+                replyQuote = null
+            }
+            MessageAction.QUOTE_REPLY -> {
+                replyingToMessageId = target.id
+                replyQuote = ReplyQuote.from(target.richText, 0, target.text.length)
+            }
+            MessageAction.COPY -> {
+                clipboardManager.setText(AnnotatedString(target.text))
+            }
+            MessageAction.FORWARD -> {
+                forwardingMessages = listOf(target)
+                selectedIds = setOf(target.id)
+                keyboardController?.hide()
+                focusManager.clearFocus()
+                curtainState = CurtainState.FORWARDING
+            }
+            MessageAction.SELECT -> selectedIds = setOf(target.id)
+            MessageAction.EDIT -> editingMessageId = target.id
+            MessageAction.REPLACE_MEDIA -> {
+                replacingMediaMessage = target
+                val mime = when (target.type) {
+                    MessageType.IMAGE -> "image/*"
+                    MessageType.VIDEO -> "video/*"
+                    MessageType.ANIMATION -> "image/gif"
+                    MessageType.AUDIO -> "audio/*"
+                    else -> "*/*"
+                }
+                replaceMediaLauncher.launch(mime)
+            }
+            MessageAction.PIN, MessageAction.UNPIN -> onPinMessage(target)
+            MessageAction.BOOKMARK -> onToggleBookmark(target)
+            // The Curtain content routes deletes through DELETE_CONFIRM; these
+            // stay for completeness and go through the same confirmation.
+            MessageAction.DELETE_FOR_ME, MessageAction.DELETE_FOR_EVERYONE -> {
+                deleteConfirmMessages = listOf(target)
+                curtainState = CurtainState.DELETE_CONFIRM
+            }
+            MessageAction.INFO -> infoMessage = target
+            MessageAction.COPY_LINK -> onCopyMessageLink(target)
+            MessageAction.SAVE -> Unit
+        }
+    }
+
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
@@ -1464,9 +1530,28 @@ fun ConversationScreen(
                 onMoreSelected = { msg ->
                     onRequestCapabilities(msg)
                     selectedIds = emptySet()
-                    selectedContextMenuMessage = msg
-                    isContextMenuVisible = true
+                    keyboardController?.hide()
+                    focusManager.clearFocus()
+                    messageActionsTargetId = msg.id
+                    curtainState = CurtainState.MESSAGE_ACTIONS
                 },
+                messageActionsTarget = messageActionsTarget,
+                messageActionsIsBookmarked = messageActionsTarget?.id in bookmarkedMessageIds,
+                onMessageActionReaction = { emoji ->
+                    messageActionsTarget?.let { onAddReaction(it, emoji) }
+                    closeMessageActions()
+                },
+                onMessageAction = { action ->
+                    messageActionsTarget?.let { performMessageAction(it, action) }
+                },
+                onMessageActionsDelete = {
+                    messageActionsTarget?.let { target ->
+                        closeMessageActions()
+                        deleteConfirmMessages = listOf(target)
+                        curtainState = CurtainState.DELETE_CONFIRM
+                    }
+                },
+                onCancelMessageActions = { closeMessageActions() },
                 onDeleteSelected = { chosen ->
                     deleteConfirmMessages = chosen
                     curtainState = CurtainState.DELETE_CONFIRM
@@ -1661,8 +1746,8 @@ fun ConversationScreen(
                         album = entry,
                         onLongPress = {
                             onRequestCapabilities(entry.anchor)
-                            selectedContextMenuMessage = entry.anchor
-                            isContextMenuVisible = true
+                            messageActionsTargetId = entry.anchor.id
+                            curtainState = CurtainState.MESSAGE_ACTIONS
                         },
                         onMediaClick = { media ->
                             selectedMediaItem = media
@@ -1717,7 +1802,8 @@ fun ConversationScreen(
                         onAddReaction(targetMsg, emoji)
                     },
                     onEntityAction = { action -> handleEntityAction(context, action, onOpenUsername) },
-                    isHighlighted = msg.id == highlightedMessageId,
+                    // A jump target, or the message the Curtain's actions are about.
+                    isHighlighted = msg.id == highlightedMessageId || msg.id == messageActionsTarget?.id,
                     onPollVote = onPollVote,
                     onStopLiveLocation = onStopLiveLocation,
                     onRetry = onRetryMessage,
@@ -2068,6 +2154,8 @@ fun ConversationScreen(
             } else if (curtainState == CurtainState.DELETE_CONFIRM) {
                 deleteConfirmMessages = null
                 curtainState = CurtainState.COMPOSER
+            } else if (curtainState == CurtainState.MESSAGE_ACTIONS) {
+                closeMessageActions()
             } else {
                 curtainState = CurtainState.COMPOSER
             }
@@ -2090,69 +2178,8 @@ fun ConversationScreen(
 
         BackHandler(enabled = searchState.isActive) { onCloseSearch() }
 
-        // Context Menu Overlay for Message. Above every layer of this Box: the
-        // Curtain is zIndex 0, the canvas 1, the header 2 -- without its own
-        // z-index the menu is composed but drawn (and hit-tested) under the
-        // canvas, i.e. invisible and untappable.
-        MessageContextMenu(
-            modifier = Modifier.zIndex(3f),
-            message = selectedContextMenuMessage,
-            capabilities = selectedContextMenuMessage?.let { messageCapabilities[it.id] } ?: MessageCapabilities.Unknown,
-            isVisible = isContextMenuVisible,
-            isBookmarked = selectedContextMenuMessage?.id in bookmarkedMessageIds,
-            onDismiss = {
-                isContextMenuVisible = false
-                selectedContextMenuMessage = null
-            },
-            onReactionSelected = { emoji ->
-                selectedContextMenuMessage?.let { targetMsg ->
-                    onAddReaction(targetMsg, emoji)
-                }
-            },
-            onAction = { action ->
-                val target = selectedContextMenuMessage ?: return@MessageContextMenu
-                when (action) {
-                    MessageAction.REPLY -> {
-                        replyingToMessageId = target.id
-                        replyQuote = null
-                    }
-                    MessageAction.QUOTE_REPLY -> {
-                        replyingToMessageId = target.id
-                        replyQuote = ReplyQuote.from(target.richText, 0, target.text.length)
-                    }
-                    MessageAction.COPY -> {
-                        clipboardManager.setText(AnnotatedString(target.text))
-                    }
-                    MessageAction.FORWARD -> {
-                        forwardingMessages = listOf(target)
-                        selectedIds = setOf(target.id)
-                        keyboardController?.hide()
-                        focusManager.clearFocus()
-                        curtainState = CurtainState.FORWARDING
-                    }
-                    MessageAction.SELECT -> selectedIds = setOf(target.id)
-                    MessageAction.EDIT -> editingMessageId = target.id
-                    MessageAction.REPLACE_MEDIA -> {
-                        replacingMediaMessage = target
-                        val mime = when (target.type) {
-                            MessageType.IMAGE -> "image/*"
-                            MessageType.VIDEO -> "video/*"
-                            MessageType.ANIMATION -> "image/gif"
-                            MessageType.AUDIO -> "audio/*"
-                            else -> "*/*"
-                        }
-                        replaceMediaLauncher.launch(mime)
-                    }
-                    MessageAction.PIN, MessageAction.UNPIN -> onPinMessage(target)
-                    MessageAction.BOOKMARK -> onToggleBookmark(target)
-                    MessageAction.DELETE_FOR_ME -> onDeleteMessage(target, false)
-                    MessageAction.DELETE_FOR_EVERYONE -> onDeleteMessage(target, true)
-                    MessageAction.INFO -> infoMessage = target
-                    MessageAction.COPY_LINK -> onCopyMessageLink(target)
-                    MessageAction.SAVE -> Unit
-                }
-            }
-        )
+        // Message actions live in the Curtain (CurtainState.MESSAGE_ACTIONS),
+        // dispatched by performMessageAction -- there is no floating menu layer.
 
         LaunchedEffect(forwardState) {
             if (forwardState is ForwardState.Success) {

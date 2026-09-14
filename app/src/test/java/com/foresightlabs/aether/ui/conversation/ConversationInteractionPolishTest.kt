@@ -147,24 +147,50 @@ class ConversationInteractionPolishTest {
         }
     }
 
-    // --- message menu stays reachable ------------------------------------------
+    // --- message actions stay reachable -----------------------------------------
 
     @Test
     @Config(qualifiers = "w360dp-h420dp-xhdpi")
-    fun theMenuScrollsToItsLastActionOnAShortScreen() {
+    fun theCurtainActionsScrollToTheirLastRowOnAShortScreen() {
         host {
-            MessageContextMenu(
+            MessageActionsCurtainContent(
                 message = message("7", isOutgoing = true),
                 capabilities = everything,
-                isVisible = true,
-                onDismiss = {},
-                onReactionSelected = {},
-                onAction = {}
+                onReaction = {},
+                onAction = {},
+                onDelete = {},
+                onCancel = {}
             )
         }
-        composeRule.onNodeWithTag("message_action_delete_for_everyone")
+        composeRule.onNodeWithTag("message_action_delete")
             .performScrollTo()
             .assertIsDisplayed()
+        // Cancel sits outside the scrolling list: always reachable.
+        composeRule.onNodeWithTag("message_actions_cancel").assertIsDisplayed()
+    }
+
+    @Test
+    fun deleteFromTheCurtainAsksForConfirmationInsteadOfDeleting() {
+        var deleteRequested = 0
+        val actions = mutableListOf<com.foresightlabs.aether.domain.messages.MessageAction>()
+        host {
+            MessageActionsCurtainContent(
+                message = message("7", isOutgoing = true),
+                capabilities = everything,
+                onReaction = {},
+                onAction = { actions += it },
+                onDelete = { deleteRequested++ },
+                onCancel = {}
+            )
+        }
+        // One Delete row, never the two direct delete scopes.
+        composeRule.onAllNodesWithTag("message_action_delete_for_me").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("message_action_delete_for_everyone").assertCountEquals(0)
+        composeRule.onNodeWithTag("message_action_delete").performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, deleteRequested)
+        assertTrue(actions.isEmpty())
     }
 
     // --- failed send -------------------------------------------------------------

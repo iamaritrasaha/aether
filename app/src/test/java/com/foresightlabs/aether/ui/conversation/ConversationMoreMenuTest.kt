@@ -5,7 +5,9 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -98,11 +100,12 @@ class ConversationMoreMenuTest {
         composeRule.onNodeWithTag("selection_action_more").performClick()
         composeRule.waitForIdle()
 
-        // Existing is not enough: the menu once composed UNDER the canvas (no
-        // z-index), present in the tree but invisible. A real tap is routed to
-        // whatever is drawn on top, so it only reaches Bookmark when the menu
-        // actually is.
-        composeRule.onNodeWithTag("message_context_scrim").assertExists()
+        // The actions open in the Curtain -- no floating menu layer exists. A
+        // real tap is routed to whatever is drawn on top, so reaching Bookmark
+        // proves the actions are on screen, not merely in the tree (a floating
+        // menu once composed UNDER the canvas and passed a mere existence check).
+        composeRule.onNodeWithTag("curtain_message_actions_content").assertExists()
+        composeRule.onAllNodesWithTag("message_context_scrim").assertCountEquals(0)
         composeRule.onNodeWithTag("message_action_bookmark", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
 

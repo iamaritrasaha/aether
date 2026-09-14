@@ -31,7 +31,7 @@ import com.foresightlabs.aether.domain.model.MessageType
 import com.foresightlabs.aether.domain.model.Presence
 import com.foresightlabs.aether.domain.model.User
 import com.foresightlabs.aether.ui.home.ChatActionSheet
-import com.foresightlabs.aether.ui.conversation.MessageContextMenu
+import com.foresightlabs.aether.ui.conversation.MessageActionsCurtainContent
 import com.foresightlabs.aether.ui.conversation.MessageInfoSheet
 import com.foresightlabs.aether.ui.design.AetherGlassMenuDefaults
 import com.foresightlabs.aether.ui.design.AetherGlassMenuItem
@@ -132,7 +132,7 @@ class AetherGlassMenuTest {
     }
 
     @Test
-    fun testMessageContextMenuWithGlassSurfaces() {
+    fun testMessageActionsCurtainContent() {
         val testUser = User(
             id = "101",
             name = "Aether Tester",
@@ -170,13 +170,13 @@ class AetherGlassMenuTest {
             }
             CompositionLocalProvider(LocalAppThemeState provides themeState) {
                 AetherTheme(themeState = themeState) {
-                    MessageContextMenu(
+                    MessageActionsCurtainContent(
                         message = testMessage,
                         capabilities = capabilities,
-                        isVisible = true,
-                        onDismiss = { dismissed = true },
-                        onReactionSelected = { selectedReaction = it },
-                        onAction = { selectedAction = it }
+                        onReaction = { selectedReaction = it },
+                        onAction = { selectedAction = it },
+                        onDelete = {},
+                        onCancel = { dismissed = true }
                     )
                 }
             }

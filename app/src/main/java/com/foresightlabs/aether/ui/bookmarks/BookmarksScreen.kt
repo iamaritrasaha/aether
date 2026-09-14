@@ -104,7 +104,7 @@ fun BookmarksScreen(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Long-press a message and choose Bookmark. Bookmarks stay on this device only.",
+                        text = "Long-press a message, tap More, then Bookmark. Bookmarks stay on this device only.",
                         fontFamily = ManropeFontFamily,
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
