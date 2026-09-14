@@ -265,6 +265,7 @@ fun ConversationScreen(
     linkPreview: ComposerLinkPreviewState = ComposerLinkPreviewState.Empty,
     onDismissLinkPreview: () -> Unit = {},
     onLoadOlder: () -> Unit,
+    historyState: ConversationHistoryState = ConversationHistoryState.IDLE,
     onDeleteMessage: (Message, Boolean) -> Unit,
     onForwardMessages: (List<Message>, Long, Boolean, Boolean) -> Unit = { _, _, _, _ -> },
     forwardTargets: List<Chat> = emptyList(),
@@ -1968,8 +1969,42 @@ fun ConversationScreen(
                         placementSpec = tween(ConversationMotion.STANDARD_MS)
                     )
                 )
-                } // items
+            } // items
             } // LazyColumn
+
+        val initialHistoryLoading = historyState == ConversationHistoryState.LOADING_INITIAL && messages.isEmpty()
+        if (initialHistoryLoading ||
+            historyState == ConversationHistoryState.LOADING_OLDER ||
+            historyState == ConversationHistoryState.FAILED
+        ) {
+            val retryable = historyState == ConversationHistoryState.FAILED
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 108.dp)
+                    .zIndex(1.5f)
+                    .clip(AetherEmber.Shapes.Pill)
+                    .background(Color(0xD91B1B22))
+                    .border(1.dp, colors.accentSubtle, AetherEmber.Shapes.Pill)
+                    .then(if (retryable) Modifier.clickable { onLoadOlder() } else Modifier)
+                    .padding(horizontal = 13.dp, vertical = 7.dp)
+                    .testTag(if (retryable) "history_retry" else "history_loading"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = when {
+                        retryable && messages.isEmpty() -> "Couldn't load messages · Retry"
+                        retryable -> "Couldn't load older messages · Retry"
+                        initialHistoryLoading -> "Loading messages…"
+                        else -> "Loading older messages…"
+                    },
+                    fontFamily = ManropeFontFamily,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+            }
+        }
 
         // --- The identity of the conversation, and nothing else ------------
         // A direct sibling of the atmosphere it frosts, not a sibling of the

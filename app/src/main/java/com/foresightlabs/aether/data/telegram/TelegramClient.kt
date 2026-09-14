@@ -70,6 +70,8 @@ open class TelegramClient(private val application: Application) {
     private val users = ConcurrentHashMap<Long, TdApi.User>()
     private val typing = ConcurrentHashMap<Long, String>()
     private val photoPaths = ConcurrentHashMap<String, String>()
+    /** Canonical TDLib file snapshots. Message-embedded File objects are stale. */
+    private val latestFiles = LatestFileRegistry()
     private val requestedFiles = ConcurrentHashMap<Int, Boolean>()
     /** File ids TDLib is currently, actively downloading -- tracked so a later
      * UpdateFile that is neither active nor completed can be told apart from
@@ -578,7 +580,7 @@ open class TelegramClient(private val application: Application) {
         allowNetwork: Boolean,
         reason: String
     ): HistoryPage {
-        val collected = LinkedHashMap<Long, TdApi.Message>()
+        val collected = HistoryPageAccumulator<TdApi.Message> { it.id }
         var boundary = fromMessageId
         var rounds = 0
         while (collected.size < limit && rounds < MAX_LOCAL_FILL_ROUNDS) {
@@ -587,15 +589,15 @@ open class TelegramClient(private val application: Application) {
             val remaining = limit - collected.size
             val localResult = send(TdApi.GetChatHistory(chatId, requestBoundary, 0, remaining, true))
             val batch = (localResult as? TdApi.Messages)?.messages?.filterNotNull() ?: emptyList()
-            val (newUnique, newOldest) = mergeBatch(collected, batch, requestBoundary)
-            val boundaryAfter = if (newUnique > 0) newOldest else requestBoundary
-            logHistoryRequest(chatId, "LOCAL", reason, requestBoundary, remaining, batch.size, newUnique, boundaryAfter, (localResult as? TdApi.Messages)?.totalCount ?: -1)
+            val progress = collected.merge(batch, requestBoundary)
+            val boundaryAfter = if (progress.newUniqueCount > 0) progress.oldestId else requestBoundary
+            logHistoryRequest(chatId, "LOCAL", reason, requestBoundary, remaining, batch.size, progress.newUniqueCount, boundaryAfter, (localResult as? TdApi.Messages)?.totalCount ?: -1)
             // newUnique == 0 means the local database has nothing further at
             // this boundary (LOCAL CACHE EXHAUSTED AT THIS BOUNDARY) -- not
             // proof the server has no more history. Stop local rounds here
             // rather than re-requesting the same boundary.
-            if (newUnique == 0) break
-            boundary = newOldest
+            if (progress.newUniqueCount == 0) break
+            boundary = progress.oldestId
         }
         var usedNetwork = false
         var endOfHistory = false
@@ -605,47 +607,21 @@ open class TelegramClient(private val application: Application) {
             val remaining = limit - collected.size
             val networkResult = send(TdApi.GetChatHistory(chatId, requestBoundary, 0, remaining, false))
             val batch = (networkResult as? TdApi.Messages)?.messages?.filterNotNull() ?: emptyList()
-            val (newUnique, newOldest) = mergeBatch(collected, batch, requestBoundary)
-            val boundaryAfter = if (newUnique > 0) newOldest else requestBoundary
-            logHistoryRequest(chatId, "NETWORK_CAPABLE", reason, requestBoundary, remaining, batch.size, newUnique, boundaryAfter, (networkResult as? TdApi.Messages)?.totalCount ?: -1)
-            if (newUnique == 0) {
+            val progress = collected.merge(batch, requestBoundary)
+            val boundaryAfter = if (progress.newUniqueCount > 0) progress.oldestId else requestBoundary
+            logHistoryRequest(chatId, "NETWORK_CAPABLE", reason, requestBoundary, remaining, batch.size, progress.newUniqueCount, boundaryAfter, (networkResult as? TdApi.Messages)?.totalCount ?: -1)
+            if (progress.newUniqueCount == 0) {
                 // Chosen client-side exhaustion rule, not a TDLib guarantee: a
                 // network-capable request that adds no new unique older
                 // message is treated as the practical end of this chat's
                 // history for pagination purposes.
                 endOfHistory = true
             } else {
-                boundary = newOldest
+                boundary = progress.oldestId
             }
         }
         val messages = collected.values.mapNotNull(::mapUiMessage).reversed()
         return HistoryPage(messages, boundary, usedNetwork, endOfHistory)
-    }
-
-    /**
-     * Merges [batch] into [collected] (keyed by stable message id), skipping the
-     * message matching [requestBoundary] -- GetChatHistory's offset=0 starts
-     * exactly at that id, so it may reappear without being a genuinely new
-     * older message. Returns the count of messages this round actually added
-     * and the oldest id among them (0L if none were added).
-     */
-    private fun mergeBatch(
-        collected: LinkedHashMap<Long, TdApi.Message>,
-        batch: List<TdApi.Message>,
-        requestBoundary: Long
-    ): Pair<Int, Long> {
-        var newUnique = 0
-        var newOldest = 0L
-        for (m in batch) {
-            if (m.id == requestBoundary) continue
-            val isNew = !collected.containsKey(m.id)
-            collected[m.id] = m
-            if (isNew) {
-                newUnique++
-                if (newOldest == 0L || m.id < newOldest) newOldest = m.id
-            }
-        }
-        return newUnique to newOldest
     }
 
     private fun logHistoryRequest(
@@ -1504,7 +1480,7 @@ open class TelegramClient(private val application: Application) {
         newText: String,
         linkPreviewOptions: TdApi.LinkPreviewOptions? = null
     ): Result<TdApi.Message> {
-        val raw = rawMessages[messageId]
+        val raw = rawMessages[MessageKey(chatId, messageId)]
         val function = when (raw?.content) {
             is TdApi.MessagePhoto,
             is TdApi.MessageVideo,
@@ -2556,8 +2532,7 @@ open class TelegramClient(private val application: Application) {
 
     fun upsertConversation(chatId: Long, incoming: List<Message>, prepend: Boolean) {
         val normalized = incoming.map { mapped ->
-            val fresh = rawMessages[mapped.id.toLongOrNull() ?: return@map mapped]
-                ?.takeIf { it.chatId == chatId }
+            val fresh = rawMessages[MessageKey(chatId, mapped.id.toLongOrNull() ?: return@map mapped)]
                 ?.let(::mapUiMessage)
                 ?: mapped
             // mapUiMessage always re-derives a fresh Message with no
@@ -2671,7 +2646,9 @@ open class TelegramClient(private val application: Application) {
      * The TDLib messages behind the mapped ones, so a bubble can be re-mapped when
      * its media finishes downloading without another round trip.
      */
-    private val rawMessages = ConcurrentHashMap<Long, TdApi.Message>()
+    private data class MessageKey(val chatId: Long, val messageId: Long)
+
+    private val rawMessages = ConcurrentHashMap<MessageKey, TdApi.Message>()
 
     private data class ReplyTarget(val chatId: Long, val messageId: Long)
 
@@ -2817,7 +2794,7 @@ open class TelegramClient(private val application: Application) {
             is TdApi.UpdateMessageContentOpened -> {
                 // Self-destructing media has been viewed; its content will follow in
                 // an UpdateMessageContent, so nothing is guessed here.
-                rawMessages[update.messageId]?.let { raw ->
+                rawMessages[MessageKey(update.chatId, update.messageId)]?.let { raw ->
                     replaceMessage(update.chatId, update.messageId.toString(), mapUiMessage(raw))
                 }
             }
@@ -2941,7 +2918,7 @@ open class TelegramClient(private val application: Application) {
                 // text here used to flatten a photo, poll or formatted message into a
                 // plain text bubble the moment anything about it changed — which a
                 // poll vote does on every single vote.
-                val cached = rawMessages[update.messageId]
+                val cached = rawMessages[MessageKey(update.chatId, update.messageId)]
                 if (cached != null && cached.chatId == update.chatId) {
                     cached.content = update.newContent
                     val mapped = mapUiMessage(cached)
@@ -2973,7 +2950,7 @@ open class TelegramClient(private val application: Application) {
             is TdApi.UpdateMessageInteractionInfo -> {
                 // Reaction counts and the "you reacted" flag, straight from Telegram.
                 val reactions = TelegramMappers.mapReactions(update.interactionInfo)
-                rawMessages[update.messageId]?.interactionInfo = update.interactionInfo
+                rawMessages[MessageKey(update.chatId, update.messageId)]?.interactionInfo = update.interactionInfo
                 conversationFlows[update.chatId]?.update { list ->
                     list.map { current ->
                         if (current.id == update.messageId.toString()) {
@@ -2984,7 +2961,7 @@ open class TelegramClient(private val application: Application) {
                 publishMessageEvent(update.chatId, update.messageId, MessageMotionEventType.REACTION_UPDATED)
             }
             is TdApi.UpdateMessageIsPinned -> {
-                rawMessages[update.messageId]?.isPinned = update.isPinned
+                rawMessages[MessageKey(update.chatId, update.messageId)]?.isPinned = update.isPinned
                 conversationFlows[update.chatId]?.update { list ->
                     list.map { current ->
                         if (current.id == update.messageId.toString()) {
@@ -3021,8 +2998,8 @@ open class TelegramClient(private val application: Application) {
                 // leaving deleted messages on screen. isPermanent (unused here)
                 // remains available if a future caller needs to tell the two apart.
                 update.messageIds.forEach { messageId ->
-                    if (rawMessages[messageId]?.chatId == update.chatId) {
-                        rawMessages.remove(messageId)
+                    if (rawMessages[MessageKey(update.chatId, messageId)] != null) {
+                        rawMessages.remove(MessageKey(update.chatId, messageId))
                         mediaReferenceIndex.remove(MessageMediaReference(update.chatId, messageId))
                     }
                     unavailableReplyTargets.add(ReplyTarget(update.chatId, messageId))
@@ -3559,48 +3536,50 @@ open class TelegramClient(private val application: Application) {
     }
 
     private fun onFile(file: TdApi.File) {
-        val local = file.local
+        latestFiles.update(file)
+        val canonical = latestFiles.get(file.id) ?: file
+        val local = canonical.local
         val path = local?.path
         // Only a COMPLETE file may reach the UI as playable/openable: during a
         // download `path` names the partial part. See TelegramMappers.isFullyLocal.
-        val isComplete = TelegramMappers.isFullyLocal(file)
+        val isComplete = TelegramMappers.isFullyLocal(canonical)
         if (BuildConfig.DEBUG) {
             android.util.Log.d(
                 TAG,
                 "MEDIA_FILE_UPDATE fileId=${file.id} complete=$isComplete " +
                     "localPathPresent=${!path.isNullOrBlank()} active=${local?.isDownloadingActive == true} " +
                     "tdlibCompleted=${local?.isDownloadingCompleted == true} downloaded=${local?.downloadedSize ?: 0} " +
-                    "size=${file.size} expectedSize=${file.expectedSize} " +
+                    "size=${canonical.size} expectedSize=${canonical.expectedSize} " +
                     "ext=${path?.substringAfterLast('.', "")?.lowercase()?.take(5).orEmpty()}"
             )
         }
         when {
             isComplete && !path.isNullOrBlank() -> {
-                photoPaths["file:${file.id}"] = path
-                failedDownloads.remove(file.id)
-                activeDownloads.remove(file.id)
+                photoPaths["file:${canonical.id}"] = path
+                failedDownloads.remove(canonical.id)
+                activeDownloads.remove(canonical.id)
             }
             local?.isDownloadingActive == true -> {
-                activeDownloads[file.id] = true
-                failedDownloads.remove(file.id)
+                activeDownloads[canonical.id] = true
+                failedDownloads.remove(canonical.id)
             }
-            activeDownloads.remove(file.id) != null -> {
+            activeDownloads.remove(canonical.id) != null -> {
                 // Was actively downloading and now is neither active nor
                 // completed -- TDLib genuinely stopped without finishing, not
                 // merely "hasn't started yet".
-                failedDownloads[file.id] = true
-                requestedFiles.remove(file.id)
+                failedDownloads[canonical.id] = true
+                requestedFiles.remove(canonical.id)
             }
         }
-        val affectedUsers = usersByAvatarFile[file.id].orEmpty()
+        val affectedUsers = usersByAvatarFile[canonical.id].orEmpty()
         affectedUsers.forEach { userId ->
             if (userId == myUserId) publishMe()
         }
-        if (affectedUsers.isNotEmpty() || chatsByAvatarFile[file.id].orEmpty().isNotEmpty()) publishChats()
+        if (affectedUsers.isNotEmpty() || chatsByAvatarFile[canonical.id].orEmpty().isNotEmpty()) publishChats()
 
         // A file update belongs only to the messages in this reverse index. This
         // keeps an image download from walking every loaded conversation.
-        val affectedByChat = mediaReferenceIndex.referencesFor(file.id).groupBy { it.chatId }
+        val affectedByChat = mediaReferenceIndex.referencesFor(canonical.id).groupBy { it.chatId }
         affectedByChat.forEach { (chatId, references) ->
             val ids = references.map { it.messageId }.toSet()
             conversationFlows[chatId]?.update { current ->
@@ -3609,7 +3588,7 @@ open class TelegramClient(private val application: Application) {
                     if (messageId == null || messageId !in ids) {
                         existing
                     } else {
-                        rawMessages[messageId]?.let { raw ->
+                        rawMessages[MessageKey(chatId, messageId)]?.let { raw ->
                             mapUiMessage(raw).copy(presentationKey = existing.presentationKey)
                         } ?: existing
                     }
@@ -3872,7 +3851,7 @@ open class TelegramClient(private val application: Application) {
         if (chatId == 0L || messageId == 0L) return com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome.Missing
         return when (val result = send(TdApi.GetMessage(chatId, messageId))) {
             is TdApi.Message -> {
-                rawMessages[result.id] = result
+                rawMessages[MessageKey(result.chatId, result.id)] = result
                 com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome.Resolved(mapUiMessage(result))
             }
             is TdApi.Error ->
@@ -3885,23 +3864,89 @@ open class TelegramClient(private val application: Application) {
         }
     }
 
+    /**
+     * Replaces every File reachable from a message's media content with the
+     * canonical snapshot for that id. This is deliberately done before mapping
+     * and before storing the raw message: UpdateFile is not followed by a new
+     * UpdateNewMessage, so a stale embedded File otherwise survives forever.
+     */
+    private fun canonicalizeMessageFiles(message: TdApi.Message): TdApi.Message {
+        fun file(value: TdApi.File?): TdApi.File? = latestFiles.resolve(value)
+        fun thumbnail(value: TdApi.Thumbnail?) {
+            val current = value?.file ?: return
+            file(current)?.let { value.file = it }
+        }
+        fun video(value: TdApi.Video?) {
+            if (value == null) return
+            value.video = file(value.video) ?: value.video
+            thumbnail(value.thumbnail)
+        }
+        fun animation(value: TdApi.Animation?) {
+            if (value == null) return
+            value.animation = file(value.animation) ?: value.animation
+            thumbnail(value.thumbnail)
+        }
+        fun audio(value: TdApi.Audio?) {
+            if (value == null) return
+            value.audio = file(value.audio) ?: value.audio
+            thumbnail(value.albumCoverThumbnail)
+            value.externalAlbumCovers.orEmpty().forEach(::thumbnail)
+        }
+        fun document(value: TdApi.Document?) {
+            if (value == null) return
+            value.document = file(value.document) ?: value.document
+            thumbnail(value.thumbnail)
+        }
+        fun videoNote(value: TdApi.VideoNote?) {
+            if (value == null) return
+            value.video = file(value.video) ?: value.video
+            thumbnail(value.thumbnail)
+        }
+        fun sticker(value: TdApi.Sticker?) {
+            if (value == null) return
+            value.sticker = file(value.sticker) ?: value.sticker
+            thumbnail(value.thumbnail)
+        }
+
+        when (val content = message.content) {
+            is TdApi.MessagePhoto -> {
+                content.photo?.sizes.orEmpty().forEach { size ->
+                    size.photo = file(size.photo) ?: size.photo
+                }
+                video(content.video)
+            }
+            is TdApi.MessageVideo -> video(content.video)
+            is TdApi.MessageAnimation -> animation(content.animation)
+            is TdApi.MessageAudio -> audio(content.audio)
+            is TdApi.MessageDocument -> document(content.document)
+            is TdApi.MessageVoiceNote -> content.voiceNote?.let { voice ->
+                voice.voice = file(voice.voice) ?: voice.voice
+            }
+            is TdApi.MessageVideoNote -> videoNote(content.videoNote)
+            is TdApi.MessageSticker -> sticker(content.sticker)
+            else -> Unit
+        }
+        return message
+    }
+
     private fun mapUiMessage(message: TdApi.Message): Message {
-        rawMessages[message.id] = message
-        val lastRead = chats[message.chatId]?.lastReadOutboxMessageId ?: 0L
+        val canonical = canonicalizeMessageFiles(message)
+        rawMessages[MessageKey(canonical.chatId, canonical.id)] = canonical
+        val lastRead = chats[canonical.chatId]?.lastReadOutboxMessageId ?: 0L
         val mapped = TelegramMappers.mapMessage(
-            message = message,
+            message = canonical,
             users = users,
             chats = chats,
             myUserId = myUserId,
             lastReadOutboxMessageId = lastRead,
-            reply = replyPreview(message),
+            reply = replyPreview(canonical),
             resolvePath = ::resolveMediaPath,
             isDownloadFailed = { failedDownloads[it] == true },
             resolveContentPath = ::resolvedVideoPath,
             isDownloadActive = { activeDownloads[it] == true }
         )
         mediaReferenceIndex.replace(
-            MessageMediaReference(message.chatId, message.id),
+            MessageMediaReference(canonical.chatId, canonical.id),
             // Both ids: a video item's `fileId` is its THUMBNAIL; the content
             // file lives in `videoFileId`. Indexing only the thumbnail meant
             // a completed video download never re-mapped the message and the
@@ -3931,27 +3976,19 @@ open class TelegramClient(private val application: Application) {
      */
     private fun resolvedVideoPath(file: TdApi.File?): String? {
         if (file == null) return null
-        TelegramMappers.localPath(file)?.let { return it }
-        val cached = photoPaths["file:${file.id}"]
-        if (!cached.isNullOrBlank() && java.io.File(cached).let { it.exists() && it.length() > 0L }) {
-            return cached
-        }
-        return null
+        return TelegramMappers.localPath(latestFiles.resolve(file))
     }
 
     private fun resolveMediaPath(file: TdApi.File?): String? {
         if (file == null) return null
-        TelegramMappers.localPath(file)?.let { return it }
-        val cached = photoPaths["file:${file.id}"]
-        if (!cached.isNullOrBlank() && java.io.File(cached).let { it.exists() && it.length() > 0L }) {
-            return cached
-        }
+        val canonical = latestFiles.resolve(file) ?: file
+        TelegramMappers.localPath(canonical)?.let { return it }
         // A file TDLib already gave up on is not retried automatically -- that
         // would spin forever against a dead file. The UI offers a real retry
         // affordance instead; see retryMediaDownload.
         if (failedDownloads[file.id] != true &&
-            file.local?.canBeDownloaded == true &&
-            file.local?.isDownloadingActive != true
+            canonical.local?.canBeDownloaded == true &&
+            canonical.local?.isDownloadingActive != true
         ) {
             scope.launch { downloadFile(file.id) }
         }
@@ -3962,7 +3999,7 @@ open class TelegramClient(private val application: Application) {
         val reply = message.replyTo as? TdApi.MessageReplyToMessage ?: return null
         if (reply.messageId == 0L) return null
         val targetChatId = reply.chatId.takeIf { it != 0L } ?: message.chatId
-        val target = rawMessages[reply.messageId]?.takeIf { it.chatId == targetChatId }
+        val target = rawMessages[MessageKey(targetChatId, reply.messageId)]
         val targetKey = ReplyTarget(targetChatId, reply.messageId)
         if (target == null && targetKey !in unavailableReplyTargets) {
             requestReplyTarget(targetKey)
@@ -3986,7 +4023,7 @@ open class TelegramClient(private val application: Application) {
         val job = scope.launch {
             val result = send(TdApi.GetMessage(target.chatId, target.messageId))
             if (result is TdApi.Message) {
-                rawMessages[result.id] = result
+                rawMessages[MessageKey(result.chatId, result.id)] = result
                 unavailableReplyTargets.remove(target)
             } else {
                 unavailableReplyTargets.add(target)
@@ -4002,8 +4039,7 @@ open class TelegramClient(private val application: Application) {
         conversationFlows.forEach { (chatId, flow) ->
             flow.update { messages ->
                 messages.map { current ->
-                    val parent = rawMessages[current.id.toLongOrNull() ?: return@map current]
-                        ?.takeIf { it.chatId == chatId }
+                    val parent = rawMessages[MessageKey(chatId, current.id.toLongOrNull() ?: return@map current)]
                     val reply = parent?.replyTo as? TdApi.MessageReplyToMessage
                     val parentTarget = reply?.let {
                         ReplyTarget(it.chatId.takeIf { id -> id != 0L } ?: chatId, it.messageId)
@@ -4018,8 +4054,7 @@ open class TelegramClient(private val application: Application) {
         conversationFlows.forEach { (chatId, flow) ->
             flow.update { messages ->
                 messages.map { current ->
-                    val raw = rawMessages[current.id.toLongOrNull() ?: return@map current]
-                        ?.takeIf { it.chatId == chatId }
+                    val raw = rawMessages[MessageKey(chatId, current.id.toLongOrNull() ?: return@map current)]
                     if (raw?.replyTo is TdApi.MessageReplyToMessage) mapUiMessage(raw) else current
                 }
             }
@@ -4042,6 +4077,7 @@ open class TelegramClient(private val application: Application) {
         users.clear()
         typing.clear()
         photoPaths.clear()
+        latestFiles.clear()
         requestedFiles.clear()
         conversationFlows.clear()
         rawMessages.clear()

@@ -128,4 +128,19 @@ class ConversationResolutionTest {
 
         assertFalse(viewModel.isResolving.value)
     }
+
+    @Test
+    fun failedInitialHistoryIsRetryableAndNeverLeavesAnEndlessLoadingState() = runTest(testDispatcher) {
+        val viewModel = ConversationViewModel(application, ConversationTarget.Chat(999999L))
+
+        advanceUntilIdle()
+
+        assertEquals(ConversationHistoryState.FAILED, viewModel.historyState.value)
+
+        viewModel.loadOlder()
+        advanceUntilIdle()
+
+        assertEquals(ConversationHistoryState.FAILED, viewModel.historyState.value)
+        assertFalse(viewModel.loadingOlder.value)
+    }
 }

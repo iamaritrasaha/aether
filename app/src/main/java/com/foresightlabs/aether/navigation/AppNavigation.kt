@@ -1265,7 +1265,9 @@ private fun ConversationRoute(
             restoredDraft = viewModel.restoredDraft.collectAsStateWithLifecycle().value,
             onReplyDraftChanged = viewModel::onDraftReplyChanged,
             linkPreview = linkPreview, onDismissLinkPreview = viewModel::dismissLinkPreview,
-            onLoadOlder = viewModel::loadOlder, onDeleteMessage = viewModel::delete,
+            onLoadOlder = viewModel::loadOlder,
+            historyState = viewModel.historyState.collectAsStateWithLifecycle().value,
+            onDeleteMessage = viewModel::delete,
             onForwardMessages = { selectedMessages, toChatId, sendCopy, removeCaption ->
                 viewModel.forwardMessages(selectedMessages, toChatId, sendCopy, removeCaption)
             },
