@@ -143,6 +143,21 @@ fun AboutScreen(
                             color = colors.textSecondary,
                             lineHeight = 20.sp
                         )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = "Aether started with a small request from someone very dear to me: a quieter way to use Telegram. That simple thought became the heart of Aether.",
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 12.5.sp,
+                            color = colors.textTertiary,
+                            lineHeight = 18.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "⟦ djGNiMo-0ubDmzBtDHZJhviuORvUcxEOHgxdo0563k80TsACtwj2QfdF6L_DTx5O8E2SVng ⟧",
+                            fontFamily = ManropeFontFamily,
+                            fontSize = 9.sp,
+                            color = colors.textTertiary
+                        )
                     }
                 }
 
