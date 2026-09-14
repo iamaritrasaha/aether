@@ -147,9 +147,20 @@ observed at, never assumed to still hold after later changes until re-run.
 
 ## Calling
 
-`AetherFeatureFlags.CALLS_ENABLED = true`: calling is a live, enabled capability, not
-held. `AetherFeatureFlags.APP_LOCK_ENABLED = false` (unrelated capability, held for
-this milestone — see the top-level table in `README.md`).
+Calling is a **build capability**: `AetherFeatureFlags.CALLS_ENABLED` (with
+`AETHER_CALLS_ENABLED` / `TELEGRAM_CALLS_ENABLED`) comes from
+`BuildConfig.CALLING_ENABLED` — **true for debug/internal builds, false for the Play
+release** (`-PcallingEnabled=true` forces a release-like internal build). With it false,
+no call UI, chooser, halo or Calls destination exists; the call stack (Telegram call
+repository, media engine, LiveKit repository, `CallHub`) is never constructed and the
+"Calls" notification channel is not created; and `src/release/AndroidManifest.xml`
+strips `CallService`, LiveKit's `ScreenCaptureService`, `FOREGROUND_SERVICE`,
+`FOREGROUND_SERVICE_MICROPHONE`, `FOREGROUND_SERVICE_MEDIA_PROJECTION`,
+`MODIFY_AUDIO_SETTINGS` and `BLUETOOTH` (`RECORD_AUDIO`/`CAMERA` stay for voice notes
+and capture). Pinned by `CallCapabilityTest` and `ReleaseManifestBoundaryTest`. The
+rows below describe the internal-build capability.
+`AetherFeatureFlags.APP_LOCK_ENABLED = false` (unrelated capability, held for this
+milestone — see the top-level table in `README.md`).
 
 | Capability | Implemented | Unit tested | Emulator | Physical | Notes |
 | --- | --- | --- | --- | --- | --- |
