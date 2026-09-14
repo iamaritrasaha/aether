@@ -587,10 +587,21 @@ class ConversationViewModel(
         }
     }
 
-    fun sendVoiceNote(voicePath: String, duration: Int, waveform: ByteArray = ByteArray(0), replyToId: String? = null) {
+    /**
+     * [onResult] reports whether Telegram accepted the note -- the voice flow
+     * keeps the recording for a retry when it did not.
+     */
+    fun sendVoiceNote(
+        voicePath: String,
+        duration: Int,
+        waveform: ByteArray = ByteArray(0),
+        replyToId: String? = null,
+        onResult: (Boolean) -> Unit = {}
+    ) {
         viewModelScope.launch {
             val result = telegram.sendVoiceNote(activeChatId, voicePath, duration, waveform, replyToId?.toLongOrNull())
             result.exceptionOrNull()?.message?.let { _sendError.value = it }
+            onResult(result.isSuccess)
         }
     }
 

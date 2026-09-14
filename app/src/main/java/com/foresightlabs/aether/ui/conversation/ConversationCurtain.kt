@@ -72,12 +72,22 @@ enum class CurtainState {
     /** Confirming a static location before it sends, from the attachment grid's Location entry. */
     LOCATION,
     /** Naming a venue at the current location before it sends, from the attachment grid's Venue entry. */
-    VENUE;
+    VENUE,
+    /**
+     * A hands-free voice recording -- timer, live waveform, delete / pause /
+     * send. Reached by sliding up from a held mic. Never set directly: the
+     * screen shows it while [VoiceNoteState.Locked] is current.
+     */
+    VOICE_RECORDING,
+    /** Listening back to a finished recording -- play, trim, delete, send. Shown for [VoiceNoteState.Review]. */
+    VOICE_REVIEW;
 
     /** True for every state that exposes more Curtain than the resting composer. */
     val isExpanded: Boolean get() = this != COMPOSER
 
     val isPicker: Boolean get() = this == EMOJI || this == STICKERS || this == GIFS
+
+    val isVoice: Boolean get() = this == VOICE_RECORDING || this == VOICE_REVIEW
 
     /** True for states reached directly from the attachment grid root. */
     val isAttachmentChild: Boolean get() = this in AttachmentChildren
