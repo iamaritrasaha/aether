@@ -77,6 +77,18 @@ class AudioPlaybackController(private val context: Context) {
      * the download completion re-map supplies the path.
      */
     fun toggle(key: String, filePath: String?, requestDownload: (() -> Unit)?) {
+        togglePlayback(key, filePath, requestDownload, clipMs = null)
+    }
+
+    /**
+     * Play/pause for one stretch of a local file -- a voice note being reviewed
+     * and trimmed. Reported positions are then relative to the stretch's start.
+     */
+    fun toggleClip(key: String, filePath: String, clipMs: LongRange) {
+        togglePlayback(key, filePath, requestDownload = null, clipMs = clipMs)
+    }
+
+    private fun togglePlayback(key: String, filePath: String?, requestDownload: (() -> Unit)?, clipMs: LongRange?) {
         val path = filePath?.takeIf { it.isNotBlank() && File(it).exists() && File(it).length() > 0L }
         if (path == null) {
             if (requestDownload != null) {
@@ -92,7 +104,12 @@ class AudioPlaybackController(private val context: Context) {
             if (p.isPlaying) p.pause() else p.play()
             return
         }
-        start(key, path)
+        start(key, path, clipMs)
+    }
+
+    /** Stops and releases the active note when its key starts with [keyPrefix]. */
+    fun stop(keyPrefix: String) {
+        if (activeKey?.startsWith(keyPrefix) == true) releasePlayer()
     }
 
     /** Called by the bubble when a download completes and [filePath] appears. */
@@ -118,9 +135,22 @@ class AudioPlaybackController(private val context: Context) {
         publishNow()
     }
 
-    private fun start(key: String, path: String) {
+    private fun start(key: String, path: String, clipMs: LongRange? = null) {
         releasePlayer()
         activeKey = key
+        val item = MediaItem.Builder()
+            .setUri(Uri.fromFile(File(path)))
+            .apply {
+                if (clipMs != null) {
+                    setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                            .setStartPositionMs(clipMs.first)
+                            .setEndPositionMs(clipMs.last)
+                            .build()
+                    )
+                }
+            }
+            .build()
         val p = ExoPlayer.Builder(context).build().apply {
             setAudioAttributes(
                 androidx.media3.common.AudioAttributes.Builder()
@@ -129,7 +159,7 @@ class AudioPlaybackController(private val context: Context) {
                     .build(),
                 /* handleAudioFocus = */ true
             )
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(File(path))))
+            setMediaItem(item)
             repeatMode = Player.REPEAT_MODE_OFF
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
