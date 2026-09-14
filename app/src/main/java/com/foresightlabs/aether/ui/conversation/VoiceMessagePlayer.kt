@@ -18,8 +18,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,6 +64,10 @@ fun VoiceMessagePlayer(
 
     val safeDuration = durationSec.coerceAtLeast(1)
     val isPlaying = playback?.isPlaying == true
+    // Every state the note can be in shows as itself -- a tap that failed
+    // must never look like a tap that did nothing.
+    val failed = playback?.isFailed == true
+    val downloading = playback?.isDownloading == true || (isDownloading && playback == null)
     val durationMs = playback?.durationMs?.takeIf { it > 0 }?.coerceAtLeast(1000) ?: (safeDuration * 1000L)
     val positionMs = playback?.positionMs?.coerceIn(0, durationMs) ?: 0L
     val progress = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
@@ -76,10 +82,10 @@ fun VoiceMessagePlayer(
 
     val currentSeconds = (positionMs / 1000L).toInt()
     val totalSeconds = (durationMs / 1000L).toInt()
-    val timeLabel = if (isDownloading && playback == null) {
-        "Downloading…"
-    } else {
-        String.format("%d:%02d / %d:%02d", currentSeconds / 60, currentSeconds % 60, totalSeconds / 60, totalSeconds % 60)
+    val timeLabel = when {
+        downloading -> "Downloading…"
+        failed -> "Couldn't play · tap to retry"
+        else -> String.format("%d:%02d / %d:%02d", currentSeconds / 60, currentSeconds % 60, totalSeconds / 60, totalSeconds % 60)
     }
 
     val playScale by animateFloatAsState(
@@ -106,8 +112,18 @@ fun VoiceMessagePlayer(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (isPlaying) "Pause Voice Note" else "Play Voice Note",
+                imageVector = when {
+                    downloading -> Icons.Default.Downloading
+                    failed -> Icons.Default.Refresh
+                    isPlaying -> Icons.Default.Pause
+                    else -> Icons.Default.PlayArrow
+                },
+                contentDescription = when {
+                    downloading -> "Downloading Voice Note"
+                    failed -> "Retry Voice Note"
+                    isPlaying -> "Pause Voice Note"
+                    else -> "Play Voice Note"
+                },
                 tint = playButtonIconTint,
                 modifier = Modifier.size(22.dp)
             )

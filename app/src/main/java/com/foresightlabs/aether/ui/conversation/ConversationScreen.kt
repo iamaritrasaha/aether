@@ -340,6 +340,8 @@ fun ConversationScreen(
     onJumpConsumed: () -> Unit = {},
     /** fileId, isRetry -- called when the media viewer opens on a file TDLib hasn't finished fetching. */
     onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
+    /** Drops a media file's local copy that would not play and downloads it again. */
+    onRedownloadMedia: (Int) -> Unit = {},
     /** Exact re-resolution of a saved reply/edit target id (recreation support). */
     onResolveMessage: suspend (String) -> com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome = { com.foresightlabs.aether.ui.conversation.ReplyEditTargetOutcome.Unavailable },
     /** A message's content was actually opened (photo/video shown full-screen) -- see ConversationViewModel.openMessageContent. What a view-once photo/video is waiting on to begin self-destructing. */
@@ -1930,6 +1932,7 @@ fun ConversationScreen(
                     onOpenDocument = { media -> openDocument(media) },
                     audioPlayback = audioPlayback,
                     onRequestMediaDownload = onRequestMediaDownload,
+                    onRedownloadMedia = onRedownloadMedia,
                     onReactionClick = { targetMsg, emoji ->
                         onAddReaction(targetMsg, emoji)
                     },

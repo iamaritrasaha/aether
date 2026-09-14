@@ -1346,6 +1346,7 @@ private fun ConversationRoute(
             onRequestMediaDownload = { fileId, isRetry ->
                 if (isRetry) viewModel.retryMediaDownload(fileId) else viewModel.requestFullMediaDownload(fileId)
             },
+            onRedownloadMedia = viewModel::redownloadMedia,
             errorMessage = sendError,
             onErrorConsumed = viewModel::consumeSendError,
             onOpenMessageContent = viewModel::openMessageContent

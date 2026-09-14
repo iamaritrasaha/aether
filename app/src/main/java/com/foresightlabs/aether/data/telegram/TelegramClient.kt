@@ -2489,6 +2489,31 @@ open class TelegramClient(private val application: Application) {
     }
 
     /**
+     * Fetches a file again from scratch: its local copy exists but would not
+     * play or open (the player could not read it), so asking TDLib to
+     * "download" it would be a no-op -- the cached bytes are dropped first.
+     * Never while the file is still being uploaded from this device.
+     */
+    fun redownloadMedia(fileId: Int) {
+        if (fileId == 0) return
+        scope.launch {
+            val file = send(TdApi.GetFile(fileId)) as? TdApi.File
+            val uploading = file?.remote?.isUploadingActive == true
+            if (file != null && !uploading && file.remote?.isUploadingCompleted == true && file.local?.path?.isNotBlank() == true) {
+                photoPaths.remove("file:$fileId")
+                send(TdApi.DeleteFile(fileId))
+            }
+            failedDownloads.remove(fileId)
+            requestedFiles[fileId] = true
+            activeDownloads[fileId] = true
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d(TAG, "MEDIA_REDOWNLOAD fileId=$fileId droppedLocal=${file != null && !uploading}")
+            }
+            send(TdApi.DownloadFile(fileId, 32, 0, 0, false))
+        }
+    }
+
+    /**
      * High-priority request for a file's full bytes, used when the user
      * actually opens the viewer on it. Bypasses the de-duplication that
      * protects the timeline's background prefetch from redundant requests --
@@ -3501,11 +3526,18 @@ open class TelegramClient(private val application: Application) {
     private fun onFile(file: TdApi.File) {
         val local = file.local
         val path = local?.path
-        val hasDiskFile = !path.isNullOrBlank() && java.io.File(path).let { it.exists() && it.length() > 0L }
-        val isComplete = local?.isDownloadingCompleted == true || hasDiskFile
+        // Only a COMPLETE file may reach the UI as playable/openable: during a
+        // download `path` names the partial part. See TelegramMappers.isFullyLocal.
+        val isComplete = TelegramMappers.isFullyLocal(file)
         if (BuildConfig.DEBUG) {
-            val hasLocal = isComplete && !path.isNullOrBlank()
-            android.util.Log.d(TAG, "MEDIA_FILE_UPDATE fileId=${file.id} hasLocal=$hasLocal size=${file.size} expectedSize=${file.expectedSize} elapsedRealtime=${android.os.SystemClock.elapsedRealtime()}")
+            android.util.Log.d(
+                TAG,
+                "MEDIA_FILE_UPDATE fileId=${file.id} complete=$isComplete " +
+                    "localPathPresent=${!path.isNullOrBlank()} active=${local?.isDownloadingActive == true} " +
+                    "tdlibCompleted=${local?.isDownloadingCompleted == true} downloaded=${local?.downloadedSize ?: 0} " +
+                    "size=${file.size} expectedSize=${file.expectedSize} " +
+                    "ext=${path?.substringAfterLast('.', "")?.lowercase()?.take(5).orEmpty()}"
+            )
         }
         when {
             isComplete && !path.isNullOrBlank() -> {
@@ -3830,7 +3862,8 @@ open class TelegramClient(private val application: Application) {
             reply = replyPreview(message),
             resolvePath = ::resolveMediaPath,
             isDownloadFailed = { failedDownloads[it] == true },
-            resolveContentPath = ::resolvedVideoPath
+            resolveContentPath = ::resolvedVideoPath,
+            isDownloadActive = { activeDownloads[it] == true }
         )
         mediaReferenceIndex.replace(
             MessageMediaReference(message.chatId, message.id),

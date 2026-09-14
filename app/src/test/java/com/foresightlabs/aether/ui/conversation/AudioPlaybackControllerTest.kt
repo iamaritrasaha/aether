@@ -27,7 +27,10 @@ class AudioPlaybackControllerTest {
 
             assertTrue("the download must be requested", requested)
             assertEquals("voice:m1:42", controller.pendingDownloadKey.value)
-            assertNull("no playback can exist without bytes", controller.playback.value)
+            val playback = controller.playback.value
+            assertEquals("the note says it is downloading, not nothing", AudioPlaybackController.Status.DOWNLOADING, playback?.status)
+            assertEquals("voice:m1:42", playback?.key)
+            assertNull("no player can exist without bytes", controller.activeFilePath)
         } finally {
             controller.release()
         }
@@ -157,6 +160,127 @@ class AudioPlaybackControllerTest {
             assertNull(controller.pendingDownloadKey.value)
         } finally {
             controller.release()
+        }
+    }
+
+    @Test
+    fun aFailedDownloadReadsAsFailedAndTheNextTapAsksAgain() {
+        val controller = AudioPlaybackController(ApplicationProvider.getApplicationContext())
+        try {
+            var requests = 0
+            controller.toggle("voice:m1:42", null) { requests++ }
+            controller.onDownloadFailed("voice:m1:42")
+
+            assertEquals(AudioPlaybackController.Status.FAILED, controller.playback.value?.status)
+            assertNull(controller.pendingDownloadKey.value)
+
+            controller.toggle("voice:m1:42", null) { requests++ }
+            assertEquals("Retry asks for the file again", 2, requests)
+            assertEquals(AudioPlaybackController.Status.DOWNLOADING, controller.playback.value?.status)
+        } finally {
+            controller.release()
+        }
+    }
+
+    @Test
+    fun aPathArrivingWithNoUsableBytesFailsInsteadOfDoingNothing() {
+        val dir = createTempDirectory("audio")
+        val empty = java.io.File(dir, "empty.oga").also { it.createNewFile() }
+        val controller = AudioPlaybackController(ApplicationProvider.getApplicationContext())
+        try {
+            controller.toggle("voice:m1:42", null) { }
+            controller.onPathArrived("voice:m1:42", empty.absolutePath)
+            assertEquals(AudioPlaybackController.Status.FAILED, controller.playback.value?.status)
+        } finally {
+            controller.release(); empty.delete(); dir.delete()
+        }
+    }
+
+    /**
+     * The stale-path failure: the player was built while the note's bytes were
+     * a partial part; the download then finished at a different path. The
+     * same note tapped with the new path must rebuild on it, not resume the
+     * old item (whose file TDLib has since moved away).
+     */
+    @Test
+    fun aPathThatChangedSinceThePlayerWasBuiltRebuildsThePlayer() {
+        val dir = createTempDirectory("audio")
+        val part = java.io.File(dir, "part.wav").also { writeWav(it) }
+        val final = java.io.File(dir, "final.wav").also { writeWav(it) }
+        val controller = AudioPlaybackController(ApplicationProvider.getApplicationContext())
+        val idle = { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle() }
+        try {
+            controller.toggle("voice:m1:42", part.absolutePath, null)
+            idle()
+            assertEquals(part.absolutePath, controller.activeFilePath)
+
+            controller.toggle("voice:m1:42", final.absolutePath, null)
+            idle()
+            assertEquals("the player is rebuilt on the file that exists now", final.absolutePath, controller.activeFilePath)
+        } finally {
+            controller.release(); part.delete(); final.delete(); dir.delete()
+        }
+    }
+
+    /**
+     * A note whose bytes will not decode. The player's own error delivery is
+     * device-verified (Robolectric's ExoPlayer never runs a real extractor);
+     * here the error is handed over exactly as the listener hands it.
+     */
+    @Test
+    fun aNoteThatWillNotDecodeFailsVisiblyAndItsRetryFetchesAFreshCopy() {
+        val dir = createTempDirectory("audio")
+        val note = java.io.File(dir, "voice.oga").also { writeWav(it) }
+        val controller = AudioPlaybackController(ApplicationProvider.getApplicationContext())
+        try {
+            var downloads = 0
+            var freshCopies = 0
+            controller.toggle("voice:m1:42", note.absolutePath, { downloads++ }, { freshCopies++ })
+            controller.handlePlayerError(
+                "voice:m1:42",
+                androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+                "ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED",
+                "UnrecognizedInputFormatException"
+            )
+
+            val failed = controller.playback.value
+            assertEquals("a decode failure is a state, not silence", AudioPlaybackController.Status.FAILED, failed?.status)
+            assertTrue(failed!!.needsFreshCopy)
+            assertNull("the failed player is gone, so the next tap starts clean", controller.activeFilePath)
+
+            controller.toggle("voice:m1:42", note.absolutePath, { downloads++ }, { freshCopies++ })
+            assertEquals("retrying the same bad copy would fail the same way", 1, freshCopies)
+            assertEquals(0, downloads)
+            assertEquals(AudioPlaybackController.Status.DOWNLOADING, controller.playback.value?.status)
+            assertEquals("voice:m1:42", controller.pendingDownloadKey.value)
+        } finally {
+            controller.release(); note.delete(); dir.delete()
+        }
+    }
+
+    @Test
+    fun aTransientPlaybackFailureRetriesOnTheSameFileWithoutRedownloading() {
+        val dir = createTempDirectory("audio")
+        val note = java.io.File(dir, "voice.wav").also { writeWav(it) }
+        val controller = AudioPlaybackController(ApplicationProvider.getApplicationContext())
+        val idle = { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle() }
+        try {
+            var freshCopies = 0
+            controller.toggle("voice:m1:42", note.absolutePath, null) { freshCopies++ }
+            controller.handlePlayerError(
+                "voice:m1:42",
+                androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+                "ERROR_CODE_AUDIO_TRACK_INIT_FAILED",
+                null
+            )
+            assertTrue(!controller.playback.value!!.needsFreshCopy)
+
+            controller.toggle("voice:m1:42", note.absolutePath, null) { freshCopies++ }
+            idle()
+            assertEquals("an audio-output hiccup is not the file's fault", 0, freshCopies)
+            assertEquals(note.absolutePath, controller.activeFilePath)
+        } finally {
+            controller.release(); note.delete(); dir.delete()
         }
     }
 }

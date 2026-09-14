@@ -129,6 +129,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.collectAsState
 
 @Composable
 fun MessageBubble(
@@ -142,6 +143,8 @@ fun MessageBubble(
     audioPlayback: AudioPlaybackController,
     /** Requests a media file's download (voice/audio tap-to-download). */
     onRequestMediaDownload: (Int, Boolean) -> Unit = { _, _ -> },
+    /** Drops a local copy that would not play and downloads it again. */
+    onRedownloadMedia: (Int) -> Unit = {},
     onReactionClick: (Message, String) -> Unit,
     modifier: Modifier = Modifier,
     onEntityAction: (EntityAction) -> Unit = {},
@@ -673,19 +676,31 @@ fun MessageBubble(
                             MessageType.VOICE -> {
                                 val voiceMedia = message.mediaItems.firstOrNull()
                                 val voiceKey = "voice:${voiceMedia?.id ?: message.id}"
+                                // Observed, not read: a bare StateFlow.value read here
+                                // never recomposed the bubble, so play/pause, progress
+                                // and failure all froze at whatever the first frame saw.
+                                val activePlayback = audioPlayback.playback.collectAsState().value
                                 VoiceMessagePlayer(
                                     durationSec = message.voiceDurationSec,
                                     waveform = message.voiceWaveform,
                                     isOutgoing = isOutgoing,
-                                    playback = audioPlayback.playback.value
-                                        ?.takeIf { it.key == voiceKey },
+                                    playback = activePlayback?.takeIf { it.key == voiceKey },
                                     isDownloading = voiceMedia?.isDownloading == true,
                                     onTogglePlay = {
+                                        if (com.foresightlabs.aether.BuildConfig.DEBUG) {
+                                            android.util.Log.d(
+                                                "AetherTd",
+                                                "VOICE_TAP msgId=${message.id} fileId=${voiceMedia?.fileId} " +
+                                                    "hasLocalFile=${voiceMedia?.hasLocalFile} isDownloading=${voiceMedia?.isDownloading} " +
+                                                    "downloadFailed=${voiceMedia?.downloadFailed}"
+                                            )
+                                        }
+                                        val fileId = voiceMedia?.fileId?.takeIf { it != 0 }
                                         audioPlayback.toggle(
                                             voiceKey,
                                             voiceMedia?.url,
-                                            voiceMedia?.fileId?.takeIf { it != 0 }
-                                                ?.let { id -> { onRequestMediaDownload(id, false) } }
+                                            fileId?.let { id -> { onRequestMediaDownload(id, false) } },
+                                            fileId?.let { id -> { onRedownloadMedia(id) } }
                                         )
                                     },
                                     onSeek = { fraction ->
@@ -699,20 +714,21 @@ fun MessageBubble(
                             MessageType.AUDIO -> {
                                 val audioMedia = message.mediaItems.firstOrNull()
                                 val audioKey = "audio:${audioMedia?.id ?: message.id}"
+                                val activePlayback = audioPlayback.playback.collectAsState().value
                                 AudioAttachmentContent(
                                     title = message.fileName ?: message.text.ifBlank { "Audio" },
                                     fileSize = message.fileSize ?: "",
                                     durationSec = message.voiceDurationSec,
                                     isOutgoing = isOutgoing,
                                     isDownloading = audioMedia?.isDownloading == true,
-                                    playback = audioPlayback.playback.value
-                                        ?.takeIf { it.key == audioKey },
+                                    playback = activePlayback?.takeIf { it.key == audioKey },
                                     onTogglePlay = {
+                                        val fileId = audioMedia?.fileId?.takeIf { it != 0 }
                                         audioPlayback.toggle(
                                             audioKey,
                                             audioMedia?.url,
-                                            audioMedia?.fileId?.takeIf { it != 0 }
-                                                ?.let { id -> { onRequestMediaDownload(id, false) } }
+                                            fileId?.let { id -> { onRequestMediaDownload(id, false) } },
+                                            fileId?.let { id -> { onRedownloadMedia(id) } }
                                         )
                                     }
                                 )
@@ -1670,6 +1686,8 @@ private fun AudioAttachmentContent(
     val colors = LocalAetherColors.current
     val contentColor = if (isOutgoing) colors.bubbleOutgoingText else colors.bubbleIncomingText
     val isPlaying = playback?.isPlaying == true
+    val failed = playback?.isFailed == true
+    val downloading = playback?.isDownloading == true || (isDownloading && playback == null)
 
     Row(
         modifier = Modifier
@@ -1690,11 +1708,14 @@ private fun AudioAttachmentContent(
         ) {
             Icon(
                 imageVector = when {
-                    isDownloading && playback == null -> Icons.Default.Downloading
+                    downloading -> Icons.Default.Downloading
+                    failed -> Icons.Default.Refresh
                     isPlaying -> Icons.Default.Pause
                     else -> Icons.Default.PlayArrow
                 },
                 contentDescription = when {
+                    downloading -> "Downloading"
+                    failed -> "Retry"
                     isPlaying -> "Pause"
                     else -> "Play"
                 },
@@ -1718,7 +1739,8 @@ private fun AudioAttachmentContent(
             Spacer(modifier = Modifier.height(2.dp))
             val durationLabel = if (durationSec > 0) formatDuration(durationSec) else ""
             val meta = when {
-                isDownloading && playback == null -> "Downloading…"
+                downloading -> "Downloading…"
+                failed -> "Couldn't play · tap to retry"
                 else -> listOfNotNull(durationLabel.takeIf { it.isNotBlank() }, fileSize.takeIf { it.isNotBlank() }).joinToString(" • ")
             }
             Text(

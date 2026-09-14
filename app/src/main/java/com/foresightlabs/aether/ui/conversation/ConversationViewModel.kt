@@ -499,6 +499,12 @@ class ConversationViewModel(
         telegram.retryMediaDownload(fileId)
     }
 
+    /** Drops a local copy that would not play and downloads the file again. */
+    fun redownloadMedia(fileId: Int) {
+        if (fileId == 0) return
+        telegram.redownloadMedia(fileId)
+    }
+
     fun sendPhoto(photoPath: String, caption: String = "", replyToId: String? = null, viewOnce: Boolean = false) {
         if (mediaSendInFlight) return
         mediaSendInFlight = true

@@ -280,10 +280,15 @@ object TelegramMappers {
         // TdApi.File TDLib does not mutate), so video spun forever in the
         // viewer until the chat was re-entered and documents could never be
         // opened at all.
-        resolveContentPath: (TdApi.File?) -> String? = { localPath(it) }
+        resolveContentPath: (TdApi.File?) -> String? = { localPath(it) },
+        // The client's live view of whether a file is downloading. The raw
+        // TdApi.File a message carries is a snapshot TDLib never mutates, so
+        // its own isDownloadingActive goes stale the moment a download starts
+        // or ends; null falls back to it.
+        isDownloadActive: (Int) -> Boolean? = { null }
     ): Message {
         val senderName = senderName(message.senderId, users, chats, message.isOutgoing)
-        val presentation = mapPresentation(message.content, message.id, resolvePath, isDownloadFailed, resolveContentPath)
+        val presentation = mapPresentation(message.content, message.id, resolvePath, isDownloadFailed, resolveContentPath, isDownloadActive)
         val type = presentation.type
         val text = if (type == MessageType.SERVICE) {
             ServiceMessages.describe(message.content, senderName).trim()
@@ -487,7 +492,8 @@ object TelegramMappers {
         messageId: Long,
         resolvePath: (TdApi.File?) -> String?,
         isDownloadFailed: (Int) -> Boolean = { false },
-        resolveContentPath: (TdApi.File?) -> String? = { localPath(it) }
+        resolveContentPath: (TdApi.File?) -> String? = { localPath(it) },
+        isDownloadActive: (Int) -> Boolean? = { null }
     ): MediaPresentation {
         // A message's media EXISTS the moment TDLib reports the message, whether
         // or not its bytes have arrived. This never returns emptyList() merely
@@ -645,7 +651,7 @@ object TelegramMappers {
                             caption = content.caption?.text.orEmpty(),
                             fileId = contentFile.id,
                             hasLocalFile = localPathNow.isNotBlank(),
-                            isDownloading = local?.isDownloadingActive == true,
+                            isDownloading = isDownloadActive(contentFile.id) ?: (local?.isDownloadingActive == true),
                             downloadFailed = isDownloadFailed(contentFile.id),
                             isUploading = remote?.isUploadingActive == true
                         )
@@ -691,7 +697,7 @@ object TelegramMappers {
                                 caption = name,
                                 fileId = audioFile.id,
                                 hasLocalFile = audioPathNow.isNotBlank(),
-                                isDownloading = audioFile.local?.isDownloadingActive == true,
+                                isDownloading = isDownloadActive(audioFile.id) ?: (audioFile.local?.isDownloadingActive == true),
                                 downloadFailed = isDownloadFailed(audioFile.id),
                                 isUploading = audioFile.remote?.isUploadingActive == true
                             )
@@ -717,7 +723,7 @@ object TelegramMappers {
                             url = voicePathNow,
                             fileId = voiceFile.id,
                             hasLocalFile = voicePathNow.isNotBlank(),
-                            isDownloading = voiceFile.local?.isDownloadingActive == true,
+                            isDownloading = isDownloadActive(voiceFile.id) ?: (voiceFile.local?.isDownloadingActive == true),
                             downloadFailed = isDownloadFailed(voiceFile.id),
                             isUploading = voiceFile.remote?.isUploadingActive == true
                         )
@@ -1156,17 +1162,33 @@ object TelegramMappers {
         return Base64.encodeToString(data, Base64.NO_WRAP)
     }
 
+    /** The path of [file]'s bytes when ALL of them are on disk; see [isFullyLocal]. */
     fun localPath(file: TdApi.File?): String? {
         val path = file?.local?.path
         if (path.isNullOrBlank()) return null
-        val fileObj = File(path)
-        return if (fileObj.exists() && fileObj.length() > 0L) {
-            path
-        } else if (file?.local?.isDownloadingCompleted == true && path.isNotBlank()) {
-            path
-        } else {
-            null
-        }
+        return path.takeIf { isFullyLocal(file) }
+    }
+
+    /**
+     * Whether every byte of [file] is on disk.
+     *
+     * While a download runs TDLib reports `local.path` as the locally
+     * available PART, so "a non-empty file exists there" is not enough: a
+     * voice note taken for playable at that moment played a fragment (or
+     * nothing) and kept the part's path after TDLib moved the finished file.
+     * A file TDLib has not marked complete still counts when nothing is
+     * downloading it and it is as large as the file is -- a photo picked from
+     * the gallery, before its upload, is exactly that.
+     */
+    fun isFullyLocal(file: TdApi.File?): Boolean {
+        val local = file?.local ?: return false
+        if (local.path.isNullOrBlank()) return false
+        if (local.isDownloadingCompleted) return true
+        if (local.isDownloadingActive) return false
+        val onDisk = File(local.path).takeIf { it.exists() }?.length() ?: return false
+        if (onDisk <= 0L) return false
+        val expected = if (file.size > 0L) file.size else file.expectedSize
+        return expected <= 0L || onDisk >= expected
     }
 
     fun initials(name: String): String {
