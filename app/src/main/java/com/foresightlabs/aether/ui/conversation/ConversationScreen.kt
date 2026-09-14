@@ -68,6 +68,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
@@ -200,7 +201,6 @@ import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.compose.runtime.rememberCoroutineScope
-import com.foresightlabs.aether.data.media.AudioRecorderManager
 import kotlinx.coroutines.launch
 import com.foresightlabs.aether.ui.theme.SpaceGroteskFontFamily
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -235,10 +235,17 @@ fun ConversationScreen(
     onSendPhotoAlbum: (List<String>, String, Message?) -> Unit = { _, _, _ -> },
     /** A mixed share (photo/video/file), sent as one guarded sequential batch. */
     onSendMixedBatch: (List<Pair<String, com.foresightlabs.aether.domain.sharing.SharedAttachmentKind>>, String, Message?) -> Unit = { _, _, _ -> },
-    onSendVoiceNote: (String, Int, ByteArray, Message?) -> Unit = { _, _, _, _ -> },
+    /**
+     * Hands a voice note to Telegram -- path, duration (s), waveform, the id of
+     * the message it replies to -- and reports whether Telegram accepted it.
+     */
+    onSendVoiceNote: (path: String, durationSec: Int, waveform: ByteArray, replyToMessageId: String?, onResult: (Boolean) -> Unit) -> Unit =
+        { _, _, _, _, _ -> },
     /** Tells Telegram this account started/ended a voice recording (chat action). */
     onVoiceRecordingStarted: () -> Unit = {},
     onVoiceRecordingEnded: () -> Unit = {},
+    /** Tests inject one; otherwise the conversation's own, kept by a ViewModel across rotation. */
+    voiceNoteController: VoiceNoteController? = null,
     onEditMessage: (Message, String) -> Unit = { _, _ -> },
     onAddReaction: (Message, String) -> Unit = { _, _ -> },
     onPinMessage: (Message) -> Unit = {},
@@ -684,130 +691,6 @@ fun ConversationScreen(
         }
     }
 
-    val audioRecorder = remember { AudioRecorderManager(context) }
-    var isRecordingAudio by remember { mutableStateOf(false) }
-    // An in-flight voice recording must not outlive this composition: on
-    // rotation the new screen gets a fresh AudioRecorderManager, and the old
-    // MediaRecorder would keep the microphone held (blocking every later
-    // recording, here and in other apps) with no handle left to release it.
-    // The half-made recording is discarded -- it cannot be sent from a
-    // composition that no longer exists.
-    DisposableEffect(Unit) {
-        onDispose {
-            if (audioRecorder.isRecording) {
-                audioRecorder.cancelRecording()
-            }
-        }
-    }
-
-    // --- Hold-to-record state machine ----------------------------------------
-    // Press starts, holding keeps it, dragging left arms cancel, dragging up
-    // locks hands-free, release decides. The composer renders the state; all
-    // recorder truth lives here.
-    var voiceRecordLocked by remember { mutableStateOf(false) }
-    var voiceRecordCancelDragPx by remember { mutableStateOf(0f) }
-    var voiceRecordLockDragPx by remember { mutableStateOf(0f) }
-    var voiceRecordStartedAtMs by remember { mutableStateOf(0L) }
-    var voiceRecordElapsedSec by remember { mutableStateOf(0) }
-    var voiceRecordAmplitude by remember { mutableStateOf(0f) }
-    // Every polled input level of the current recording, packed into the
-    // note's waveform on send. Not state: nothing renders from it.
-    val voiceRecordLevels = remember { ArrayList<Float>() }
-    val voiceCancelThresholdPx = with(density) { 148.dp.toPx() }
-    val voiceLockThresholdPx = with(density) { 120.dp.toPx() }
-
-    fun beginRecording() {
-        if (audioRecorder.startRecording()) {
-            isRecordingAudio = true
-            voiceRecordLocked = false
-            voiceRecordCancelDragPx = 0f
-            voiceRecordLockDragPx = 0f
-            voiceRecordStartedAtMs = android.os.SystemClock.elapsedRealtime()
-            voiceRecordElapsedSec = 0
-            voiceRecordAmplitude = 0f
-            voiceRecordLevels.clear()
-            onVoiceRecordingStarted()
-        } else {
-            Toast.makeText(context, "Couldn't start the microphone", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    fun endRecording(send: Boolean) {
-        if (!isRecordingAudio) return
-        isRecordingAudio = false
-        voiceRecordLocked = false
-        voiceRecordCancelDragPx = 0f
-        voiceRecordLockDragPx = 0f
-        onVoiceRecordingEnded()
-        if (send) {
-            val recordResult = audioRecorder.stopRecording()
-            if (recordResult != null) {
-                val waveform = com.foresightlabs.aether.data.media.VoiceWaveform.encode(voiceRecordLevels.toList())
-                onSendVoiceNote(recordResult.filePath, recordResult.durationSec, waveform, replyingToMessage)
-                replyingToMessageId = null
-            } else {
-                // MediaRecorder produces nothing for a near-instant capture;
-                // say so rather than let the note silently vanish.
-                Toast.makeText(context, "Recording too short to send", Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            audioRecorder.cancelRecording()
-        }
-        voiceRecordLevels.clear()
-    }
-
-    val micPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            // The finger that asked is gone by now (the system dialog took the
-            // release), so starting here would leave an unheld, unlocked
-            // recording with no gesture left to end it. Recording is always a
-            // fresh hold.
-            Toast.makeText(context, "Microphone ready — hold the mic to record", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(context, "Microphone permission is required for voice notes", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    fun startVoiceRecording() {
-        keyboardController?.hide()
-        focusManager.clearFocus()
-        curtainState = CurtainState.COMPOSER
-        val hasMicPermission = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-        if (hasMicPermission) beginRecording() else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-    }
-
-    // The timer and level poll drive the composer's recording chrome. The peak
-    // between polls is never lost -- amplitudeFraction reads the recorder's
-    // running maximum.
-    LaunchedEffect(isRecordingAudio) {
-        if (!isRecordingAudio) return@LaunchedEffect
-        while (true) {
-            voiceRecordElapsedSec =
-                ((android.os.SystemClock.elapsedRealtime() - voiceRecordStartedAtMs) / 1000L).toInt()
-            val level = audioRecorder.amplitudeFraction()
-            voiceRecordAmplitude = level
-            voiceRecordLevels.add(level)
-            delay(100)
-        }
-    }
-
-    // Recording must not survive the app being backgrounded or an audio focus
-    // grab (an incoming call): the half-made note is discarded, the mic freed.
-    val voiceLifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
-    DisposableEffect(voiceLifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE && isRecordingAudio) {
-                endRecording(send = false)
-            }
-        }
-        voiceLifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { voiceLifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
     // The conversation's single audio player: one voice note / audio message
     // audible at a time, real position/duration driving the bubble UI,
     // released when the conversation leaves composition.
@@ -828,6 +711,150 @@ fun ConversationScreen(
             // The download we armed autoplay for has failed: disarm, so a
             // later unrelated re-map can never start this note playing.
             note.downloadFailed -> audioPlayback.onDownloadFailed(key)
+        }
+    }
+
+    // --- Voice notes ------------------------------------------------------------
+    // One state (VoiceNoteState), decided by VoiceNoteMachine and run by a
+    // controller that lives in a chat-scoped ViewModel, so a recording keeps its
+    // mic, file and levels through rotation. The composer renders Idle and
+    // Holding; Locked and Review are shown as Curtain states derived from it --
+    // the Curtain follows voice state and never writes it.
+    val voiceNotes = voiceNoteController ?: rememberVoiceNoteController()
+    val voiceState = voiceNotes.state
+    val shownCurtainState = voiceState.curtainState ?: curtainState
+    val currentOnSendVoiceNote by rememberUpdatedState(onSendVoiceNote)
+
+    var voiceHint by remember { mutableStateOf<String?>(null) }
+    var voiceHintSerial by remember { mutableIntStateOf(0) }
+    LaunchedEffect(voiceHintSerial) {
+        if (voiceHint != null) {
+            delay(2_600)
+            voiceHint = null
+        }
+    }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        // Reported, never acted on: the finger that asked is gone by now, so
+        // starting here would leave a recording no gesture can end.
+        voiceNotes.dispatch(VoiceNoteEvent.PermissionResult(isGranted))
+    }
+
+    val audioPlaybackState by audioPlayback.playback.collectAsState()
+    val voiceReviewPlayback = (voiceState as? VoiceNoteState.Review)?.let { review ->
+        audioPlaybackState?.takeIf { it.key == voiceReviewPlaybackKey(review) }
+    }
+
+    val onVoiceNoteAction: (VoiceNoteAction) -> Unit = { action ->
+        when (action) {
+            VoiceNoteAction.Press, VoiceNoteAction.StartHandsFree -> {
+                keyboardController?.hide()
+                focusManager.clearFocus()
+                curtainState = CurtainState.COMPOSER
+                val permitted = ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+                voiceNotes.dispatch(
+                    if (action == VoiceNoteAction.Press) {
+                        VoiceNoteEvent.Press(voiceNotes.now(), permitted, replyingToMessageId)
+                    } else {
+                        VoiceNoteEvent.StartHandsFree(permitted, replyingToMessageId)
+                    }
+                )
+            }
+            is VoiceNoteAction.Drag -> voiceNotes.dispatch(VoiceNoteEvent.Drag(action.towardCancelDp, action.upDp))
+            VoiceNoteAction.Release -> voiceNotes.dispatch(VoiceNoteEvent.Release(voiceNotes.now()))
+            VoiceNoteAction.GestureCancelled -> voiceNotes.dispatch(
+                VoiceNoteEvent.Interrupted(VoiceInterruption.TRANSIENT, voiceNotes.now())
+            )
+            VoiceNoteAction.Lock -> voiceNotes.dispatch(VoiceNoteEvent.Lock)
+            VoiceNoteAction.Cancel -> voiceNotes.dispatch(VoiceNoteEvent.Cancel)
+            VoiceNoteAction.TogglePause -> voiceNotes.dispatch(VoiceNoteEvent.TogglePause)
+            VoiceNoteAction.Review -> voiceNotes.dispatch(VoiceNoteEvent.Finish)
+            VoiceNoteAction.Send -> voiceNotes.dispatch(VoiceNoteEvent.Send)
+            VoiceNoteAction.Discard -> voiceNotes.dispatch(VoiceNoteEvent.Discard)
+            VoiceNoteAction.Keep -> voiceNotes.dispatch(VoiceNoteEvent.Keep)
+            is VoiceNoteAction.Trim -> voiceNotes.dispatch(VoiceNoteEvent.Trim(action.startMs, action.endMs))
+            VoiceNoteAction.TogglePlay -> (voiceNotes.state as? VoiceNoteState.Review)?.let { review ->
+                audioPlayback.toggleClip(
+                    key = voiceReviewPlaybackKey(review),
+                    filePath = review.take.path,
+                    clipMs = review.trimStartMs..review.trimEndMs
+                )
+            }
+            is VoiceNoteAction.Seek -> (voiceNotes.state as? VoiceNoteState.Review)?.let { review ->
+                audioPlayback.seekToFraction(voiceReviewPlaybackKey(review), action.fraction)
+            }
+        }
+    }
+
+    // What only the composition can do for the controller. The channel is
+    // buffered in the ViewModel, so a command issued during rotation is
+    // carried out by the next composition rather than lost.
+    LaunchedEffect(voiceNotes) {
+        voiceNotes.commands.collect { command ->
+            when (command) {
+                VoiceNoteCommand.RequestPermission ->
+                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                VoiceNoteCommand.StopPlayback -> audioPlayback.stop(VoiceReviewPlaybackPrefix)
+                is VoiceNoteCommand.Haptic -> localView.performHapticFeedback(voiceHapticConstant(command.kind))
+                is VoiceNoteCommand.Notice -> {
+                    voiceHint = voiceNoticeText(command.kind)
+                    voiceHintSerial++
+                }
+                is VoiceNoteCommand.Send -> {
+                    val take = command.take
+                    currentOnSendVoiceNote(
+                        take.path, command.durationSec, command.waveform, take.replyToMessageId
+                    ) { sent -> voiceNotes.dispatch(VoiceNoteEvent.SendResult(take, sent)) }
+                    // The reply this note answered is used up -- unless the
+                    // person has since moved on to replying to something else.
+                    if (take.replyToMessageId != null && replyingToMessageId == take.replyToMessageId) {
+                        replyingToMessageId = null
+                        replyQuote = null
+                    }
+                }
+            }
+        }
+    }
+
+    // Telegram's "recording voice" status follows actual capture: on while
+    // audio is being recorded, off once it is paused, finished or dropped.
+    val capturingVoice = voiceNotes.isCapturing
+    var reportedVoiceCapture by remember { mutableStateOf(false) }
+    LaunchedEffect(capturingVoice) {
+        if (capturingVoice != reportedVoiceCapture) {
+            reportedVoiceCapture = capturingVoice
+            if (capturingVoice) onVoiceRecordingStarted() else onVoiceRecordingEnded()
+        }
+    }
+
+    // A recording keeps what was said through every interruption. A pause
+    // (rotation, a system dialog, another app taking the audio) pauses it; the
+    // app going to the background, or the conversation being left, finalizes it
+    // into a take waiting in review and frees the mic. Only a mis-tap-length
+    // hold is dropped. See VoiceNoteMachine.interrupted.
+    val voiceLifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(voiceLifecycleOwner, voiceNotes) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> voiceNotes.dispatch(
+                    VoiceNoteEvent.Interrupted(VoiceInterruption.TRANSIENT, voiceNotes.now())
+                )
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> if (!context.isRecreatingForConfigChange()) {
+                    voiceNotes.dispatch(VoiceNoteEvent.Interrupted(VoiceInterruption.BACKGROUND, voiceNotes.now()))
+                }
+                else -> Unit
+            }
+        }
+        voiceLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            voiceLifecycleOwner.lifecycle.removeObserver(observer)
+            if (!context.isRecreatingForConfigChange()) {
+                voiceNotes.dispatch(VoiceNoteEvent.Interrupted(VoiceInterruption.BACKGROUND, voiceNotes.now()))
+            }
         }
     }
 
@@ -1329,7 +1356,7 @@ fun ConversationScreen(
                     replyQuote = null
                 },
                 replyQuote = replyQuote,
-                curtainState = curtainState,
+                curtainState = shownCurtainState,
                 callIsMuted = activeCall?.isMuted ?: false,
                 callAudioRoute = if (activeCall?.isSpeakerOn == true) {
                     com.foresightlabs.aether.domain.calls.AudioRoute.SPEAKER
@@ -1479,45 +1506,10 @@ fun ConversationScreen(
                 onSendSticker = onSendSticker,
                 savedAnimations = savedAnimations,
                 onSendAnimation = onSendAnimation,
-                isRecordingVoice = isRecordingAudio,
-                voiceRecordElapsedSec = voiceRecordElapsedSec,
-                voiceRecordLevel = voiceRecordAmplitude,
-                voiceRecordDragFraction = if (voiceCancelThresholdPx > 0f) voiceRecordCancelDragPx / voiceCancelThresholdPx else 0f,
-                voiceRecordLockFraction = if (voiceLockThresholdPx > 0f) voiceRecordLockDragPx / voiceLockThresholdPx else 0f,
-                voiceRecordLocked = voiceRecordLocked,
-                onVoiceRecordPress = { startVoiceRecording() },
-                onVoiceRecordDrag = { dx, dy ->
-                    if (!voiceRecordLocked && isRecordingAudio) {
-                        voiceRecordCancelDragPx =
-                            (voiceRecordCancelDragPx - dx).coerceIn(0f, voiceCancelThresholdPx)
-                        voiceRecordLockDragPx = (voiceRecordLockDragPx - dy).coerceAtLeast(0f)
-                        if (voiceRecordLockDragPx >= voiceLockThresholdPx) {
-                            voiceRecordLocked = true
-                            voiceRecordCancelDragPx = 0f
-                            localView.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-                        }
-                    }
-                },
-                onVoiceRecordRelease = {
-                    if (isRecordingAudio && !voiceRecordLocked) {
-                        // A stab of the mic is a mis-tap, not a message: under
-                        // a moment of hold the recording is discarded, exactly
-                        // like releasing inside the cancel zone.
-                        val heldMs = android.os.SystemClock.elapsedRealtime() - voiceRecordStartedAtMs
-                        val pastCancel = voiceRecordCancelDragPx >= voiceCancelThresholdPx
-                        endRecording(send = !pastCancel && heldMs >= 600)
-                    }
-                    // Locked recordings ignore release: the finger leaving is
-                    // what hands-free means. Send/discards are explicit taps.
-                },
-                onVoiceRecordSend = {
-                    localView.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
-                    endRecording(send = true)
-                },
-                onVoiceRecordCancelTap = { endRecording(send = false) },
-                onOpenVideoNote = {
-                    curtainState = CurtainState.VIDEO_NOTE
-                },
+                voiceNote = voiceNotes,
+                onVoiceNoteAction = onVoiceNoteAction,
+                voiceReviewPlayback = voiceReviewPlayback,
+                voiceHint = voiceHint,
                 selectedMessages = selectedMessages,
                 capabilities = messageCapabilities,
                 forwardMessages = forwardingMessages,
@@ -2210,10 +2202,8 @@ fun ConversationScreen(
             onDelete = { msg -> onDeleteMessage(msg, false) }
         )
 
-        BackHandler(enabled = (curtainState != CurtainState.COMPOSER) || (isRecordingAudio && voiceRecordLocked)) {
-            if (isRecordingAudio && voiceRecordLocked) {
-                endRecording(send = false)
-            } else if (curtainState.isAttachmentChild) {
+        BackHandler(enabled = curtainState != CurtainState.COMPOSER) {
+            if (curtainState.isAttachmentChild) {
                 curtainState = CurtainState.ATTACHMENTS
             } else if (curtainState == CurtainState.ATTACHMENTS) {
                 curtainState = CurtainState.COMPOSER
@@ -2262,6 +2252,13 @@ fun ConversationScreen(
         // Dismiss message edit mode on back press before exiting Conversation
         BackHandler(enabled = editingMessage != null) {
             editingMessageId = null
+        }
+
+        // After the handlers above, so it outranks them while a voice note is in
+        // progress: Back pauses and asks -- it never drops a recording in one
+        // press, and never leaves the conversation from under one.
+        BackHandler(enabled = voiceState !is VoiceNoteState.Idle) {
+            voiceNotes.dispatch(VoiceNoteEvent.Back)
         }
 
         // Delete confirmation now lives in the Curtain itself -- see
@@ -3185,4 +3182,14 @@ fun AetherJumpToLatestControl(
             }
         }
     }
+}
+
+/** True while the hosting Activity is torn down only to be recreated (rotation, a theme change). */
+private fun android.content.Context.isRecreatingForConfigChange(): Boolean {
+    var current: android.content.Context? = this
+    while (current is android.content.ContextWrapper) {
+        if (current is android.app.Activity) return current.isChangingConfigurations
+        current = current.baseContext
+    }
+    return false
 }

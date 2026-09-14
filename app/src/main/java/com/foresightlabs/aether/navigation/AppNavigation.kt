@@ -1252,7 +1252,9 @@ private fun ConversationRoute(
             onSendPhotoAlbum = { paths, caption, reply -> viewModel.sendPhotoAlbum(paths, caption, reply?.id) },
             onSendMixedBatch = { items, caption, reply -> viewModel.sendSharedBatch(items, caption, reply?.id) },
             onResolveMessage = { id -> viewModel.resolveReplyEditTarget(id) },
-            onSendVoiceNote = { path, duration, wave, reply -> viewModel.sendVoiceNote(path, duration, wave, reply?.id) },
+            onSendVoiceNote = { path, duration, wave, replyId, onResult ->
+                viewModel.sendVoiceNote(path, duration, wave, replyId, onResult)
+            },
             onVoiceRecordingStarted = viewModel::onVoiceRecordingStarted,
             onVoiceRecordingEnded = viewModel::onActivityEnded,
             onEditMessage = viewModel::editMessage, onAddReaction = viewModel::addReaction,
